@@ -125,6 +125,9 @@ from_abs = fw("from_abs")
 # Grammar rules
 ###############################################################################
 
+# --- Type annotation (temporary alias for expression) ---
+type_annotation = expression
+
 # --- Assignment ---
 # assign: target ('=' target)* '=' expressions
 # We need V_EQUAL (visible) so we can count targets vs value.
@@ -136,8 +139,8 @@ assign_stmt = star_expressions + (V_EQUAL + star_expressions)[1:]
 aug_assign_stmt = star_expressions + augop + expressions
 
 # --- Annotated assignment ---
-# ann_assign: IDENTIFIER ':' expression ['=' expression]
-ann_assign_stmt = IDENTIFIER + V_COLON + expression + (V_EQUAL + expression)[:]
+# ann_assign: IDENTIFIER ':' type_annotation ['=' expression]
+ann_assign_stmt = IDENTIFIER + V_COLON + type_annotation + (V_EQUAL + expression)[:]
 
 # --- return ---
 return_val = ikw("return") + expressions
@@ -187,7 +190,7 @@ from_abs = ikw("from") + dotted_name + ikw("import") + import_names
 from_stmt = from_rel_name | from_rel_bare | from_abs
 
 # --- type alias (3.12+) ---
-type_stmt = ikw("type") + IDENTIFIER + V_EQUAL + expression
+type_stmt = ikw("type") + IDENTIFIER + V_EQUAL + type_annotation
 
 # --- simple_stmt: choice of all statement types ---
 # Ordering matters: try more specific forms before general expression.

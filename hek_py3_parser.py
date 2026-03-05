@@ -244,11 +244,11 @@ match_stmt = (
 
 # --- Function parameters ---
 # param_plain: name [':' annotation] ['=' default]
-param_plain = IDENTIFIER + (V_COLON + expression)[:] + (V_EQUAL + expression)[:]
+param_plain = IDENTIFIER + (V_COLON + type_annotation)[:] + (V_EQUAL + expression)[:]
 # param_star: '*' [name [':' annotation]]  — bare * or *args
-param_star = SSTAR + (IDENTIFIER + (V_COLON + expression)[:])[:]
+param_star = SSTAR + (IDENTIFIER + (V_COLON + type_annotation)[:])[:]
 # param_dstar: '**' name [':' annotation]
-param_dstar = iop("**") + IDENTIFIER + (V_COLON + expression)[:]
+param_dstar = iop("**") + IDENTIFIER + (V_COLON + type_annotation)[:]
 # param_slash: '/'  — positional-only separator
 param_slash = V_SLASH
 
@@ -259,8 +259,11 @@ param_list = param + (COMMA + param)[:] + COMMA[:]
 decorator = AT + expression + NEWLINE + NL[:]
 decorators = decorator[1:]
 
+# --- Type annotation (temporary alias for expression) ---
+type_annotation = expression
+
 # --- Function definition ---
-return_annotation = V_ARROW + expression
+return_annotation = V_ARROW + type_annotation
 func_def = (
     decorators[:]
     + ikw("def")
