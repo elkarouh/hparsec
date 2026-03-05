@@ -125,9 +125,6 @@ from_abs = fw("from_abs")
 # Grammar rules
 ###############################################################################
 
-# --- Type annotation (temporary alias for expression) ---
-type_annotation = expression
-
 # --- Assignment ---
 # assign: target ('=' target)* '=' expressions
 # We need V_EQUAL (visible) so we can count targets vs value.

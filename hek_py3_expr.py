@@ -354,6 +354,9 @@ lambda_expr = I_LAMBDA + lambda_params[:] + COLON + expression
 conditional = disjunction + I_IF + disjunction + I_ELSE + expression
 expression = conditional | lambda_expr | disjunction
 
+# --- type_annotation: temporary alias for expression (can be enhanced later) ---
+type_annotation = expression
+
 # --- expressions: expression (',' expression)* [','] ---
 expressions = expression + (COMMA + expression)[:] + COMMA[:]
 
