@@ -14,6 +14,9 @@ Usage:
 """
 
 import sys
+sys.path.insert(0, "..")
+
+import sys
 import token as token_mod
 from types import MethodType
 

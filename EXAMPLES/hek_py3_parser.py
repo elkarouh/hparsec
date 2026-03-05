@@ -13,6 +13,9 @@ Usage:
     print(ast.to_py())
 """
 
+import sys
+sys.path.insert(0, "..")
+
 import tokenize as tkn
 
 from hek_parsec import (
