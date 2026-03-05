@@ -1,0 +1,25 @@
+# IDE and editor directories
+.claude/
+
+# Build artifacts
+NIM_VERSION/
+
+# Obsolete/deprecated code
+OBSOLETE/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Virtual environments
+venv/
+env/
+.env/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
