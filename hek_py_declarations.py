@@ -1,200 +1,342 @@
 #!/usr/bin/env python3
-"""Odin-style Declaration Parser using hek_parsec combinator framework.
+"""ADASCRIPT-style type annotation parser using hek_parsec combinator framework.
 
-Odin declaration syntax:
-    - Variable:      name : type
-    - Initialized:   name : type = value
-    - Multiple:      (name1, name2 : type)
-    - Constant:      name :: value
-    - Type alias:    name :: type
-    - Auto type:     name = value  (type inferred)
+Defines the ``type_annotation`` parser used throughout the Python 3 grammar
+(annotated assignments, function parameter/return annotations, type aliases).
 
-Usage:
-    ast = parse_decl("x : int")
-    print(ast.to_py())  # x : int
+ADASCRIPT uses a left-to-right type notation inspired by Go and Odin, where
+container prefixes read naturally ("sequence of int" = ``[]int``).  The parser
+translates this notation into standard Python annotation strings via to_py().
+
+Syntax reference
+================
+
+Primitives
+----------
+    int  str  float  bool  bytes  None
+
+User-defined types
+------------------
+    Any identifier that is not a primitive keyword:
+        MyClass   SomeType   TreeNode
+
+Sequences (dynamic)
+--------------------
+    []<type>                        list[<type>]
+
+    []int                           list[int]
+    [][]int                         list[list[int]]
+    []MyClass                       list[MyClass]
+
+Fixed-size arrays
+-----------------
+    [<N>]<type>                     tuple[<type>, ...]
+
+    [5]int                          tuple[int, ...]
+    [3][]int                        tuple[list[int], ...]
+
+Dictionaries
+------------
+    {<key_type>}<value_type>        dict[<key_type>, <value_type>]
+
+    {str}int                        dict[str, int]
+    {int}[]str                      dict[int, list[str]]
+
+Sets
+----
+    {}<type>                        set[<type>]
+
+    {}int                           set[int]
+    {}str                           set[str]
+
+Optional (nullable)
+-------------------
+    ?<type>                         <type> | None
+
+    ?int                            int | None
+    ?[]int                          list[int] | None
+    []?int                          list[int | None]
+
+Tuples
+------
+    (<type>, <type>, ...)           tuple[<type>, <type>, ...]
+    (<type>,)                       tuple[<type>]
+
+    (int, str)                      tuple[int, str]
+    (int, str, float)               tuple[int, str, float]
+
+Union types
+-----------
+    <type> | <type> | ...           <type> | <type> | ...
+
+    int | str                       int | str
+    ?int | str                      int | None | str
+
+Callable (function signature)
+-----------------------------
+    [(<param_types>)]<return_type>  Callable[[<param_types>], <return_type>]
+
+    [(int, str)]bool                Callable[[int, str], bool]
+    [(int,)]int                     Callable[[int], int]
+
+Grammar
+=======
+::
+
+    type_annotation      = union_type | maybe_optional | expression
+    union_type           = maybe_optional ('|' maybe_optional)+
+    maybe_optional       = optional_type | basic_type
+    optional_type        = '?' basic_type
+    basic_type           = seq_type | callable_type | array_type
+                         | dict_type | set_type | tuple_type
+                         | primitive_type | type_name
+    seq_type             = '[]' type_annotation
+    array_type           = '[' INTEGER ']' type_annotation
+    dict_type            = '{' type_annotation '}' type_annotation
+    set_type             = '{}' type_annotation
+    callable_type        = '[' tuple_type ']' type_annotation
+    tuple_type           = empty_tuple_type | singleton_tuple_type | multi_tuple_type
+    multi_tuple_type     = '(' type_annotation (',' type_annotation)+ [','] ')'
+    singleton_tuple_type = '(' type_annotation ',' ')'
+    empty_tuple_type     = '(' ',' ')'
+    primitive_type       = 'int' | 'str' | 'float' | 'bool' | 'bytes' | 'None'
+    type_name            = IDENTIFIER  (excluding primitives)
+
+The ``expression`` fallback allows standard Python annotation syntax
+(e.g. ``list[int]``) to pass through when used inside the full grammar.
+
+Usage
+=====
+::
+
+    from hek_py_declarations import type_annotation, parse_type
+    from hek_parsec import Input
+
+    # Standalone parsing
+    ast = parse_type("[]?int")
+    print(ast.to_py())          # list[int | None]
+
+    # As part of a larger grammar
+    ann_assign = IDENTIFIER + COLON + type_annotation
 """
 
 import tokenize as tkn
 
 from hek_parsec import (
-    COLON,
     COMMA,
-    EQUAL,
     IDENTIFIER,
+    INTEGER,
+    LBRACE,
+    LBRACKET,
     LPAREN,
+    RBRACE,
+    RBRACKET,
     RPAREN,
+    VBAR,
     Input,
-    Parser,
-    ParserState,
     expect,
-    expect_type,
+    filt,
     fw,
     ignore,
     literal,
     method,
 )
-from hek_py3_expr import *  # noqa: F403 — need all fw() names in namespace
+from hek_py3_expr import expression
 
 ###############################################################################
-# Tokens not in hek_parsec
+# Tokens
 ###############################################################################
 
-NEWLINE = expect_type(tkn.NEWLINE)
-
-# Visible '::' for Odin-style constant/type declaration (two consecutive colons)
-V_DOUBLECOLON = vop(":") + vop(":")
-
-# Visible ':' for type annotation
-V_COLON = vop(":")
-
-# Visible '=' for assignment
-V_EQUAL = vop("=")
+QUESTION = ignore(expect(tkn.OP, "?"))
 
 ###############################################################################
 # Forward declarations
 ###############################################################################
 
-declaration = fw("declaration")
-var_decl = fw("var_decl")
-const_decl = fw("const_decl")
-type_decl = fw("type_decl")
-decl_list = fw("decl_list")
-decl_target = fw("decl_target")
+type_annotation = fw("type_annotation")
+union_type = fw("union_type")
+maybe_optional = fw("maybe_optional")
+optional_type = fw("optional_type")
+basic_type = fw("basic_type")
+seq_type = fw("seq_type")
+array_type = fw("array_type")
+dict_type = fw("dict_type")
+set_type = fw("set_type")
+callable_type = fw("callable_type")
+tuple_type = fw("tuple_type")
+multi_tuple_type = fw("multi_tuple_type")
+singleton_tuple_type = fw("singleton_tuple_type")
+empty_tuple_type = fw("empty_tuple_type")
+primitive_type = fw("primitive_type")
+type_name = fw("type_name")
 
 ###############################################################################
 # Grammar rules
 ###############################################################################
 
-# --- decl_target: single identifier or parenthesized list ---
-# Single: x : int
-# Multi:  (x, y, z : int)
-decl_target_single = IDENTIFIER
-decl_target_multi = LPAREN + IDENTIFIER + (COMMA + IDENTIFIER)[1:] + RPAREN
-decl_target = decl_target_multi | decl_target_single
+# --- Primitives: int, str, float, bool, bytes, None ---
+_PRIMITIVES = {"int", "str", "float", "bool", "bytes", "None"}
+primitive_type = filt(lambda s: s in _PRIMITIVES, IDENTIFIER)
 
-# --- Variable declaration: target : type ---
-# x : int
-# (x, y) : int
-var_decl = decl_target + V_COLON + type_annotation
+# --- User-defined type name (any identifier that is NOT a primitive) ---
+type_name = filt(lambda s: s not in _PRIMITIVES, IDENTIFIER)
 
-# --- Initialized variable: target : type = expr ---
-# x : int = 1
-# (x, y) : int = get_vals()
-var_decl_init = decl_target + V_COLON + type_annotation + V_EQUAL + expression
+# --- Tuple types ---
+# (int, str, float)  -> tuple[int, str, float]
+# (int,)             -> tuple[int]
+# (,)                -> tuple[()]
+multi_tuple_type = (
+    LPAREN + type_annotation + (COMMA + type_annotation)[1:] + COMMA[:] + RPAREN
+)
+singleton_tuple_type = LPAREN + type_annotation + COMMA + RPAREN
+empty_tuple_type = LPAREN + COMMA + RPAREN
 
-# --- Constant declaration: target :: expr ---
-# MAX_SIZE :: 100
-# PI :: 3.14159
-const_decl = decl_target + V_DOUBLECOLON + expression
+tuple_type = empty_tuple_type | singleton_tuple_type | multi_tuple_type
 
-# --- Type declaration: target :: type_expr ---
-# MyInt :: int
-# Vec2 :: struct { x, y : float }
-type_decl = decl_target + V_DOUBLECOLON + type_annotation
+# --- Container types ---
+# []int             -> list[int]
+seq_type = LBRACKET + RBRACKET + type_annotation
 
-# --- Auto-typed variable (type inference): target = expr ---
-# x = 1  (type inferred as int)
-auto_decl = decl_target + V_EQUAL + expression
+# [5]int            -> tuple[int, ...]
+array_type = LBRACKET + INTEGER + RBRACKET + type_annotation
 
-# --- declaration: choice of all declaration forms ---
-# Ordering matters: try more specific forms first
-declaration = var_decl_init | var_decl | const_decl | type_decl | auto_decl
+# {str}int          -> dict[str, int]
+dict_type = LBRACE + type_annotation + RBRACE + type_annotation
 
-# --- decl_list: one or more declarations (newline separated) ---
-decl_list = declaration + (NEWLINE + declaration)[1:]
+# {}int             -> set[int]
+set_type = LBRACE + RBRACE + type_annotation
 
-###############################################################################
-# AST to Python code generation
-###############################################################################
+# [(int, str)]bool  -> Callable[[int, str], bool]
+callable_type = LBRACKET + tuple_type + RBRACKET + type_annotation
 
+# --- basic_type: a non-union, non-optional type ---
+# Order matters: try container/callable before primitive/name (both start differently)
+# callable_type before array_type (both start with '[', but callable has '(' after '[')
+basic_type = (
+    seq_type
+    | callable_type
+    | array_type
+    | dict_type
+    | set_type
+    | tuple_type
+    | primitive_type
+    | type_name
+)
 
-@method(decl_target_multi)
-def to_py(self):
-    """decl_target_multi: '(' IDENTIFIER (',' IDENTIFIER)+ ')'"""
-    names = [self.nodes[0].to_py()]
-    for node in self.nodes[1:]:
-        if hasattr(node, "nodes") and node.nodes:
-            for seq in node.nodes:
-                if hasattr(seq, "nodes") and seq.nodes:
-                    names.append(seq.nodes[0].to_py())
-    return ", ".join(names)
+# --- Optional: ?int -> int | None ---
+optional_type = QUESTION + basic_type
+maybe_optional = optional_type | basic_type
 
+# --- Union: int | str -> int | str ---
+union_type = maybe_optional + (VBAR + maybe_optional)[1:]
 
-@method(var_decl)
-def to_py(self):
-    """var_decl: decl_target ':' type_annotation"""
-    target = self.nodes[0].to_py()
-    typ = self.nodes[2].to_py()
-    return f"{target} : {typ}"
-
-
-@method(var_decl_init)
-def to_py(self):
-    """var_decl_init: decl_target ':' type_annotation '=' expression"""
-    target = self.nodes[0].to_py()
-    typ = self.nodes[2].to_py()
-    val = self.nodes[4].to_py()
-    return f"{target} : {typ} = {val}"
-
-
-@method(const_decl)
-def to_py(self):
-    """const_decl: decl_target '::' expression"""
-    target = self.nodes[0].to_py()
-    val = self.nodes[2].to_py()
-    return f"{target} :: {val}"
-
-
-@method(type_decl)
-def to_py(self):
-    """type_decl: decl_target '::' type_annotation"""
-    target = self.nodes[0].to_py()
-    typ = self.nodes[2].to_py()
-    return f"{target} :: {typ}"
-
-
-@method(auto_decl)
-def to_py(self):
-    """auto_decl: decl_target '=' expression"""
-    target = self.nodes[0].to_py()
-    val = self.nodes[2].to_py()
-    return f"{target} = {val}"
-
-
-@method(declaration)
-def to_py(self):
-    """declaration: var_decl_init | var_decl | const_decl | type_decl | auto_decl"""
-    return self.nodes[0].to_py()
-
-
-@method(decl_list)
-def to_py(self):
-    """decl_list: declaration (NEWLINE declaration)*"""
-    lines = [self.nodes[0].to_py()]
-    for node in self.nodes[1:]:
-        if hasattr(node, "nodes") and node.nodes:
-            lines.append(node.nodes[0].to_py())
-    return "\n".join(lines)
-
+# --- type_annotation: union or single type, with expression fallback ---
+type_annotation = union_type | maybe_optional | expression
 
 ###############################################################################
-# Parse functions
+# to_py() methods
 ###############################################################################
 
 
-def parse_decl(source_code):
-    """Parse a single Odin-style declaration."""
+@method(primitive_type)
+def to_py(self, prec=None):
+    return self.nodes[0]  # raw string from literal()
+
+
+@method(type_name)
+def to_py(self, prec=None):
+    return self.nodes[0]  # raw string from IDENTIFIER
+
+
+@method(seq_type)
+def to_py(self, prec=None):
+    return f"list[{self.nodes[0].to_py()}]"
+
+
+@method(array_type)
+def to_py(self, prec=None):
+    return f"tuple[{self.nodes[1].to_py()}, ...]"
+
+
+@method(dict_type)
+def to_py(self, prec=None):
+    key = self.nodes[0].to_py()
+    val = self.nodes[1].to_py()
+    return f"dict[{key}, {val}]"
+
+
+@method(set_type)
+def to_py(self, prec=None):
+    return f"set[{self.nodes[0].to_py()}]"
+
+
+@method(callable_type)
+def to_py(self, prec=None):
+    # nodes[0] is the tuple_type (params), nodes[1] is the return type
+    tup = self.nodes[0]
+    ret = self.nodes[1].to_py()
+    # Extract individual param types from the tuple
+    params = _tuple_elements(tup)
+    param_str = ", ".join(params)
+    return f"Callable[[{param_str}], {ret}]"
+
+
+@method(empty_tuple_type)
+def to_py(self, prec=None):
+    return "tuple[()]"
+
+
+@method(singleton_tuple_type)
+def to_py(self, prec=None):
+    return f"tuple[{self.nodes[0].to_py()}]"
+
+
+@method(multi_tuple_type)
+def to_py(self, prec=None):
+    elems = _tuple_elements(self)
+    return f"tuple[{', '.join(elems)}]"
+
+
+def _tuple_elements(tup):
+    """Extract type strings from a tuple_type AST node."""
+    if type(tup).__name__ == "empty_tuple_type":
+        return []
+    if type(tup).__name__ == "singleton_tuple_type":
+        return [tup.nodes[0].to_py()]
+    # multi_tuple_type: first + Several_Times of (COMMA + type_annotation)
+    elems = [tup.nodes[0].to_py()]
+    st = tup.nodes[1]  # the Several_Times node
+    for seq in st.nodes:
+        if hasattr(seq, "nodes") and seq.nodes:
+            elems.append(seq.nodes[0].to_py())
+    return elems
+
+
+@method(optional_type)
+def to_py(self, prec=None):
+    return f"{self.nodes[0].to_py()} | None"
+
+
+@method(union_type)
+def to_py(self, prec=None):
+    # nodes[0] is first maybe_optional, nodes[1] is Several_Times of (VBAR + maybe_optional)
+    parts = [self.nodes[0].to_py()]
+    st = self.nodes[1]
+    for seq in st.nodes:
+        if hasattr(seq, "nodes") and seq.nodes:
+            parts.append(seq.nodes[0].to_py())
+    return " | ".join(parts)
+
+
+###############################################################################
+# Parse helper
+###############################################################################
+
+
+def parse_type(source_code):
+    """Parse a type annotation string."""
     inp = Input(source_code)
-    result = declaration.parse(inp)
-    if result is None:
-        return None
-    return result[0]
-
-
-def parse_decls(source_code):
-    """Parse multiple Odin-style declarations (newline separated)."""
-    inp = Input(source_code)
-    result = decl_list.parse(inp)
+    result = type_annotation.parse(inp)
     if result is None:
         return None
     return result[0]
@@ -206,42 +348,58 @@ def parse_decls(source_code):
 
 if __name__ == "__main__":
     print("=" * 60)
-    print("Odin-style Declaration Parser Tests")
+    print("ADASCRIPT-style Type Annotation Parser Tests")
     print("=" * 60)
 
-    test_cases = [
-        # Variable declarations
-        ("x : int", "x : int"),
-        ("name : str", "name : str"),
-        ("count : int", "count : int"),
-        # Initialized variables
-        ("x : int = 1", "x : int = 1"),
-        ("name : str = 'hello'", "name : str = 'hello'"),
-        ("pi : float = 3.14", "pi : float = 3.14"),
-        # Multiple targets
-        ("(x, y) : int", "x, y : int"),
-        ("(a, b, c) : int = 0", "a, b, c : int = 0"),
-        # Constant declarations
-        ("MAX :: 100", "MAX :: 100"),
-        ("PI :: 3.14159", "PI :: 3.14159"),
-        ("NAME :: 'test'", "NAME :: 'test'"),
-        # Type declarations
-        ("MyInt :: int", "MyInt :: int"),
-        ("Vec2 :: float", "Vec2 :: float"),
-        # Auto-typed (inferred)
-        ("x = 1", "x = 1"),
-        ("name = 'hello'", "name = 'hello'"),
-        # Expression with operators
-        ("x : int = 1 + 2", "x : int = 1 + 2"),
-        ("y : int = a * b", "y : int = a * b"),
+    tests = [
+        # --- Primitives ---
+        ("int", "int"),
+        ("str", "str"),
+        ("float", "float"),
+        ("bool", "bool"),
+        ("bytes", "bytes"),
+        ("None", "None"),
+        # --- User-defined types ---
+        ("MyClass", "MyClass"),
+        ("SomeType", "SomeType"),
+        # --- Sequence ---
+        ("[]int", "list[int]"),
+        ("[]str", "list[str]"),
+        ("[][]int", "list[list[int]]"),
+        # --- Fixed array ---
+        ("[5]int", "tuple[int, ...]"),
+        ("[3]str", "tuple[str, ...]"),
+        # --- Nested containers ---
+        ("[3][]int", "tuple[list[int], ...]"),
+        ("[][5]int", "list[tuple[int, ...]]"),
+        # --- Dict ---
+        ("{str}int", "dict[str, int]"),
+        ("{int}str", "dict[int, str]"),
+        # --- Set ---
+        ("{}int", "set[int]"),
+        ("{}str", "set[str]"),
+        # --- Optional ---
+        ("?int", "int | None"),
+        ("?str", "str | None"),
+        ("?[]int", "list[int] | None"),
+        ("[]?int", "list[int | None]"),
+        # --- Tuple ---
+        ("(int, str)", "tuple[int, str]"),
+        ("(int, str, float)", "tuple[int, str, float]"),
+        ("(int,)", "tuple[int]"),
+        # --- Union ---
+        ("int | str", "int | str"),
+        ("int | str | float", "int | str | float"),
+        ("?int | str", "int | None | str"),
+        # --- Callable ---
+        ("[(int, str)]bool", "Callable[[int, str], bool]"),
+        ("[(int,)]int", "Callable[[int], int]"),
     ]
 
-    passed = 0
-    failed = 0
-
-    for code, expected in test_cases:
+    passed = failed = 0
+    for code, expected in tests:
         try:
-            ast = parse_decl(code)
+            ast = parse_type(code)
             if ast is None:
                 print(f"  FAIL: {code!r} -> parse returned None")
                 failed += 1
@@ -251,10 +409,15 @@ if __name__ == "__main__":
                     print(f"  PASS: {code!r} -> {output!r}")
                     passed += 1
                 else:
-                    print(f"  FAIL: {code!r} -> {output!r} (expected {expected!r})")
+                    print(f"  MISMATCH: {code!r}")
+                    print(f"    expected: {expected!r}")
+                    print(f"    got:      {output!r}")
                     failed += 1
         except Exception as e:
             print(f"  ERROR: {code!r} -> {e}")
+            import traceback
+
+            traceback.print_exc()
             failed += 1
 
     print("=" * 60)

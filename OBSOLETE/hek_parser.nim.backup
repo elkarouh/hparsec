@@ -1,0 +1,404 @@
+## Parser combinator framework for building recursive descent parsers in Nim.
+import macros, tables, strutils, sequtils, options, nre
+
+type
+  TokenType* = enum
+    ttName, ttNumber, ttString, ttOp, ttIndent, ttDedent, ttNewline, ttComment, ttError, ttEnd
+
+  Token* = object
+    typ*: TokenType
+    str*: string
+    line*, col*: int
+
+  TokenStream* = ref object
+    tokens*: seq[Token]
+    pos*, markPos*: int
+    memos*: Table[tuple[parserId: int, pos: int], tuple[result: bool, endPos: int]]
+    farthestToken*: Token
+
+proc newTokenStream*(source: string): TokenStream =
+  var tokens: seq[Token] = @[]
+  var pos = 0
+  var line = 1
+  var col = 1
+  while pos < source.len:
+    let c = source[pos]
+    if c == chr(32) or c == chr(9):
+      inc pos; inc col; continue
+    if c == chr(10):
+      inc pos; inc line; col = 1
+      tokens.add(Token(typ: ttNewline, str: "\n", line: line, col: col))
+      continue
+    if c == chr(35):
+      let startCol = col
+      while pos < source.len and source[pos] != chr(10): inc pos; inc col
+      tokens.add(Token(typ: ttComment, str: source[pos..^1], line: line, col: startCol))
+      continue
+    if c in {chr(40), chr(41), chr(43), chr(123), chr(125), chr(91), chr(93), chr(44), chr(59), chr(58), chr(61), chr(124), chr(42), chr(45), chr(47), chr(37), chr(38), chr(126), chr(94), chr(60), chr(62), chr(63), chr(46), chr(33), chr(64), chr(92)}:
+      let startCol = col
+      var op = ""
+      if pos + 1 < source.len:
+        let twoChar = source[pos..pos+1]
+        if twoChar in ["==", "!=", "<=", ">=", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<", ">>", "<<=", ">>=", "**", "//", "**=", "//=", "->", ".."]:
+          op = twoChar; inc pos, 2; inc col, 2
+        else: op.add(c); inc pos; inc col
+      else: op.add(c); inc pos; inc col
+      tokens.add(Token(typ: ttOp, str: op, line: line, col: startCol))
+      continue
+    if c in {chr(34), chr(39)}:
+      let startCol = col; let quote = c; var strVal = ""
+      inc pos; inc col
+      while pos < source.len and source[pos] != quote:
+        if source[pos] == chr(92) and pos + 1 < source.len: inc pos; inc col
+        strVal.add(source[pos]); inc pos; inc col
+      if pos < source.len: inc pos; inc col
+      tokens.add(Token(typ: ttString, str: strVal, line: line, col: startCol))
+      continue
+    if c.isDigit or (c == chr(46) and pos + 1 < source.len and source[pos+1].isDigit):
+      let startCol = col; var numStr = ""
+      while pos < source.len and (source[pos].isAlphaNumeric or source[pos] in {chr(46), chr(95), chr(101), chr(69), chr(43), chr(45)}):
+        if source[pos] in {chr(101), chr(69)} and pos + 1 < source.len and source[pos+1] in {chr(43), chr(45)}:
+          numStr.add(source[pos]); inc pos; inc col
+        elif source[pos].isAlphaNumeric or source[pos] in {chr(46), chr(95)}:
+          numStr.add(source[pos]); inc pos; inc col
+        else: break
+      tokens.add(Token(typ: ttNumber, str: numStr, line: line, col: startCol))
+      continue
+    if c.isAlphaNumeric or c == chr(95):
+      let startCol = col; var nameStr = ""
+      while pos < source.len and (source[pos].isAlphaNumeric or source[pos] == chr(95)):
+        nameStr.add(source[pos]); inc pos; inc col
+      tokens.add(Token(typ: ttName, str: nameStr, line: line, col: startCol))
+      continue
+    let startCol = col; inc pos; inc col
+    tokens.add(Token(typ: ttError, str: $c, line: line, col: startCol))
+  tokens.add(Token(typ: ttEnd, str: "", line: line, col: col))
+  result = TokenStream(tokens: tokens, pos: 0, markPos: 0, memos: initTable[tuple[parserId: int, pos: int], tuple[result: bool, endPos: int]](), farthestToken: tokens[0])
+
+proc toTokenStream*(source: string): TokenStream = newTokenStream(source)
+
+proc getNewToken*(stream: TokenStream): Option[Token] =
+  if stream.pos < stream.tokens.len:
+    let token = stream.tokens[stream.pos]
+    if token.typ != ttEnd:
+      inc stream.pos
+      if stream.pos > stream.farthestToken.col: stream.farthestToken = token
+      return some(token)
+  return none(Token)
+
+proc mark*(stream: TokenStream): int = stream.pos
+proc reset*(stream: TokenStream, pos: int) = stream.pos = pos
+proc getFarthestToken*(stream: TokenStream): Token = stream.farthestToken
+
+type
+  AstNodeKind* = enum nkEmpty, nkLeaf, nkList
+  AstNode* = ref AstNodeObj
+  AstNodeObj = object
+    case kind*: AstNodeKind
+    of nkEmpty: empty*: void
+    of nkLeaf: value*: string
+    of nkList: children*: seq[AstNode]
+  ParseResult* = tuple[ast: AstNode, stream: TokenStream]
+
+proc newLeaf*(value: string): AstNode = AstNode(kind: nkLeaf, value: value)
+proc newList*(children: seq[AstNode] = @[]): AstNode = AstNode(kind: nkList, children: children)
+
+proc `$`*(node: AstNode): string =
+  case node.kind
+  of nkEmpty: return "<empty>"
+  of nkLeaf: return node.value
+  of nkList:
+    if node.children.len == 0: return "[]"
+    return "[" & node.children.mapIt($it).join(", ") & "]"
+
+type
+  ParseFunc = proc(stream: TokenStream): Option[ParseResult] {.closure.}
+  Parser* = ref object
+    id*: int
+    name*: string
+    parseFn*: ParseFunc
+
+var nextParserId = 0
+
+proc newParser*(name: string, parseFn: ParseFunc): Parser =
+  inc nextParserId
+  Parser(id: nextParserId, name: name, parseFn: parseFn)
+
+proc `+`*(a: Parser, b: Parser): Parser =
+  let parsers = @[a, b]
+  newParser("Sequence", proc(stream: TokenStream): Option[ParseResult] =
+    var nodes: seq[AstNode] = @[]
+    let startPos = stream.pos
+    for p in parsers:
+      let result = p.parseFn(stream)
+      if result.isSome:
+        let res = result.get()
+        if res.ast != nil: nodes.add(res.ast)
+      else:
+        stream.pos = startPos
+        return none(ParseResult)
+    let finalNodes = nodes.filterIt(it != nil)
+    let ast = if finalNodes.len == 1: finalNodes[0] else: newList(finalNodes)
+    return some((ast: ast, stream: stream))
+  )
+
+proc `|`*(a: Parser, b: Parser): Parser =
+  newParser("Choice", proc(stream: TokenStream): Option[ParseResult] =
+    let startPos = stream.pos
+    let resultA = a.parseFn(stream)
+    if resultA.isSome: return resultA
+    stream.pos = startPos
+    let resultB = b.parseFn(stream)
+    if resultB.isSome: return resultB
+    stream.pos = startPos
+    return none(ParseResult)
+  )
+
+proc `[]`*(p: Parser, range: HSlice[int, int]): Parser =
+  let minTimes = if range.a < 0: 0 else: range.a
+  let maxTimes = if range.b < 0: -1 else: range.b
+  newParser("Repeat", proc(stream: TokenStream): Option[ParseResult] =
+    var nodes: seq[AstNode] = @[]
+    let startPos = stream.pos
+    while true:
+      let result = p.parseFn(stream)
+      if result.isSome:
+        nodes.add(result.get().ast)
+        if maxTimes >= 0 and nodes.len >= maxTimes: break
+      else:
+        stream.pos = startPos
+        break
+    if minTimes > 0 and nodes.len < minTimes:
+      stream.pos = startPos
+      return none(ParseResult)
+    return some((ast: newList(nodes), stream: stream))
+  )
+
+proc `*`*(p: Parser, n: int): Parser =
+  newParser("ExactRepeat", proc(stream: TokenStream): Option[ParseResult] =
+    var nodes: seq[AstNode] = @[]
+    let startPos = stream.pos
+    for i in 0..<n:
+      let result = p.parseFn(stream)
+      if result.isSome:
+        nodes.add(result.get().ast)
+      else:
+        stream.pos = startPos
+        return none(ParseResult)
+    return some((ast: newList(nodes), stream: stream))
+  )
+
+proc repZeroOrMore*(p: Parser): Parser = p[0..10000]
+proc repOneOrMore*(p: Parser): Parser = p[1..10000]
+
+type
+  ForwardParser* = ref object
+    id*: int
+    name*: string
+    parseFn*: ParseFunc
+    targetName*: string
+    resolved*: bool
+    target*: Parser
+
+var parserRegistry*: Table[string, Parser] = initTable[string, Parser]()
+
+proc forward*(name: string): ForwardParser =
+  inc nextParserId
+  result = ForwardParser(
+    id: nextParserId,
+    name: "Forward_" & name,
+    targetName: name,
+    resolved: false,
+    target: nil,
+    parseFn: nil
+  )
+  let fwd = result
+  fwd.parseFn = proc(stream: TokenStream): Option[ParseResult] =
+    if not fwd.resolved:
+      if parserRegistry.hasKey(fwd.targetName):
+        fwd.target = parserRegistry[fwd.targetName]
+        fwd.resolved = true
+      else:
+        return none(ParseResult)
+    if fwd.target != nil and fwd.target.parseFn != nil:
+      return fwd.target.parseFn(stream)
+    return none(ParseResult)
+  return fwd
+
+proc register*(p: Parser, name: string) = parserRegistry[name] = p
+
+type
+  TransformFunc = proc(node: AstNode): string {.closure.}
+  TransformRegistry = Table[string, TransformFunc]
+
+var transformRegistry*: TransformRegistry = initTable[string, TransformFunc]()
+
+proc registerTransform*(kind: string, fn: TransformFunc) = transformRegistry[kind] = fn
+
+proc transform*(node: AstNode, kind: string = ""): string =
+  let k = if kind == "": $node.kind else: kind
+  if transformRegistry.hasKey(k): return transformRegistry[k](node)
+  return $node
+
+macro defTransform(name: untyped, params: untyped, body: untyped): untyped =
+  result = quote do:
+    proc `name`(params): string = `body`
+    registerTransform($`name`, `name`)
+
+proc shift*(stream: TokenStream): Option[ParseResult] =
+  let tokenOpt = stream.getNewToken()
+  if tokenOpt.isSome:
+    let token = tokenOpt.get()
+    return some((ast: newLeaf(token.str), stream: stream))
+  return none(ParseResult)
+
+proc nothing*(stream: TokenStream): Option[ParseResult] = some((ast: AstNode(nil), stream: stream))
+proc fail*(stream: TokenStream): Option[ParseResult] = none(ParseResult)
+
+proc expectType*(typ: TokenType): Parser =
+  newParser("ExpectType", proc(stream: TokenStream): Option[ParseResult] =
+    let tokenOpt = stream.getNewToken()
+    if tokenOpt.isSome:
+      let token = tokenOpt.get()
+      if token.typ == typ: return some((ast: newLeaf(token.str), stream: stream))
+    return none(ParseResult)
+  )
+
+proc expect*(typ: TokenType, val: string): Parser =
+  newParser("Expect", proc(stream: TokenStream): Option[ParseResult] =
+    let tokenOpt = stream.getNewToken()
+    if tokenOpt.isSome:
+      let token = tokenOpt.get()
+      if token.typ == typ and token.str == val: return some((ast: newLeaf(token.str), stream: stream))
+    return none(ParseResult)
+  )
+
+proc literal*(val: string): Parser = expect(ttName, val)
+
+proc expectRe*(pattern: string): Parser =
+  let regex = re(pattern)
+  newParser("ExpectRe", proc(stream: TokenStream): Option[ParseResult] =
+    let tokenOpt = stream.getNewToken()
+    if tokenOpt.isSome:
+      let token = tokenOpt.get()
+      if contains(token.str, regex): return some((ast: newLeaf(token.str), stream: stream))
+    return none(ParseResult)
+  )
+
+proc filt*(predicate: proc(n: AstNode): bool {.closure.}, p: Parser): Parser =
+  newParser("Filter", proc(stream: TokenStream): Option[ParseResult] =
+    let startPos = stream.pos
+    let result = p.parseFn(stream)
+    if result.isSome:
+      let res = result.get()
+      if predicate(res.ast): return some(res)
+    stream.pos = startPos
+    return none(ParseResult)
+  )
+
+proc fmap*(fn: proc(n: AstNode): AstNode {.closure.}, p: Parser): Parser =
+  newParser("Fmap", proc(stream: TokenStream): Option[ParseResult] =
+    let result = p.parseFn(stream)
+    if result.isSome:
+      let res = result.get()
+      return some((ast: fn(res.ast), stream: stream))
+    return none(ParseResult)
+  )
+
+proc `~`*(p: Parser): Parser =
+  newParser("NegativeLookahead", proc(stream: TokenStream): Option[ParseResult] =
+    let startPos = stream.pos
+    let result = p.parseFn(stream)
+    stream.pos = startPos
+    if result.isSome: return none(ParseResult)
+    return some((ast: AstNode(nil), stream: stream))
+  )
+
+proc ignore*(p: Parser): Parser =
+  newParser("Ignore", proc(stream: TokenStream): Option[ParseResult] =
+    let result = p.parseFn(stream)
+    if result.isSome: return some((ast: AstNode(nil), stream: stream))
+    return none(ParseResult)
+  )
+
+let
+  lparen* = ignore(expect(ttOp, "("))
+  rparen* = ignore(expect(ttOp, ")"))
+  lbrace* = ignore(expect(ttOp, "{"))
+  rbrace* = ignore(expect(ttOp, "}"))
+  lbracket* = ignore(expect(ttOp, "["))
+  rbracket* = ignore(expect(ttOp, "]"))
+  comma* = ignore(expect(ttOp, ","))
+  semicolon* = ignore(expect(ttOp, ";"))
+  vbar* = ignore(expect(ttOp, "|"))
+  colon* = ignore(expect(ttOp, ":"))
+  eq* = ignore(expect(ttOp, "="))
+  plus* = ignore(expect(ttOp, "+"))
+  minus* = ignore(expect(ttOp, "-"))
+  star* = ignore(expect(ttOp, "*"))
+  slash* = ignore(expect(ttOp, "/"))
+  ident* = expectType(ttName)
+  number* = expectRe(r"^[0-9]+(\.[0-9]+)?([eE][+-]?[0-9]+)?$")
+  stringLit* = expectType(ttString)
+
+proc parse*(p: Parser, stream: TokenStream): Option[ParseResult] =
+  stream.memos.clear()
+  return p.parseFn(stream)
+
+when isMainModule:
+  echo "=== Testing Parser Combinators ==="
+  echo "\n1. Testing sequence (A + B):"
+  let keyvalue = ident + eq + number + semicolon
+  var input = "x=789;".toTokenStream
+  let kvResult = keyvalue.parse(input)
+  if kvResult.isSome: echo "   Success: ", kvResult.get().ast
+  else: echo "   Failed"
+  
+  echo "\n2. Testing repetition (A[1:]):"
+  let keyvalues = keyvalue.repOneOrMore
+  input = "x=2; y=3.4;".toTokenStream
+  let kvRepResult = keyvalues.parse(input)
+  if kvRepResult.isSome: echo "   Success: ", kvRepResult.get().ast
+  else: echo "   Failed"
+  
+  echo "\n3. Testing choice (A | B):"
+  let identOrNumber = ident | number
+  input = "hello".toTokenStream
+  let choiceResult = identOrNumber.parse(input)
+  if choiceResult.isSome: echo "   Success: ", choiceResult.get().ast
+  else: echo "   Failed"
+  
+  input = "123".toTokenStream
+  let choiceResult2 = identOrNumber.parse(input)
+  if choiceResult2.isSome: echo "   Success: ", choiceResult2.get().ast
+  else: echo "   Failed"
+  
+  echo "\n4. Testing negative lookahead (~A):"
+  let notComma = ~comma + ident
+  input = "abc".toTokenStream
+  let negResult = notComma.parse(input)
+  if negResult.isSome: echo "   Success (non-comma): ", negResult.get().ast
+  else: echo "   Failed"
+  
+  input = ", x".toTokenStream
+  let negResult2 = (~comma).parse(input)
+  if negResult2.isSome: echo "   Unexpected success on comma"
+  else: echo "   Correctly rejected comma"
+  
+  echo "\n5. Testing transformation methods:"
+  proc toUpperProc(node: AstNode): string =
+    case node.kind
+    of nkLeaf: return node.value.toUpperAscii
+    of nkList: return node.children.mapIt(toUpperProc(it)).join(", ")
+    of nkEmpty: return ""
+  registerTransform("toUpper", toUpperProc)
+  
+  input = "hello".toTokenStream
+  let identResult = ident.parse(input)
+  if identResult.isSome:
+    let res = identResult.get()
+    echo "   Original: ", res.ast
+    echo "   Transformed: ", transform(res.ast, "toUpper")
+  else: echo "   Failed"
+  
+  echo "\n=== All tests completed ==="

@@ -54,6 +54,7 @@ from hek_parsec import (
     shift,
 )
 from hek_py3_expr import *  # noqa: F403 — need all fw() names in namespace
+from hek_py_declarations import type_annotation
 
 ###############################################################################
 # Tokens not in hek_parsec
