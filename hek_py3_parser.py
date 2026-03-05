@@ -259,9 +259,6 @@ param_list = param + (COMMA + param)[:] + COMMA[:]
 decorator = AT + expression + NEWLINE + NL[:]
 decorators = decorator[1:]
 
-# --- Type annotation (temporary alias for expression) ---
-type_annotation = expression
-
 # --- Function definition ---
 return_annotation = V_ARROW + type_annotation
 func_def = (
