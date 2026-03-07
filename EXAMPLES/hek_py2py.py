@@ -1,6 +1,85 @@
 #!/usr/bin/env python3
 """Python 3.14 source-to-source translator using parser combinators.
 
+ARCHITECTURE CHANGE (RichNL approach):
+======================================
+Instead of reconstructing comment positions after parsing, comments are now
+attached directly to NL tokens during tokenization as RichNL objects.
+Comments travel naturally with the parse tree, eliminating position arithmetic.
+
+CHANGES MADE:
+- hek_tokenize.py: Added RichNL class, bundles COMMENT+NL tokens
+- hek_parsec.py: Added expect_type_node() to return token nodes (not strings)
+- hek_py3_parser.py: NL = expect_type_node(tkn.NL), added NL.to_py() method
+- hek_py3_stmt.py: Fixed import_names_paren to allow NL[:] inside parens
+- hek_py2py.py: Simplified parse_module() and translate()
+
+TEST STATUS (as of implementation):
+===================================
+29 passed, 3 failed
+
+PASSING:
+- Simple statements (x = 1, import, from ... import)
+- Compound statements (if/elif/else, while, for, try, with, match)
+- Functions, classes, decorators, async variants
+- Comments inside blocks (indented comments in compound statements)
+- Leading comments (comments before first statement)
+
+FAILING:
+1. Blank lines between statements - plain NL tokens are skipped, not emitted
+   Input:  'x = 1
+
+y = 2
+'
+   Expected: 'x = 1
+
+y = 2
+'
+   Got: 'x = 1
+y = 2
+'
+
+2. Inline comments - COMMENT+NEWLINE (not NL) not handled
+   Input:  'x = 1  # inline
+y = 2
+'
+   Expected: 'x = 1  # inline
+y = 2
+'
+   Got: '
+' (broken)
+
+3. Multiple blank lines preserved - same as #1
+   Input:  '# header
+
+import os
+
+def f():...'
+   Expected: '# header
+
+import os
+
+def f():...'
+   Got: '# header
+import os
+def f():...' (blanks lost)
+
+TODO FOR FUTURE WORK:
+=====================
+1. Handle plain NL tokens (without comments) - emit them as blank lines
+2. Handle inline comments - they use NEWLINE token, not NL
+   - Tokenizer needs to bundle COMMENT+NEWLINE or handle separately
+3. Preserve blank line counts (currently all blanks collapse to single)
+4. Fix statement parsing - only parses ~5 statements from hek_py3_expr.py
+   - Some grammar rules may still not handle RichNL properly
+
+USAGE:
+    python3 hek_py2py.py [file.py]       # translate a file
+    echo "x = 1" | python3 hek_py2py.py  # translate from stdin
+"""
+
+"""Python 3.14 source-to-source translator using parser combinators.
+
 Parses Python source code using the hek_parsec combinator framework
 and reconstructs it via to_py() methods on each AST node.
 
@@ -9,224 +88,170 @@ in the tokenizer and attaching them to AST nodes. This approach is
 language-agnostic — trivia travels with the AST, not with line numbers.
 
 Usage:
-    python3 hek_py3_py2py.py [file.py]       # translate a file
-    echo "x = 1" | python3 hek_py3_py2py.py  # translate from stdin
+    python3 hek_py2py.py [file.py]       # translate a file
+    echo "x = 1" | python3 hek_py2py.py  # translate from stdin
 """
 
 import sys
+
 sys.path.insert(0, "..")
 
 import sys
 import token as token_mod
-from types import MethodType
 
 from hek_py3_parser import *  # fw() resolves names in calling module's globals
-from hek_tokenize import Tokenizer
+from hek_tokenize import Tokenizer, RichNL
 
 
-def InputSkipTrivia(code):
-    """Create a token stream that skips COMMENT and NL tokens.
+def Input(code):
+    """Create a token stream for parsing.
 
-    Comments and blank lines are buffered as 'trivia' and stored in
-    stream.trivia keyed by the next real token's position. This lets the
-    parser work without seeing comments, while preserving them for
-    reconstruction.
-
-    The trick: we monkey-patch get_new_token on this specific Tokenizer
-    instance so that all grammar rules (which call get_new_token internally)
-    automatically skip trivia tokens.
+    The tokenizer now returns RichNL objects that bundle comments with
+    newline tokens. Comments travel naturally with the parse tree,
+    eliminating the need for position-based reconstruction.
     """
     gen = Tokenizer(code)
-    gen.get_new_token_original = gen.get_new_token
-    gen.get_new_token = MethodType(Tokenizer.get_new_token_skip_trivia, gen)
     gen.get_new_token()  # skip ENCODING token
     return gen
 
 
-def parse_module_with_trivia(code):
-    """Parse a full module, attaching trivia (comments/blanks) to each statement.
-
-    Returns:
-        stmts: list of AST nodes, each with a .leading_trivia attribute
-        trailing_trivia: list of trivia tuples after the last statement
-    """
+def parse_module(code):
+    """Parse a full module. Comments are embedded in the parse tree via RichNL."""
+    from hek_parsec import ParserState
     ParserState.reset()
-    stream = InputSkipTrivia(code)
+    stream = Input(code)
     stmts = []
-
+    leading = []
+    import token as token_mod
+    
+    # Peek at first token
+    first_token = None
+    try:
+        first_token = stream.get_new_token()
+    except StopIteration:
+        pass
+    
+    if first_token is None or first_token.type == token_mod.ENDMARKER:
+        return stmts, leading, []
+    
+    # Collect leading RichNL comments
+    if isinstance(first_token, RichNL):
+        leading.append(first_token)
+        while True:
+            tok = stream.get_new_token()
+            if isinstance(tok, RichNL):
+                leading.append(tok)
+            elif tok.type == token_mod.NL:
+                continue
+            else:
+                stream.reset(stream.mark() - 1)
+                break
+    else:
+        stream.reset(stream.mark() - 1)
+    
+    # Parse statements with inter-statement comments
     while True:
+        inter_comments = []
+        
+        # Collect RichNL comments before this statement
+        while True:
+            pos = stream.mark()
+            try:
+                tok = stream.get_new_token()
+            except StopIteration:
+                break
+            if isinstance(tok, RichNL):
+                inter_comments.append(tok)
+                continue
+            if tok.type == token_mod.NL:
+                continue
+            stream.reset(pos)
+            break
+        
         # Check for end of input
-        pos = stream.mark()
         try:
             tok = stream.get_new_token()
         except StopIteration:
             break
         if not tok or tok.type == token_mod.ENDMARKER:
             break
-        # The trivia flushed during the peek is at (stream.mark() - 1),
-        # the position of the first real token of this statement.
-        first_token_pos = stream.mark() - 1
         stream.reset(pos)
-
-        pre_pos = stream.mark()
-
+        
         result = statement.parse(stream)
         if not result:
             break
 
-        post_pos = stream.mark()
         node = result[0]
-        # Leading trivia: only from the first real token position
-        node.leading_trivia = stream.trivia.pop(first_token_pos, [])
-        # Collect inner trivia (comments inside compound statement bodies).
-        # Trivia at the same indent as the header belongs to the NEXT statement
-        # (Python's tokenizer emits comments before DEDENT, inside the block).
-        inner = []
-        spill = []
-        header_indent = (
-            stream.tokens[first_token_pos][0].start[1]
-            if first_token_pos < len(stream.tokens)
-            else 0
-        )
-        for p in sorted(list(stream.trivia.keys())):
-            if pre_pos < p < post_pos:
-                for item in stream.trivia.pop(p):
-                    kind, text, ind = item
-                    if kind in ("comment", "blank") and ind <= header_indent:
-                        spill.append(item)
-                    elif spill:
-                        # Once we start spilling, everything after spills too
-                        spill.append(item)
-                    else:
-                        inner.append(item)
-        node.inner_trivia = inner
-        node._spill_trivia = spill
+        node._leading_comments = inter_comments
         stmts.append(node)
 
-    # Collect trailing trivia (comments/blanks after the last statement)
-    trailing = list(stream._trivia_buf)
-    # Also check any trivia entries left in the dict
-    for p in sorted(stream.trivia):
-        trailing.extend(stream.trivia[p])
+    return stmts, leading, []
 
-    return stmts, trailing
+
+def _inject_before_elif_else(rendered, spill_lines):
+    """Inject spill_lines before the first elif/else at indent 0 in rendered.
+
+    Returns modified rendered string, or None if no injection point found.
+    """
+    import re
+    lines = rendered.split("\n")
+    # Find the first line that starts with 'elif ' or 'else:'
+    for i, line in enumerate(lines):
+        stripped = line.lstrip()
+        if stripped.startswith(("elif ", "else:")):
+            new_lines = lines[:i] + spill_lines + lines[i:]
+            return "\n".join(new_lines)
+    return None
 
 
 def translate(code):
-    """Parse Python source and reconstruct it via to_py().
-
-    Preserves comments and blank lines from the original source.
-    Returns the reconstructed source string with a trailing newline.
-    """
+    """Parse Python source and reconstruct it via to_py()."""
     if not code.strip():
         return code
 
-    stmts, trailing = parse_module_with_trivia(code)
+    stmts, leading, trailing = parse_module(code)
 
     output = []
-    pending_spill = []  # spill trivia from previous compound statement
+
+    def emit_richnl(richnl):
+        """Emit lines for a RichNL (comments and/or blank lines)."""
+        output.extend(richnl.to_lines())
+
+    # Emit leading comments and blank lines
+    for richnl in leading:
+        emit_richnl(richnl)
+
     for stmt in stmts:
-        # Emit spill trivia from previous statement (comments at outer indent
-        # that Python's tokenizer placed before DEDENT, inside the block)
-        for kind, text, indent in pending_spill:
-            if kind == "comment":
-                output.append(" " * indent + text)
-            else:
-                output.append("")
-        pending_spill = []
-
-        trivia = getattr(stmt, "leading_trivia", [])
-        # Split into pre-statement trivia and inline comments
-        pre_trivia = [t for t in trivia if t[0] != "inline"]
-        inline_trivia = [t for t in trivia if t[0] == "inline"]
-
-        # Emit pre-statement trivia (comments and blank lines)
-        for kind, text, indent in pre_trivia:
-            if kind == "comment":
-                output.append(" " * indent + text)
-            else:  # blank
-                output.append("")
+        # Emit inter-statement comments attached to this statement
+        inter = getattr(stmt, '_leading_comments', [])
+        for richnl in inter:
+            emit_richnl(richnl)
 
         # Emit the reconstructed statement
         try:
-            output.append(stmt.to_py(0))
+            rendered = stmt.to_py(0)
         except TypeError:
-            output.append(stmt.to_py())
+            rendered = stmt.to_py()
+        # Compound statement bodies may have absorbed trailing blank lines
+        # (blank NL tokens before DEDENT). Strip them from the rendered output
+        # and emit them as inter-statement blanks after this statement.
+        rendered_lines = rendered.split('\n')
+        trailing_blanks = 0
+        while rendered_lines and rendered_lines[-1] == '':
+            rendered_lines.pop()
+            trailing_blanks += 1
+        output.append('\n'.join(rendered_lines))
+        for _ in range(trailing_blanks):
+            output.append('')
 
-        # Append inline comments to the statement's first line
-        # (inline comments within the statement range are on the header line)
-        for kind, text, indent in inline_trivia:
-            output[-1] += "  " + text
+    # Emit trailing comments
+    for richnl in trailing:
+        emit_richnl(richnl)
 
-        # Insert inner trivia (comments inside compound statement bodies)
-        # Strategy: walk body lines and trivia items sequentially.
-        # - "comment"/"blank" trivia goes BEFORE the next body line
-        # - "inline" trivia attaches AFTER the previous body line
-        inner = getattr(stmt, "inner_trivia", [])
-        if inner:
-            rendered = output.pop()
-            lines = rendered.split("\n")
-            header = lines[0]
-            body_lines = lines[1:]
-            injected = []
-            inner_idx = 0
-            for bline in body_lines:
-                # Insert comment/blank trivia before this body line
-                while inner_idx < len(inner) and inner[inner_idx][0] in (
-                    "comment",
-                    "blank",
-                ):
-                    kind, text, ind = inner[inner_idx]
-                    injected.append(" " * ind + text if kind == "comment" else "")
-                    inner_idx += 1
-                injected.append(bline)
-                # Attach inline trivia to this body line
-                while inner_idx < len(inner) and inner[inner_idx][0] == "inline":
-                    injected[-1] += "  " + inner[inner_idx][1]
-                    inner_idx += 1
-            # Any remaining trivia after the last body line
-            while inner_idx < len(inner):
-                kind, text, ind = inner[inner_idx]
-                if kind == "inline":
-                    if injected:
-                        injected[-1] += "  " + text
-                    else:
-                        header += "  " + text
-                elif kind == "comment":
-                    injected.append(" " * ind + text)
-                else:
-                    injected.append("")
-                inner_idx += 1
-            output.append(header + "\n" + "\n".join(injected) if injected else header)
-
-        # Capture spill trivia for the next statement
-        pending_spill = getattr(stmt, "_spill_trivia", [])
-
-    # Emit any remaining spill from the last statement
-    for kind, text, indent in pending_spill:
-        if kind == "comment":
-            output.append(" " * indent + text)
-        else:
-            output.append("")
-
-    # Emit trailing trivia
-    for kind, text, indent in trailing:
-        if kind == "inline":
-            if output:
-                output[-1] += "  " + text
-            else:
-                output.append(" " * indent + text)
-        elif kind == "comment":
-            output.append(" " * indent + text)
-        else:
-            output.append("")
-
-    result = "\n".join(output)
-    if not result.endswith("\n"):
-        result += "\n"
+    result = chr(10).join(output)
+    if not result.endswith(chr(10)):
+        result += chr(10)
     return result
-
-
 def main():
     if len(sys.argv) > 1:
         with open(sys.argv[1]) as f:

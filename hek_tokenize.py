@@ -51,6 +51,66 @@ class Pipe:
 
 
 ###############################################################################
+
+
+class RichNL:
+    """A newline token enriched with any preceding comments.
+
+    This replaces the old approach of storing trivia by position.
+    Comments now travel naturally with the NL tokens in the parse tree.
+
+    Attributes:
+        nl_token: The original NL or NEWLINE token (for position info)
+        comments: List of (kind, text, indent) tuples for comments on this line
+        type: Always tkn.NL or tkn.NEWLINE so grammar rules match correctly
+        string: Empty string (NL doesn't contribute source text)
+        is_blank: True if this represents a blank line (no comment, just NL)
+    """
+    string = ''
+
+    def __init__(self, nl_token, comments=None, is_blank=False):
+        self.nl_token = nl_token
+        self.comments = comments if comments else []
+        self.start = nl_token.start
+        self.end = nl_token.end
+        self.type = nl_token.type  # Can be NL or NEWLINE
+        self.is_blank = is_blank
+
+    def __repr__(self):
+        if self.is_blank:
+            return f'RichNL(blank)'
+        return f'RichNL(comments={self.comments!r})'
+
+    def to_lines(self):
+        """Return list of text lines this RichNL contributes: comment lines and/or a blank."""
+        lines = []
+        for kind, text, ind in self.comments:
+            if kind == 'comment':
+                lines.append(' ' * ind + text)
+        if self.is_blank:
+            lines.append('')
+        return lines
+
+    def to_py(self):
+        """Render to a newline-joined string (used by emit_richnl and NL.to_py)."""
+        return '\n'.join(self.to_lines())
+
+    def inline_comment(self):
+        """Return the inline comment as '  # text', or '' if none."""
+        for kind, text, ind in self.comments:
+            if kind == 'comment':
+                return '  ' + text
+        return ''
+
+    @classmethod
+    def extract_from(cls, node):
+        """Unwrap a Filter/NL parser node to get the inner RichNL, or return None."""
+        if isinstance(node, cls):
+            return node
+        if hasattr(node, 'nodes') and node.nodes and isinstance(node.nodes[0], cls):
+            return node.nodes[0]
+        return None
+
 import io
 
 
@@ -61,28 +121,71 @@ def tokenize_string(s):
 
 # NOTA: difference between NL and NEWLINE
 # NEWLINE is used at the end of a LOGICAL line ( which may consist of several physical lines)
-# NL is used at the end of a PHYSICAL line, e.g:
+# NL is generated at the end of a PHYSICAL line, e.g:
 #   1.newlines that end lines that are continued after unclosed braces.
 #   2.newlines that end empty lines or lines that only have comments.
 
 
 class Tokenizer:
-    """An enhanced tokenizer"""
+    """An enhanced tokenizer that bundles comments with newline tokens as RichNL objects.
+
+    Handles three cases:
+    1. COMMENT + NL -> RichNL with comments (type=NL)
+    2. COMMENT + NEWLINE -> RichNL with comments (type=NEWLINE) for inline comments
+    3. Plain NL (blank lines) -> RichNL with is_blank=True (type=NL)
+    """
 
     def __init__(self, s):
         self.tokengen = tokenize_string(s)
         self.tokens = []  # a list of 2-tuples (token, list_of_expected_but_failed_tokens)
         self.pos = 0  # points to the next token, pos-1 points to the current token
         self.memos = {}  # per-stream memoization cache
-        self.trivia = {}  # {token_pos: [(kind, text, indent), ...]}
-        self._trivia_buf = []  # buffer for collecting trivia between real tokens
-        self._last_real_line = 0  # line number of last non-trivia token
-        self.get_new_token_original = (
-            self.get_new_token
-        )  # saved for get_new_token_skip_trivia
-        self._last_comment_line = (
-            -1
-        )  # line of last COMMENT token (to skip its trailing NL)
+        self._buffer = []  # Buffer for lookahead
+        self._eager_tokenize()  # pre-load all tokens, strip NLs inside brackets
+
+    def _eager_tokenize(self):
+        """Pre-load all tokens and strip RichNL tokens inside bracket contexts.
+
+        Python emits NL (blank) tokens inside ( [ { for implicit line continuation.
+        These break the parser because it doesn't expect NL inside expressions.
+        We strip them here, once, before parsing begins.
+        """
+        # Read all raw tokens into self.tokens via get_new_token (without this method active)
+        while True:
+            tok = self._get_raw_token()
+            if tok is None:
+                break
+            # Process into RichNL or plain token (same logic as get_new_token)
+            if tok.type == tkn.COMMENT:
+                next_tok = self._peek_raw_token()
+                if next_tok and next_tok.type in (tkn.NL, tkn.NEWLINE):
+                    next_tok = self._get_raw_token()
+                    rich_nl = RichNL(next_tok, [('comment', tok.string, tok.start[1])], is_blank=False)
+                    self.tokens.append((rich_nl, []))
+                else:
+                    self.tokens.append((tok, []))
+            elif tok.type == tkn.NL:
+                self.tokens.append((RichNL(tok, [], is_blank=True), []))
+            elif tok.type == tkn.NEWLINE:
+                self.tokens.append((RichNL(tok, [], is_blank=False), []))
+            else:
+                self.tokens.append((tok, []))
+            if tok.type == 0:  # ENDMARKER
+                break
+
+        # Now strip RichNL tokens inside bracket depth > 0
+        depth = 0
+        filtered = []
+        for tok, meta in self.tokens:
+            if hasattr(tok, 'string'):
+                if tok.string in ('(', '[', '{'):
+                    depth += 1
+                elif tok.string in (')', ']', '}'):
+                    depth = max(0, depth - 1)
+            if depth > 0 and isinstance(tok, RichNL):
+                continue  # skip NLs inside brackets
+            filtered.append((tok, meta))
+        self.tokens = filtered
 
     def mark(self):
         return self.pos  # points to the next token!
@@ -90,48 +193,30 @@ class Tokenizer:
     def reset(self, pos):
         self.pos = pos  # points to the next token!
 
+    def _get_raw_token(self):
+        """Get next raw token from the generator."""
+        if self._buffer:
+            return self._buffer.pop(0)
+        try:
+            return next(self.tokengen)
+        except StopIteration:
+            return None
+
+    def _peek_raw_token(self):
+        """Peek at next raw token without consuming."""
+        tok = self._get_raw_token()
+        if tok is not None:
+            self._buffer.append(tok)
+        return tok
+
     def get_new_token(self):
-        if self.pos == len(self.tokens):
-            self.tokens.append((next(self.tokengen), []))
-        token = self.tokens[self.pos][0]
-        self.pos += 1
-        return token
-
-    def get_new_token_skip_trivia(self):
-        """Like get_new_token but skips COMMENT and NL tokens, buffering them as trivia.
-
-        Trivia (comments and blank lines) is stored in self.trivia keyed by the
-        position of the next real token. This allows trivia to be attached to
-        AST nodes without modifying the parser grammar.
-
-        Each trivia entry is a tuple: (kind, text, indent) where:
-            kind:   'comment' | 'blank' | 'inline'
-            text:   the comment string (e.g. '# foo') or '' for blanks
-            indent: column offset (for preserving indentation)
-        """
-        while True:
-            tok = self.get_new_token_original()
-            if tok.type == tkn.COMMENT:
-                self._last_comment_line = tok.start[0]
-                if tok.start[0] == self._last_real_line and self._last_real_line > 0:
-                    # Inline comment: same line as previous real token
-                    self._trivia_buf.append(("inline", tok.string, tok.start[1]))
-                else:
-                    # Standalone comment
-                    self._trivia_buf.append(("comment", tok.string, tok.start[1]))
-            elif tok.type == tkn.NL:
-                if tok.start[0] == self._last_comment_line:
-                    # NL on same line as comment — skip it (part of the comment line)
-                    pass
-                else:
-                    self._trivia_buf.append(("blank", "", 0))
-            else:
-                # Real token — flush buffered trivia
-                if self._trivia_buf:
-                    self.trivia[self.pos - 1] = self._trivia_buf
-                    self._trivia_buf = []
-                self._last_real_line = tok.start[0]
-                return tok
+        """Return the next token from the pre-loaded token list."""
+        if self.pos < len(self.tokens):
+            token = self.tokens[self.pos][0]
+            if token is not None:
+                self.pos += 1
+                return token
+        return None
 
     def peep_next_token(self):
         tok = self.get_new_token()
@@ -139,6 +224,8 @@ class Tokenizer:
         return tok
 
     def get_current_token(self):
+        if self.pos == 0:
+            return None
         return self.tokens[self.pos - 1][0]
 
     def get_text(self, pos):
@@ -157,8 +244,10 @@ class Tokenizer:
         return self
 
     def __next__(self):
-        return self.get_new_token()
-
+        tok = self.get_new_token()
+        if tok is None:
+            raise StopIteration
+        return tok
 
 ######################### HEK ADDITION ############################
 def test_tokenizer(source):
@@ -166,113 +255,46 @@ def test_tokenizer(source):
     prev_line_number = -1
     while True:
         token = mytokenizer.get_new_token()
+        if token is None:
+            print("{:-^60s}".format(f"OUT"))
+            break
         line_number = token.start[0]
         if line_number > prev_line_number:
-            # print(f"************************** LINE {line_number} *****************************")
             print("{:*^60s}".format(f" LINE {line_number} "))
         print(repr(token))
-        # print ("Current token",mytokenizer.current_token)
-        if token.type == tkn.ENDMARKER:
-            # print("OUT_______")
+        if hasattr(token, 'type') and token.type == tkn.ENDMARKER:
             print("{:-^60s}".format(f"OUT"))
             break
         prev_line_number = line_number
-    # HEK ADDITION ####
-    # print("$"*80)
-    for tok in tokenize_string(source):
-        print(repr(tok))
-
 
 if __name__ == "__main__":
-    pysrc1 = """
-    /* comment 0 */
-    for i in range(5): /* comment1 */
-        print i /* comment2 */
-    /* comment 3
-    comment 4 */
-    print /* comment 5 */
-    /*comment 6 */
-    a= ( 8,
-    7)
-    b=[9,
-    10
-    ]
-    for i in range():
-        for xc in fdf:
-            for fsdf inmfdsd:
+    # Test cases for the three issues
+
+    print("="*60)
+    print("TEST 1: Blank lines between statements")
+    print("="*60)
+    pysrc1 = """x = 1
+
+y = 2
+"""
+    test_tokenizer(pysrc1)
+
+    print("\n" + "="*60)
+    print("TEST 2: Inline comments")
+    print("="*60)
+    pysrc2 = """x = 1  # inline
+y = 2
+"""
+    test_tokenizer(pysrc2)
+
+    print("\n" + "="*60)
+    print("TEST 3: Multiple blank lines")
+    print("="*60)
+    pysrc3 = """# header
+
+import os
+
+def f():
     pass
-    """
-    pysrc2 = """a not in d"""
-    pysrc3 = """a-444.5"""
-    pysrc4 = """mode=0666"""
-    pysrc5 = """ur'dddd'"""
-    pysrc6 = """largest = -1e10"""
-    pysrc7 = """a(...,4, **b)"""
-    pysrc8 = """
-#comment 0
-for i in range(5): # comment1
-    #comment 1.1
-    print "HELLO" # comment2
-#comment 3
-#comment 4
-'''
-multiline1
-multiline2
-'''
-print # comment 5
-#comment 6
-a= ( 8, # comment 7
-# comment 8
-    7)
-continued=head\
-tail
-$b=[999_999,
-    +10e-3]
-b **= -0x44
-if a not in b: f'aaaa' r"bbb" rf"ccc" '''ddd''' r'''eee''' f'''zzz'''
 """
-    pysrc9 = """
-#comment 0
-for i in range(5): # comment1
-    #comment 1.1
-    #comment 1.2
-
-    print "HELLO" # comment2
-#comment 3
-#comment 4
-"""
-
-    pysrc10 = """ # BUG remove last paren and it crashes !!!
-func(args()-> func(args()->int))
-"""
-
-    pysrc11 = "$eee=123.44e8+3j"
-    pysrc12 = "for x in range(5**2):"
-    pysrc13 = """\
-def fullName(): # this is a same-line comment
-# this is a comment at level 0 but it shows at level 1 !!!
-    # this is a comment at level1
-    print ...
-    return self._fullName
-    """
-    pysrc14 = "@static"
-    code = dedent("""
-    for i in 1..5:
-        myvar:MYTYPE
-        total := total | price * quantity;
-        if X:
-            tax := price * 0.05;
-    """)
-
-    # NL is only used after plain-line comments and within brackets spread over more than 1 line
-    # The NEWLINE token indicates the end of a logical line of Python code;
-    # NL tokens are generated when a logical line of code is continued over multiple physical lines.
-    # prev_token = Token(77,0, 0, (0, 0), (0, 0), 0)
-    source = code
-
-    # source="7kg"
-    if 0:
-        print(source)
-        print("-----------------------------------------------------")
-        print("{:-^60s}".format("///"))
-    test_tokenizer(source)
+    test_tokenizer(pysrc3)

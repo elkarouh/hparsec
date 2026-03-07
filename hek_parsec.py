@@ -223,11 +223,12 @@ class Parser(metaclass=ParserMeta):
 
 def forward(parser_name: str) -> type[Parser]:
     """Create a lazy forward reference for recursive grammars."""
+    # Capture the module namespace at definition time, not parse time
+    g = calling_module_namespace()
 
     class Lazy_Parser(Parser):
         @apply_parsing_context
         def parse(cls, token_stream):
-            g = calling_module_namespace()
             parser = g[parser_name]
             return parser.parse(token_stream)
 
@@ -457,6 +458,24 @@ def expect_type(ty):
     return parser
 
 
+def expect_type_node(ty):
+    """Match any token of the given type and return the node itself (not string).
+    
+    Used for RichNL and other enriched token types that carry additional data.
+    """
+    parser = filt(lambda tok: tok.type == ty, shift)
+    return parser
+
+
+def expect_nl_or_richnl():
+    """Match NL token or RichNL object and return it.
+    
+    RichNL.type == tkn.NL, so this matches both.
+    """
+    parser = filt(lambda tok: tok.type == tkn.NL, shift)
+    return parser
+
+
 def literal(mylit: str) -> type[Parser]:
     """Match a NAME token with the exact string value (e.g. a keyword)."""
     parser = fmap(
@@ -616,6 +635,8 @@ __all__ = [
     "Input",
     "expect",
     "expect_type",
+    "expect_type_node",
+    "expect_nl_or_richnl",
     "expect_re",
     "literal",
     # Utilities

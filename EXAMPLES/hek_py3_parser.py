@@ -17,10 +17,12 @@ import sys
 sys.path.insert(0, "..")
 
 import tokenize as tkn
+from hek_tokenize import RichNL
 
 from hek_parsec import (
     COLON,
     COMMA,
+    expect_type_node,
     DOUBLESTAR,
     EQUAL,
     IDENTIFIER,
@@ -51,7 +53,10 @@ from hek_py_declarations import type_annotation
 
 INDENT = expect_type(tkn.INDENT)
 DEDENT = expect_type(tkn.DEDENT)
-NL = ignore(expect_type(tkn.NL))  # blank lines — always ignored
+# NL now returns RichNL objects that carry their comments
+# This allows comments to travel naturally with the parse tree
+# Use expect_type_node which matches both regular NL and RichNL (since RichNL.type == tkn.NL)
+NL = expect_type_node(tkn.NL)
 AT = ignore(expect(tkn.OP, "@"))  # decorator @ — ignored (we keep the expression)
 
 # Visible operators needed for compound statements
@@ -130,7 +135,7 @@ compound_stmt = fw("compound_stmt")
 #   2. Simple suite:   stmt_line (simple stmts on same line with NEWLINE)
 # NL tokens (blank lines) can appear inside blocks and must be skipped.
 
-block = NEWLINE + INDENT + NL[:] + (statement + NL[:])[1:] + DEDENT
+block = NEWLINE + NL[:] + INDENT + NL[:] + (statement + NL[:])[1:] + DEDENT
 
 # statement: compound or simple (stmt_line includes NEWLINE)
 statement = compound_stmt | stmt_line
@@ -188,6 +193,19 @@ try_stmt = try_except | try_finally
 
 # --- with ---
 with_item = expression + (ikw("as") + star_expression)[:]
+# Parenthesised with (Python 3.10+): with (ctx as x, ctx2 as y,): ...
+with_stmt_paren = (
+    ikw("with")
+    + LPAREN
+    + NL[:]
+    + with_item
+    + (COMMA + NL[:] + with_item)[:]
+    + COMMA[:]
+    + NL[:]
+    + RPAREN
+    + COLON
+    + block
+)
 with_stmt = ikw("with") + with_item + (COMMA + with_item)[:] + COLON + block
 
 # --- match / case patterns ---
@@ -207,7 +225,11 @@ pattern_mapping = (
     + COMMA[:]
     + RBRACE
 )
-pattern_class = IDENTIFIER + LPAREN + (pattern + (COMMA + pattern)[:])[:] + RPAREN
+# keyword_pattern: NAME '=' pattern  (e.g. Point(x=a, y=b))
+keyword_pattern = IDENTIFIER + iop("=") + pattern
+# pattern_class_arg: keyword_pattern before positional pattern (both start with IDENTIFIER)
+pattern_class_arg = keyword_pattern | pattern
+pattern_class = IDENTIFIER + LPAREN + (pattern_class_arg + (COMMA + pattern_class_arg)[:])[:] + RPAREN
 
 # Order: value before capture (value has dots), class before capture (has parens)
 # wildcard before capture (both are IDENTIFIER, but _ is special)
@@ -250,9 +272,9 @@ match_stmt = (
 # param_plain: name [':' annotation] ['=' default]
 param_plain = IDENTIFIER + (V_COLON + type_annotation)[:] + (V_EQUAL + expression)[:]
 # param_star: '*' [name [':' annotation]]  — bare * or *args
-param_star = SSTAR + (IDENTIFIER + (V_COLON + type_annotation)[:])[:]
+param_star = SSTAR + (IDENTIFIER + (V_COLON + expression)[:])[:]
 # param_dstar: '**' name [':' annotation]
-param_dstar = iop("**") + IDENTIFIER + (V_COLON + type_annotation)[:]
+param_dstar = iop("**") + IDENTIFIER + (V_COLON + expression)[:]
 # param_slash: '/'  — positional-only separator
 param_slash = V_SLASH
 
@@ -290,7 +312,9 @@ async_func_def = (
 )
 
 # --- Class definition ---
-class_args = LPAREN + (expression + (COMMA + expression)[:] + COMMA[:])[:] + RPAREN
+# class_args uses the same argument grammar as call_trailer so that
+# keyword arguments like metaclass=Meta are correctly parsed.
+class_args = LPAREN + arguments[:] + RPAREN
 class_def = decorators[:] + ikw("class") + IDENTIFIER + class_args[:] + COLON + block
 
 # --- Async variants ---
@@ -313,6 +337,7 @@ compound_stmt = (
     | while_stmt
     | for_stmt
     | try_stmt
+    | with_stmt_paren
     | with_stmt
     | match_stmt
     | async_func_def
@@ -327,42 +352,82 @@ compound_stmt = (
 ###############################################################################
 
 
+# NL parser node wraps a RichNL; delegate rendering to RichNL.to_py()
+@method(NL)
+def to_py(self, indent=0):
+    """NL: delegate to the wrapped RichNL's rendering."""
+    rn = RichNL.extract_from(self)
+    return rn.to_py() if rn is not None else ''
+
 # --- block ---
+def _richnl_lines(richnl_node):
+    """Extract trivia lines from a RichNL or NL wrapper node.
+
+    Returns a list of strings, or None if the node is not a RichNL.
+    """
+    rn = RichNL.extract_from(richnl_node)
+    return rn.to_lines() if rn is not None else None
+
+
+def _block_inline_header_comment(block_node):
+    """Return the inline comment string on the compound header, or ''."""
+    if not block_node or not block_node.nodes:
+        return ''
+    rn = RichNL.extract_from(block_node.nodes[0])
+    return rn.inline_comment() if rn is not None else ''
+
+
 @method(block)
 def to_py(self, indent=0):
-    """block: NEWLINE INDENT NL* (statement NL*)+ DEDENT"""
+    """block: NEWLINE INDENT NL* (statement NL*)+ DEDENT
+
+    Emits body lines joined by newlines. Blank lines and comments between
+    statements (stored as RichNL in the NL[:] Several_Times after each
+    statement) are preserved with correct indentation.
+    """
     lines = []
     for node in self.nodes:
         tname = type(node).__name__
-        # Skip NEWLINE/INDENT/DEDENT Fmap nodes (string values like '\n', '    ', '')
         if tname == "Fmap":
             continue
         if tname == "Several_Times":
             for seq in node.nodes:
-                # Each seq is either:
-                #   - a statement node directly (when NL[:] matched 0 times)
-                #   - a Sequence_Parser [statement, Several_Times([None])]
-                #     (when NL[:] matched, producing NL ignored nodes)
-                inner = seq
                 if type(seq).__name__ == "Sequence_Parser" and hasattr(seq, "nodes"):
-                    # Extract the statement (first non-None, non-Several_Times child)
+                    stmt_node = None
+                    nl_several = None
                     for child in seq.nodes:
-                        if (
-                            child is not None
-                            and type(child).__name__ != "Several_Times"
-                        ):
-                            inner = child
-                            break
-                if inner is not None and hasattr(inner, "to_py"):
-                    try:
-                        lines.append(inner.to_py(indent))
-                    except TypeError:
-                        lines.append(_ind(indent) + inner.to_py())
+                        if child is None:
+                            continue
+                        if type(child).__name__ == "Several_Times":
+                            nl_several = child
+                        elif stmt_node is None:
+                            stmt_node = child
+                    # Emit the statement
+                    if stmt_node is not None and hasattr(stmt_node, "to_py"):
+                        try:
+                            lines.append(stmt_node.to_py(indent))
+                        except TypeError:
+                            lines.append(_ind(indent) + stmt_node.to_py())
+                    # Emit trailing NLs (blank lines / comments) after the statement
+                    if nl_several is not None:
+                        for nl_node in nl_several.nodes:
+                            trivia = _richnl_lines(nl_node)
+                            if trivia is not None:
+                                lines.extend(trivia)
+                else:
+                    inner = seq
+                    if inner is not None and hasattr(inner, "to_py"):
+                        try:
+                            lines.append(inner.to_py(indent))
+                        except TypeError:
+                            lines.append(_ind(indent) + inner.to_py())
         elif hasattr(node, "to_py"):
             try:
                 lines.append(node.to_py(indent))
             except TypeError:
                 lines.append(_ind(indent) + node.to_py())
+    # Trailing blank lines in a block belong to the inter-statement spacing
+    # of the outer scope. We emit them here so callers can decide what to do.
     return "\n".join(lines)
 
 
@@ -381,23 +446,26 @@ def to_py(self, indent=0):
 def to_py(self, indent=0):
     """elif_clause: 'elif' named_expression ':' block"""
     cond = self.nodes[0].to_py()
+    hc = _block_inline_header_comment(self.nodes[1])
     body = self.nodes[1].to_py(indent + 1)
-    return f"{_ind(indent)}elif {cond}:\n{body}"
+    return f"{_ind(indent)}elif {cond}:{hc}\n{body}"
 
 
 @method(else_clause)
 def to_py(self, indent=0):
     """else_clause: 'else' ':' block"""
+    hc = _block_inline_header_comment(self.nodes[0])
     body = self.nodes[0].to_py(indent + 1)
-    return f"{_ind(indent)}else:\n{body}"
+    return f"{_ind(indent)}else:{hc}\n{body}"
 
 
 @method(if_stmt)
 def to_py(self, indent=0):
     """if_stmt: 'if' named_expression ':' block ('elif' ...)* ('else' ...)?"""
     cond = self.nodes[0].to_py()
+    hc = _block_inline_header_comment(self.nodes[1])
     body = self.nodes[1].to_py(indent + 1)
-    result = f"{_ind(indent)}if {cond}:\n{body}"
+    result = f"{_ind(indent)}if {cond}:{hc}\n{body}"
     # Process remaining nodes (elif/else clauses from Several_Times)
     for node in self.nodes[2:]:
         if not hasattr(node, "nodes") or not node.nodes:
@@ -420,8 +488,9 @@ def to_py(self, indent=0):
 def to_py(self, indent=0):
     """while_stmt: 'while' named_expression ':' block ('else' ':' block)?"""
     cond = self.nodes[0].to_py()
+    hc = _block_inline_header_comment(self.nodes[1])
     body = self.nodes[1].to_py(indent + 1)
-    result = f"{_ind(indent)}while {cond}:\n{body}"
+    result = f"{_ind(indent)}while {cond}:{hc}\n{body}"
     for node in self.nodes[2:]:
         if not hasattr(node, "nodes") or not node.nodes:
             continue
@@ -459,8 +528,9 @@ def to_py(self, indent=0):
     """for_stmt: 'for' for_target 'in' star_expressions ':' block ('else' ...)?"""
     target = self.nodes[0].to_py()
     iterable = self.nodes[1].to_py()
+    hc = _block_inline_header_comment(self.nodes[2])
     body = self.nodes[2].to_py(indent + 1)
-    result = f"{_ind(indent)}for {target} in {iterable}:\n{body}"
+    result = f"{_ind(indent)}for {target} in {iterable}:{hc}\n{body}"
     for node in self.nodes[3:]:
         if not hasattr(node, "nodes") or not node.nodes:
             continue
@@ -486,27 +556,25 @@ def to_py(self, indent=0):
     """except_clause: 'except' expression ('as' IDENTIFIER)? ':' block"""
     exc = self.nodes[0].to_py()
     result = f"except {exc}"
-    # Check for 'as' alias
     for node in self.nodes[1:]:
         if type(node).__name__ == "Several_Times" and node.nodes:
             for seq in node.nodes:
                 if hasattr(seq, "nodes") and seq.nodes:
                     result += f" as {seq.nodes[0].to_py()}"
             continue
-        if hasattr(node, "to_py"):
-            # This is the block
+        if hasattr(node, "to_py") and type(node).__name__ == "block":
+            hc = _block_inline_header_comment(node)
             try:
                 body = node.to_py(indent + 1)
             except TypeError:
                 body = _ind(indent + 1) + node.to_py()
-            return f"{_ind(indent)}{result}:\n{body}"
+            return f"{_ind(indent)}{result}:{hc}\n{body}"
     return f"{_ind(indent)}{result}:"
 
 
 @method(except_star_clause)
 def to_py(self, indent=0):
     """except_star_clause: 'except' '*' expression ('as' IDENTIFIER)? ':' block"""
-    # SSTAR is visible, so nodes[0] is '*', nodes[1] is expression
     exc = self.nodes[1].to_py()
     result = f"except* {exc}"
     for node in self.nodes[2:]:
@@ -515,27 +583,30 @@ def to_py(self, indent=0):
                 if hasattr(seq, "nodes") and seq.nodes:
                     result += f" as {seq.nodes[0].to_py()}"
             continue
-        if hasattr(node, "to_py"):
+        if hasattr(node, "to_py") and type(node).__name__ == "block":
+            hc = _block_inline_header_comment(node)
             try:
                 body = node.to_py(indent + 1)
             except TypeError:
                 body = _ind(indent + 1) + node.to_py()
-            return f"{_ind(indent)}{result}:\n{body}"
+            return f"{_ind(indent)}{result}:{hc}\n{body}"
     return f"{_ind(indent)}{result}:"
 
 
 @method(except_bare)
 def to_py(self, indent=0):
     """except_bare: 'except' ':' block"""
+    hc = _block_inline_header_comment(self.nodes[0])
     body = self.nodes[0].to_py(indent + 1)
-    return f"{_ind(indent)}except:\n{body}"
+    return f"{_ind(indent)}except:{hc}\n{body}"
 
 
 @method(finally_clause)
 def to_py(self, indent=0):
     """finally_clause: 'finally' ':' block"""
+    hc = _block_inline_header_comment(self.nodes[0])
     body = self.nodes[0].to_py(indent + 1)
-    return f"{_ind(indent)}finally:\n{body}"
+    return f"{_ind(indent)}finally:{hc}\n{body}"
 
 
 def _extract_clauses(nodes, indent):
@@ -575,14 +646,13 @@ def _extract_clauses(nodes, indent):
 def to_py(self, indent=0):
     """try_except: 'try' ':' block (except_clause | except_star | except_bare)+
     ('else' ':' block)? ('finally' ':' block)?"""
+    hc = _block_inline_header_comment(self.nodes[0])
     body = self.nodes[0].to_py(indent + 1)
-    result = f"{_ind(indent)}try:\n{body}"
-    # First except clause is nodes[1]
+    result = f"{_ind(indent)}try:{hc}\n{body}"
     try:
         result += "\n" + self.nodes[1].to_py(indent)
     except TypeError:
         result += "\n" + _ind(indent) + self.nodes[1].to_py()
-    # Remaining clauses
     clauses = _extract_clauses(self.nodes[2:], indent)
     for c in clauses:
         result += "\n" + c
@@ -592,9 +662,10 @@ def to_py(self, indent=0):
 @method(try_finally)
 def to_py(self, indent=0):
     """try_finally: 'try' ':' block 'finally' ':' block"""
+    hc = _block_inline_header_comment(self.nodes[0])
     body = self.nodes[0].to_py(indent + 1)
     fin = self.nodes[1].to_py(indent)
-    return f"{_ind(indent)}try:\n{body}\n{fin}"
+    return f"{_ind(indent)}try:{hc}\n{body}\n{fin}"
 
 
 @method(try_stmt)
@@ -620,7 +691,6 @@ def to_py(self):
 def to_py(self, indent=0):
     """with_stmt: 'with' with_item (',' with_item)* ':' block"""
     items = [self.nodes[0].to_py()]
-    # Find block (last node with to_py that takes indent)
     block_node = None
     for node in self.nodes[1:]:
         if type(node).__name__ == "Several_Times":
@@ -632,12 +702,48 @@ def to_py(self, indent=0):
         elif hasattr(node, "to_py"):
             block_node = node
     body = ""
+    hc = ""
     if block_node:
+        hc = _block_inline_header_comment(block_node)
         try:
             body = block_node.to_py(indent + 1)
         except TypeError:
             body = _ind(indent + 1) + block_node.to_py()
-    return f"{_ind(indent)}with {', '.join(items)}:\n{body}"
+    return f"{_ind(indent)}with {', '.join(items)}:{hc}\n{body}"
+
+
+@method(with_stmt_paren)
+def to_py(self, indent=0):
+    """with_stmt_paren: 'with' '(' NL* with_item (',' NL* with_item)* ','? NL* ')' ':' block"""
+    items = []
+    block_node = None
+    for node in self.nodes:
+        tname = type(node).__name__
+        if tname == "with_item":
+            items.append(node.to_py())
+        elif tname == "Several_Times":
+            for seq in node.nodes:
+                sname = type(seq).__name__
+                if sname == "Sequence_Parser":
+                    # (COMMA + NL[:] + with_item) sequence
+                    for child in seq.nodes:
+                        if type(child).__name__ == "with_item":
+                            items.append(child.to_py())
+                elif sname == "with_item":
+                    items.append(seq.to_py())
+        elif tname == "block":
+            block_node = node
+    body = ""
+    hc = ""
+    if block_node:
+        hc = _block_inline_header_comment(block_node)
+        try:
+            body = block_node.to_py(indent + 1)
+        except TypeError:
+            body = _ind(indent + 1) + block_node.to_py()
+    ind1 = _ind(indent + 1)
+    items_str = (",\n" + ind1).join(items)
+    return f"{_ind(indent)}with (\n{ind1}{items_str},\n{_ind(indent)}):{hc}\n{body}"
 
 
 # --- match / case ---
@@ -706,17 +812,28 @@ def to_py(self):
     return ".".join(parts)
 
 
+@method(keyword_pattern)
+def to_py(self):
+    """keyword_pattern: IDENTIFIER '=' pattern"""
+    return f"{self.nodes[0].to_py()}={self.nodes[1].to_py()}"
+
+
+@method(pattern_class_arg)
+def to_py(self):
+    """pattern_class_arg: keyword_pattern | pattern"""
+    return self.nodes[0].to_py()
+
+
 @method(pattern_class)
 def to_py(self):
-    """pattern_class: IDENTIFIER '(' (pattern (',' pattern)*)? ')'"""
+    """pattern_class: IDENTIFIER '(' (pattern_class_arg (',' pattern_class_arg)*)? ')'"""
     name = self.nodes[0].to_py()
-    # Patterns inside parens
     patterns = []
     for node in self.nodes[1:]:
         if type(node).__name__ == "Several_Times" and node.nodes:
             for seq in node.nodes:
                 if hasattr(seq, "nodes"):
-                    # Inner structure: [pattern, Several_Times[(pattern)...]]
+                    # seq is Sequence_Parser: [pattern_class_arg, Several_Times[(,pattern_class_arg)...]]
                     patterns.append(seq.nodes[0].to_py())
                     for inner in seq.nodes[1:]:
                         if type(inner).__name__ == "Several_Times" and inner.nodes:
@@ -802,13 +919,14 @@ def to_py(self, indent=0):
                     guard = seq.to_py()
         elif hasattr(node, "to_py"):
             block_node = node
+    hc = _block_inline_header_comment(block_node) if block_node else ""
     body = ""
     if block_node:
         try:
             body = block_node.to_py(indent + 1)
         except TypeError:
             body = _ind(indent + 1) + block_node.to_py()
-    return f"{_ind(indent)}case {pat}{guard}:\n{body}"
+    return f"{_ind(indent)}case {pat}{guard}:{hc}\n{body}"
 
 
 @method(match_stmt)
@@ -837,22 +955,22 @@ def _case_from_seq(seq, indent):
     """Reconstruct a case clause from a flattened Sequence_Parser [pattern, guard?, block]."""
     pat = ""
     guard = ""
-    body = ""
+    block_node = None
     for child in seq.nodes:
         tname = type(child).__name__
         if tname == "block":
-            body = child.to_py(indent + 1)
+            block_node = child
         elif tname == "Several_Times":
-            # case_guard[:] contents
             for inner in child.nodes:
                 if hasattr(inner, "to_py"):
                     guard = inner.to_py()
         elif tname == "case_guard":
             guard = child.to_py()
         else:
-            # pattern node
             pat = child.to_py()
-    return f"{_ind(indent)}case {pat}{guard}:\n{body}"
+    hc = _block_inline_header_comment(block_node) if block_node else ""
+    body = block_node.to_py(indent + 1) if block_node else ""
+    return f"{_ind(indent)}case {pat}{guard}:{hc}\n{body}"
 
 
 # --- Function parameters ---
@@ -865,14 +983,24 @@ def to_py(self):
     for node in self.nodes[1:]:
         if type(node).__name__ == "Several_Times" and node.nodes:
             for seq in node.nodes:
-                if hasattr(seq, "nodes") and len(seq.nodes) >= 2:
-                    op = seq.nodes[0]
-                    val = seq.nodes[1].to_py()
-                    if hasattr(op, "nodes") and op.nodes:
-                        if op.nodes[0] == ":":
-                            annotation = f": {val}"
-                        elif op.nodes[0] == "=":
-                            default = f"={val}"
+                if not hasattr(seq, "nodes") or len(seq.nodes) < 2:
+                    continue
+                # seq.nodes[0] is the visible op (V_COLON or V_EQUAL), nodes[1] is the value
+                op_node = seq.nodes[0]
+                val_node = seq.nodes[1]
+                # Get the operator string
+                op_str = ""
+                if hasattr(op_node, "node"):
+                    op_str = op_node.node
+                elif hasattr(op_node, "nodes") and op_node.nodes:
+                    op_str = op_node.nodes[0] if isinstance(op_node.nodes[0], str) else ""
+                if op_str == ":":
+                    annotation = f": {val_node.to_py()}"
+                elif op_str == "=":
+                    default = f"={val_node.to_py()}"
+    # PEP 8: spaces around = when annotation present
+    if annotation and default:
+        default = " " + default[0] + " " + default[1:]  # "=val" -> "= val"
     return f"{name}{annotation}{default}"
 
 
@@ -969,12 +1097,12 @@ def to_py(self):
 @method(func_def)
 def to_py(self, indent=0):
     """func_def: decorators? 'def' IDENTIFIER '(' param_list? ')' ('->' expr)? ':' block"""
-    # Walk through nodes: decorators(optional), name, params(optional), annotation(optional), block
     decos = ""
     name = ""
     params = ""
     ret_ann = ""
     body = ""
+    block_node = None
 
     for node in self.nodes:
         tname = type(node).__name__
@@ -1001,13 +1129,15 @@ def to_py(self, indent=0):
         elif tname == "IDENTIFIER":
             name = node.to_py()
         elif tname == "block":
-            body = node.to_py(indent + 1)
+            block_node = node
         elif tname == "param_list":
             params = node.to_py()
         elif tname == "return_annotation":
             ret_ann = node.to_py()
 
-    return f"{decos}{_ind(indent)}def {name}({params}){ret_ann}:\n{body}"
+    hc = _block_inline_header_comment(block_node) if block_node else ""
+    body = block_node.to_py(indent + 1) if block_node else ""
+    return f"{decos}{_ind(indent)}def {name}({params}){ret_ann}:{hc}\n{body}"
 
 
 @method(async_func_def)
@@ -1017,7 +1147,7 @@ def to_py(self, indent=0):
     name = ""
     params = ""
     ret_ann = ""
-    body = ""
+    block_node = None
 
     for node in self.nodes:
         tname = type(node).__name__
@@ -1044,43 +1174,25 @@ def to_py(self, indent=0):
         elif tname == "IDENTIFIER":
             name = node.to_py()
         elif tname == "block":
-            body = node.to_py(indent + 1)
+            block_node = node
         elif tname == "param_list":
             params = node.to_py()
         elif tname == "return_annotation":
             ret_ann = node.to_py()
 
-    return f"{decos}{_ind(indent)}async def {name}({params}){ret_ann}:\n{body}"
+    hc = _block_inline_header_comment(block_node) if block_node else ""
+    body = block_node.to_py(indent + 1) if block_node else ""
+    return f"{decos}{_ind(indent)}async def {name}({params}){ret_ann}:{hc}\n{body}"
 
 
 # --- Class definition ---
-def _collect_bases(node):
-    """Recursively collect base class expressions from flattened class_args nodes."""
-    parts = []
-    if not hasattr(node, "nodes"):
-        return parts
-    for child in node.nodes:
-        tname = type(child).__name__
-        if tname == "Several_Times":
-            for inner in child.nodes:
-                parts.extend(_collect_bases(inner))
-        elif tname == "Sequence_Parser":
-            # A sequence may contain expression + Several_Times of more expressions
-            for inner in node.nodes:
-                parts.extend(_collect_bases(inner))
-            break  # Already processed all children of this node
-        elif hasattr(child, "to_py"):
-            parts.append(child.to_py())
-    return parts
-
-
 @method(class_def)
 def to_py(self, indent=0):
-    """class_def: decorators? 'class' IDENTIFIER ('(' args ')')? ':' block"""
+    """class_def: decorators? 'class' IDENTIFIER ('(' arguments? ')')? ':' block"""
     decos = ""
     name = ""
     bases = ""
-    body = ""
+    block_node = None
 
     for node in self.nodes:
         tname = type(node).__name__
@@ -1093,17 +1205,30 @@ def to_py(self, indent=0):
                     decos += seq.to_py(indent) + "\n"
                 elif stname == "decorators":
                     decos = seq.to_py(indent) + "\n"
-                else:
-                    # class_args content
-                    base_parts = _collect_bases(seq)
-                    if base_parts:
-                        bases = f"({', '.join(base_parts)})"
+                elif stname == "class_args":
+                    bases = seq.to_py()
+        elif tname == "class_args":
+            bases = node.to_py()
         elif tname == "IDENTIFIER":
             name = node.to_py()
         elif tname == "block":
-            body = node.to_py(indent + 1)
+            block_node = node
 
-    return f"{decos}{_ind(indent)}class {name}{bases}:\n{body}"
+    hc = _block_inline_header_comment(block_node) if block_node else ""
+    body = block_node.to_py(indent + 1) if block_node else ""
+    return f"{decos}{_ind(indent)}class {name}{bases}:{hc}\n{body}"
+
+
+@method(class_args)
+def to_py(self):
+    """class_args: '(' arguments? ')'"""
+    # nodes[0] is the Several_Times from arguments[:]
+    st = self.nodes[0]
+    if hasattr(st, "nodes") and st.nodes:
+        # The inner match: st.nodes[0] is the arguments node
+        args_node = st.nodes[0]
+        return f"({args_node.to_py()})"
+    return "()"
 
 
 # --- Async for / with ---
@@ -1112,8 +1237,9 @@ def to_py(self, indent=0):
     """async_for_stmt: 'async' 'for' targets 'in' exprs ':' block"""
     target = self.nodes[0].to_py()
     iterable = self.nodes[1].to_py()
+    hc = _block_inline_header_comment(self.nodes[2])
     body = self.nodes[2].to_py(indent + 1)
-    return f"{_ind(indent)}async for {target} in {iterable}:\n{body}"
+    return f"{_ind(indent)}async for {target} in {iterable}:{hc}\n{body}"
 
 
 @method(async_with_stmt)
@@ -1131,12 +1257,14 @@ def to_py(self, indent=0):
         elif hasattr(node, "to_py"):
             block_node = node
     body = ""
+    hc = ""
     if block_node:
+        hc = _block_inline_header_comment(block_node)
         try:
             body = block_node.to_py(indent + 1)
         except TypeError:
             body = _ind(indent + 1) + block_node.to_py()
-    return f"{_ind(indent)}async with {', '.join(items)}:\n{body}"
+    return f"{_ind(indent)}async with {', '.join(items)}:{hc}\n{body}"
 
 
 # --- compound_stmt ---
