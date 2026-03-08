@@ -221,6 +221,8 @@ class Parser(metaclass=ParserMeta):
 
     def to_nim(self, prec=None):
         """Default to_nim() fallback: delegates to to_py() for expression nodes."""
+        if not hasattr(self, 'to_py'):
+            return ''
         return self.to_py(prec)
 
 
