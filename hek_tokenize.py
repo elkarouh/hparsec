@@ -137,10 +137,12 @@ class Tokenizer:
 
     def __init__(self, s):
         self.tokengen = tokenize_string(s)
+        self.source_lines = s.splitlines(True)  # keep line endings for span extraction
         self.tokens = []  # a list of 2-tuples (token, list_of_expected_but_failed_tokens)
         self.pos = 0  # points to the next token, pos-1 points to the current token
         self.memos = {}  # per-stream memoization cache
         self._buffer = []  # Buffer for lookahead
+        self.multiline_brackets = {}  # (line,col) -> original source for multi-line bracket groups
         self._eager_tokenize()  # pre-load all tokens, strip NLs inside brackets
 
     def _eager_tokenize(self):
@@ -174,18 +176,39 @@ class Tokenizer:
                 break
 
         # Now strip RichNL tokens inside bracket depth > 0
+        # and capture original source text for multi-line bracket groups
+        bracket_stack = []  # stack of (open_tok, had_nl)
         depth = 0
         filtered = []
         for tok, meta in self.tokens:
             if hasattr(tok, 'string'):
                 if tok.string in ('(', '[', '{'):
                     depth += 1
+                    bracket_stack.append((tok, False))
                 elif tok.string in (')', ']', '}'):
                     depth = max(0, depth - 1)
+                    if bracket_stack:
+                        open_tok, had_nl = bracket_stack.pop()
+                        if had_nl:
+                            self.multiline_brackets[open_tok.start] =                                 self._extract_source_span(open_tok, tok)
             if depth > 0 and isinstance(tok, RichNL):
+                if bracket_stack:
+                    bracket_stack[-1] = (bracket_stack[-1][0], True)
                 continue  # skip NLs inside brackets
             filtered.append((tok, meta))
         self.tokens = filtered
+
+    def _extract_source_span(self, open_tok, close_tok):
+        """Extract original source text from opening to closing bracket (inclusive)."""
+        start_line, start_col = open_tok.start  # 1-based line
+        end_line, end_col = close_tok.end        # 1-based line, end col is exclusive
+        if start_line == end_line:
+            return self.source_lines[start_line - 1][start_col:end_col]
+        parts = [self.source_lines[start_line - 1][start_col:]]
+        for i in range(start_line, end_line - 1):
+            parts.append(self.source_lines[i])
+        parts.append(self.source_lines[end_line - 1][:end_col])
+        return ''.join(parts)
 
     def mark(self):
         return self.pos  # points to the next token!
@@ -248,6 +271,18 @@ class Tokenizer:
         if tok is None:
             raise StopIteration
         return tok
+
+# --- Module-level context for current tokenizer ---
+_current_tokenizer = None
+
+def set_current_tokenizer(t):
+    global _current_tokenizer
+    _current_tokenizer = t
+
+def get_multiline_brackets():
+    if _current_tokenizer is not None:
+        return getattr(_current_tokenizer, 'multiline_brackets', {})
+    return {}
 
 ######################### HEK ADDITION ############################
 def test_tokenizer(source):

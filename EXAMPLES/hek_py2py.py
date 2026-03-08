@@ -100,7 +100,7 @@ import sys
 import token as token_mod
 
 from hek_py3_parser import *  # fw() resolves names in calling module's globals
-from hek_tokenize import Tokenizer, RichNL
+from hek_tokenize import Tokenizer, RichNL, set_current_tokenizer
 
 
 def Input(code):
@@ -111,6 +111,7 @@ def Input(code):
     eliminating the need for position-based reconstruction.
     """
     gen = Tokenizer(code)
+    set_current_tokenizer(gen)
     gen.get_new_token()  # skip ENCODING token
     return gen
 
@@ -123,17 +124,17 @@ def parse_module(code):
     stmts = []
     leading = []
     import token as token_mod
-    
+
     # Peek at first token
     first_token = None
     try:
         first_token = stream.get_new_token()
     except StopIteration:
         pass
-    
+
     if first_token is None or first_token.type == token_mod.ENDMARKER:
         return stmts, leading, []
-    
+
     # Collect leading RichNL comments
     if isinstance(first_token, RichNL):
         leading.append(first_token)
@@ -148,11 +149,11 @@ def parse_module(code):
                 break
     else:
         stream.reset(stream.mark() - 1)
-    
+
     # Parse statements with inter-statement comments
     while True:
         inter_comments = []
-        
+
         # Collect RichNL comments before this statement
         while True:
             pos = stream.mark()
@@ -167,7 +168,7 @@ def parse_module(code):
                 continue
             stream.reset(pos)
             break
-        
+
         # Check for end of input
         try:
             tok = stream.get_new_token()
@@ -176,7 +177,7 @@ def parse_module(code):
         if not tok or tok.type == token_mod.ENDMARKER:
             break
         stream.reset(pos)
-        
+
         result = statement.parse(stream)
         if not result:
             break

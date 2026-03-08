@@ -467,6 +467,11 @@ def expect_type_node(ty):
     return parser
 
 
+def expect_node(ty, val):
+    """Match token by type and value, preserving the full TokenInfo as node."""
+    return filt(lambda tok: tok.type == ty and tok.string == val, shift)
+
+
 def expect_nl_or_richnl():
     """Match NL token or RichNL object and return it.
     

@@ -59,6 +59,7 @@ from hek_parsec import (
     shift,
 )
 from hek_py3_expr import *  # noqa: F403 — need all fw() names in namespace
+from hek_py3_expr import _get_bracket_start
 from hek_py_declarations import type_annotation
 
 ###############################################################################
@@ -183,7 +184,7 @@ import_stmt = ikw("import") + import_as + (COMMA + import_as)[:]
 import_name = IDENTIFIER + (ikw("as") + IDENTIFIER)[:]
 import_star = SSTAR
 # Parenthesized imports: (name, name) for multi-line imports
-import_names_paren = LPAREN + NL[:] + import_name + (NL[:] + COMMA + NL[:] + import_name)[:] + COMMA[:] + NL[:] + RPAREN
+import_names_paren = LPAREN_NODE + NL[:] + import_name + (NL[:] + COMMA + NL[:] + import_name)[:] + COMMA[:] + NL[:] + RPAREN
 import_names = import_names_paren | import_name + (COMMA + import_name)[:] | import_star
 
 # from_stmt variants (explicit to avoid dotted_name greedily consuming 'import'):
@@ -512,6 +513,12 @@ def to_py(self):
 @method(import_names_paren)
 def to_py(self):
     """import_names_paren with NL support."""
+    from hek_tokenize import get_multiline_brackets
+    pos = _get_bracket_start(self.nodes[0])
+    ml = get_multiline_brackets()
+    if pos and pos in ml:
+        return ml[pos]
+
     def _find_import_names(node):
         names = []
         if node is None:
@@ -522,9 +529,9 @@ def to_py(self):
             for child in node.nodes:
                 names.extend(_find_import_names(child))
         return names
-    
+
     parts = _find_import_names(self)
-    return ', '.join(parts)
+    return '(' + ', '.join(parts) + ')'
 
 @method(import_names)
 def to_py(self):
@@ -604,19 +611,22 @@ def _import_names_to_py(node):
     parts = []
     for nd in node.nodes[1:]:
         if type(nd).__name__ == "Several_Times" and nd.nodes:
-            seq = nd.nodes[0]
-            if hasattr(seq, "nodes") and seq.nodes:
-                child = seq.nodes[0]
-                if type(child).__name__ == "import_name":
-                    # Comma-separated: finish the first name, add this one
-                    if not parts:
-                        parts.append(_import_name_to_py(first_name_nodes))
-                    parts.append(child.to_py())
-                elif type(child).__name__ == "IDENTIFIER":
-                    # 'as' alias for the current first name
-                    first_name_nodes.append(nd)
-                else:
-                    first_name_nodes.append(nd)
+            # Several_Times may contain multiple comma-separated items
+            for seq in nd.nodes:
+                if hasattr(seq, "nodes") and seq.nodes:
+                    child = seq.nodes[0]
+                    if type(child).__name__ == "import_name":
+                        # Comma-separated: finish the first name, add this one
+                        if not parts:
+                            parts.append(_import_name_to_py(first_name_nodes))
+                        parts.append(child.to_py())
+                    elif type(child).__name__ == "IDENTIFIER":
+                        # 'as' alias for the current first name
+                        first_name_nodes.append(nd)
+                        break  # only one alias per Several_Times
+                    else:
+                        first_name_nodes.append(nd)
+                        break
         else:
             first_name_nodes.append(nd)
 

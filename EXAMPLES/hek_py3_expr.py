@@ -54,6 +54,7 @@ from hek_parsec import (
     ParserState,
     expect,
     expect_type,
+    expect_node,
     filt,
     fmap,
     fw,
@@ -82,6 +83,24 @@ def iop(symbol):
 def ikw(word):
     """Ignored keyword: matches but filtered from AST nodes."""
     return ignore(literal(word))
+
+
+# --- Node-preserving brackets for multi-line source preservation ---
+import token as tkn_mod
+LPAREN_NODE = expect_node(tkn_mod.OP, "(")
+LBRACKET_NODE = expect_node(tkn_mod.OP, "[")
+LBRACE_NODE = expect_node(tkn_mod.OP, "{")
+
+
+def _get_bracket_start(node):
+    """Extract the (line, col) start position from a bracket node."""
+    if hasattr(node, 'nodes') and node.nodes:
+        tok = node.nodes[0]
+        if hasattr(tok, 'start'):
+            return tok.start
+    if hasattr(node, 'start'):
+        return node.start
+    return None
 
 
 ###############################################################################
@@ -295,12 +314,12 @@ fstring = _FSTRING_START + _FSTRING_MIDDLE[:] + _fstring_chunk[:] + _FSTRING_END
 
 # --- atom ---
 ellipsis_lit = V_ELLIPSIS
-paren_group = LPAREN + (yield_expr | walrus | expressions) + RPAREN
+paren_group = LPAREN_NODE + (yield_expr | walrus | expressions) + RPAREN
 empty_paren = LPAREN + RPAREN
-list_display = LBRACKET + (listcomp | star_expressions) + RBRACKET
+list_display = LBRACKET_NODE + (listcomp | star_expressions) + RBRACKET
 empty_list = LBRACKET + RBRACKET
-dict_display = LBRACE + (dictcomp | dictmaker) + RBRACE
-set_display = LBRACE + (setcomp | setmaker) + RBRACE
+dict_display = LBRACE_NODE + (dictcomp | dictmaker) + RBRACE
+set_display = LBRACE_NODE + (setcomp | setmaker) + RBRACE
 empty_dict = LBRACE + RBRACE
 str_concat = STRING + STRING[1:]
 
@@ -324,7 +343,7 @@ atom = (
 )
 
 # --- trailer ---
-call_trailer = LPAREN + arguments[:] + RPAREN
+call_trailer = LPAREN_NODE + arguments[:] + RPAREN
 slice_trailer = LBRACKET + slices + RBRACKET
 attr_trailer = DOT + IDENTIFIER
 
@@ -590,7 +609,12 @@ def to_py(self, prec=None):
 def to_py(self, prec=None):
     """paren_group: '(' (yield_expr | walrus | expressions) ')'
     Explicit parens from source — always preserved."""
-    return f"({self.nodes[0].to_py()})"
+    from hek_tokenize import get_multiline_brackets
+    pos = _get_bracket_start(self.nodes[0])
+    ml = get_multiline_brackets()
+    if pos and pos in ml:
+        return ml[pos]
+    return f"({self.nodes[1].to_py()})"
 
 
 @method(empty_list)
@@ -602,7 +626,12 @@ def to_py(self, prec=None):
 @method(list_display)
 def to_py(self, prec=None):
     """list_display: '[' (listcomp | star_expressions) ']'"""
-    return f"[{self.nodes[0].to_py()}]"
+    from hek_tokenize import get_multiline_brackets
+    pos = _get_bracket_start(self.nodes[0])
+    ml = get_multiline_brackets()
+    if pos and pos in ml:
+        return ml[pos]
+    return f"[{self.nodes[1].to_py()}]"
 
 
 @method(empty_dict)
@@ -614,13 +643,23 @@ def to_py(self, prec=None):
 @method(dict_display)
 def to_py(self, prec=None):
     """dict_display: '{' (dictcomp | dictmaker) '}'"""
-    return "{" + self.nodes[0].to_py() + "}"
+    from hek_tokenize import get_multiline_brackets
+    pos = _get_bracket_start(self.nodes[0])
+    ml = get_multiline_brackets()
+    if pos and pos in ml:
+        return ml[pos]
+    return "{" + self.nodes[1].to_py() + "}"
 
 
 @method(set_display)
 def to_py(self, prec=None):
     """set_display: '{' (setcomp | setmaker) '}'"""
-    return "{" + self.nodes[0].to_py() + "}"
+    from hek_tokenize import get_multiline_brackets
+    pos = _get_bracket_start(self.nodes[0])
+    ml = get_multiline_brackets()
+    if pos and pos in ml:
+        return ml[pos]
+    return "{" + self.nodes[1].to_py() + "}"
 
 
 @method(atom)
@@ -636,10 +675,15 @@ def to_py(self, prec=None):
 @method(call_trailer)
 def to_py(self, prec=None):
     """call_trailer: '(' arguments? ')'"""
-    if self.nodes and hasattr(self.nodes[0], "nodes") and self.nodes[0].nodes:
-        return "(" + self.nodes[0].nodes[0].to_py() + ")"
-    elif self.nodes and hasattr(self.nodes[0], "to_py"):
-        return "(" + self.nodes[0].to_py() + ")"
+    from hek_tokenize import get_multiline_brackets
+    pos = _get_bracket_start(self.nodes[0])
+    ml = get_multiline_brackets()
+    if pos and pos in ml:
+        return ml[pos]
+    if len(self.nodes) > 1 and hasattr(self.nodes[1], "nodes") and self.nodes[1].nodes:
+        return "(" + self.nodes[1].nodes[0].to_py() + ")"
+    elif len(self.nodes) > 1 and hasattr(self.nodes[1], "to_py"):
+        return "(" + self.nodes[1].to_py() + ")"
     return "()"
 
 
