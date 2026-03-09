@@ -104,6 +104,8 @@ V_DOT = vop(".")
 assign_stmt = fw("assign_stmt")
 aug_assign_stmt = fw("aug_assign_stmt")
 ann_assign_stmt = fw("ann_assign_stmt")
+decl_keyword = fw("decl_keyword")
+decl_ann_assign_stmt = fw("decl_ann_assign_stmt")
 return_stmt = fw("return_stmt")
 pass_stmt = fw("pass_stmt")
 break_stmt = fw("break_stmt")
@@ -151,6 +153,11 @@ aug_assign_stmt = _star_expressions + augop + _expressions
 # --- Annotated assignment ---
 # ann_assign: IDENTIFIER ':' type_annotation ['=' expression]
 ann_assign_stmt = IDENTIFIER + V_COLON + type_annotation + (V_EQUAL + expression)[:]
+
+# --- Declaration with keyword (var/let/const) ---
+# decl_ann_assign: ("var"|"let"|"const") IDENTIFIER ':' type_annotation ['=' expression]
+decl_keyword = literal("var") | literal("let") | literal("const")
+decl_ann_assign_stmt = decl_keyword + IDENTIFIER + V_COLON + type_annotation + (V_EQUAL + expression)[:]
 
 # --- return ---
 return_val = ikw("return") + _expressions
@@ -214,7 +221,8 @@ type_stmt = ikw("type") + IDENTIFIER + type_alias_params[:] + V_EQUAL + (enum_de
 # ann_assign before assign (starts with IDENTIFIER + ':').
 # expressions is the fallback (expression statement).
 simple_stmt = (
-    ann_assign_stmt
+    decl_ann_assign_stmt
+    | ann_assign_stmt
     | aug_assign_stmt
     | assign_stmt
     | return_stmt

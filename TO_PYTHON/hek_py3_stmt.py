@@ -113,6 +113,25 @@ def to_py(self):
     return result
 
 
+
+
+
+@method(decl_ann_assign_stmt)
+def to_py(self):
+    """decl_ann_assign_stmt: decl_keyword IDENTIFIER ':' type_annotation ('=' expression)?"""
+    # nodes[0] is decl_keyword (dropped), nodes[1] is name, nodes[2] is V_COLON, nodes[3] is type
+    name = self.nodes[1].to_py()
+    annotation = self.nodes[3].to_py()
+    result = f"{name}: {annotation}"
+    for node in self.nodes[4:]:
+        if not hasattr(node, "nodes") or not node.nodes:
+            continue
+        for seq in node.nodes:
+            if hasattr(seq, "nodes") and len(seq.nodes) >= 2:
+                value = seq.nodes[1].to_py()
+                result += f" = {value}"
+    return result
+
 # --- return ---
 @method(return_val)
 def to_py(self):
@@ -673,6 +692,10 @@ if __name__ == "__main__":
         ("x: int", "x: int"),
         ("x: int = 1", "x: int = 1"),
         ("x: str = 'hello'", "x: str = 'hello'"),
+        # --- Declaration with keyword ---
+        ("var x : int", "x: int"),
+        ("let y : int = 8", "y: int = 8"),
+        ("const z : int = 44", "z: int = 44"),
         # --- return ---
         ("return", "return"),
         ("return x", "return x"),

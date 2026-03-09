@@ -132,6 +132,27 @@ def to_nim(self):
     return result
 
 
+
+# --- declaration with keyword (var/let/const) ---
+
+@method(decl_ann_assign_stmt)
+def to_nim(self):
+    """decl_ann_assign_stmt: decl_keyword IDENTIFIER ':' type_annotation ('=' expression)?"""
+    keyword = self.nodes[0].nodes[0]
+    name = self.nodes[1].to_nim()
+    annotation = self.nodes[3].to_nim()
+    if ParserState.symbol_table.depth() > 0:
+        ParserState.symbol_table.add(name, annotation, keyword)
+    result = f"{keyword} {name}: {annotation}"
+    for node in self.nodes[4:]:
+        if not hasattr(node, "nodes") or not node.nodes:
+            continue
+        for seq in node.nodes:
+            if hasattr(seq, "nodes") and len(seq.nodes) >= 2:
+                value = seq.nodes[1].to_nim()
+                result += f" = {value}"
+    return result
+
 # --- return ---
 @method(return_val)
 def to_nim(self):
@@ -591,6 +612,10 @@ if __name__ == "__main__":
         ("x: int", "var x: int"),
         ("x: int = 1", "var x: int = 1"),
         ("x: str = 'hello'", "var x: string = 'hello'"),
+        # --- Declaration with keyword ---
+        ("var x : int", "var x: int"),
+        ("let y : int = 8", "let y: int = 8"),
+        ("const z : int = 44", "const z: int = 44"),
         # --- return ---
         ("return", "return"),
         ("return x", "return x"),
