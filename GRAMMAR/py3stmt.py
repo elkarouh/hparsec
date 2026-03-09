@@ -116,6 +116,7 @@ nonlocal_stmt = fw("nonlocal_stmt")
 import_stmt = fw("import_stmt")
 from_stmt = fw("from_stmt")
 type_stmt = fw("type_stmt")
+enum_def = fw("enum_def")
 simple_stmt = fw("simple_stmt")
 stmt_line = fw("stmt_line")
 
@@ -200,10 +201,12 @@ from_rel_bare = ikw("from") + V_DOT[1:] + ikw("import") + import_names
 from_abs = ikw("from") + dotted_name + ikw("import") + import_names
 from_stmt = from_rel_name | from_rel_bare | from_abs
 
-# --- type alias (3.12+) ---
+# --- type alias (3.12+) / enum ---
 # type_alias_params: [T] or [T, U] etc. (generic type parameters)
 type_alias_params = LBRACKET + IDENTIFIER + (COMMA + IDENTIFIER)[:] + RBRACKET
-type_stmt = ikw("type") + IDENTIFIER + type_alias_params[:] + V_EQUAL + expression
+# enum_def: enum IDENT, IDENT, ...
+enum_def = ikw("enum") + IDENTIFIER + (COMMA + IDENTIFIER)[:] + COMMA[:]
+type_stmt = ikw("type") + IDENTIFIER + type_alias_params[:] + V_EQUAL + (enum_def | expression)
 
 # --- simple_stmt: choice of all statement types ---
 # Ordering matters: try more specific forms before general expression.

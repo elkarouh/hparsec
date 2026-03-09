@@ -540,6 +540,19 @@ def to_py(self):
 
 
 # --- type alias ---
+@method(enum_def)
+def to_py(self):
+    """enum_def: 'enum' IDENTIFIER (',' IDENTIFIER)* ','\?"""
+    parts = [self.nodes[0].to_py()]
+    for node in self.nodes[1:]:
+        if not hasattr(node, 'nodes') or not node.nodes:
+            continue
+        for seq in node.nodes:
+            if hasattr(seq, 'nodes') and len(seq.nodes) >= 1:
+                parts.append(seq.nodes[0].to_py())
+    return "enum " + ", ".join(parts)
+
+
 @method(type_alias_params)
 def to_py(self):
     """type_alias_params: '[' IDENTIFIER (',' IDENTIFIER)* ']'"""
@@ -691,6 +704,7 @@ if __name__ == "__main__":
         ("from os import *", "from os import *"),
         # --- type alias ---
         ("type Vector = list", "type Vector = list"),
+        ("type Color = enum RED, BLUE, YELLOW", "type Color = enum RED, BLUE, YELLOW"),
         # --- expression statement ---
         ("f(x)", "f(x)"),
         ("x", "x"),

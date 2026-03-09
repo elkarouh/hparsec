@@ -472,6 +472,19 @@ def to_nim(self):
 
 
 # --- type alias ---
+@method(enum_def)
+def to_nim(self):
+    """enum_def: 'enum' IDENTIFIER (',') IDENTIFIER)*"""
+    parts = [self.nodes[0].to_nim()]
+    for node in self.nodes[1:]:
+        if not hasattr(node, 'nodes') or not node.nodes:
+            continue
+        for seq in node.nodes:
+            if hasattr(seq, 'nodes') and len(seq.nodes) >= 1:
+                parts.append(seq.nodes[0].to_nim())
+    return "enum " + ", ".join(parts)
+
+
 @method(type_alias_params)
 def to_nim(self):
     parts = [self.nodes[0].to_nim()]
@@ -610,6 +623,7 @@ if __name__ == "__main__":
         ("from os import *", "from os import *"),
         # --- type alias ---
         ("type Vector = list", "type Vector = list"),
+        ("type Color = enum RED, BLUE, YELLOW", "type Color = enum RED, BLUE, YELLOW"),
         # --- expression statement (delegates to expr to_nim) ---
         ("f(x)", "f(x)"),
         ("1 + 2", "1 + 2"),
