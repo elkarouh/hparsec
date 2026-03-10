@@ -354,6 +354,13 @@ def to_nim(self, prec=None):
     return "[" + self.nodes[0].to_nim() + "]"
 
 
+# Type-aware method renaming: {nim_type_prefix: {py_method: nim_method}}
+_PY_METHOD_TO_NIM = {
+    "seq": {"append": "add"},
+    "set": {"add": "incl", "remove": "excl"},
+    "HashSet": {"add": "incl", "remove": "excl"},
+}
+
 @method(attr_trailer)
 def to_nim(self, prec=None):
     return "." + self.nodes[0].to_nim()
@@ -362,6 +369,17 @@ def to_nim(self, prec=None):
 @method(trailer)
 def to_nim(self, prec=None):
     return self.nodes[0].to_nim()
+
+
+def _translate_method(obj_name, method_name):
+    """Translate a Python method name based on the object's type from the symbol table."""
+    sym = ParserState.symbol_table.lookup(obj_name)
+    if sym:
+        type_str = sym.get("type", "") or ""
+        for prefix, mappings in _PY_METHOD_TO_NIM.items():
+            if type_str.startswith(prefix):
+                return mappings.get(method_name, method_name)
+    return method_name
 
 
 @method(primary)
@@ -377,9 +395,15 @@ def to_nim(self, prec=None):
         sym = ParserState.symbol_table.lookup(result)
         if sym and sym.get("kind") == "class":
             result = "new" + result
+    base_name = result  # save for type-aware method lookup
     if len(self.nodes) > 1 and hasattr(self.nodes[1], "nodes") and self.nodes[1].nodes:
         for tr in self.nodes[1].nodes:
-            result += tr.to_nim()
+            if type(tr).__name__ == "attr_trailer":
+                method_name = tr.nodes[0].to_nim()
+                method_name = _translate_method(base_name, method_name)
+                result += "." + method_name
+            else:
+                result += tr.to_nim()
     return result
 
 
