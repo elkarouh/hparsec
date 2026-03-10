@@ -87,8 +87,8 @@ print("  Reference semantics: OK")
 print("--- Test 5: Regular class unchanged ---")
 
 class Point:
-  var x: int
-  var y: int
+  var x: int = 0
+  var y: int = 0
 
   def __init__(self, x: int, y: int):
     self.x = x

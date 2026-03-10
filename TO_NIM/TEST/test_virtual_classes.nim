@@ -92,8 +92,8 @@ echo("  Reference semantics: OK")
 echo("--- Test 5: Regular class unchanged ---")
 
 type Point = object of RootObj
-    x: int
-    y: int
+    x: int = 0
+    y: int = 0
 
 proc initPoint(self: var Point, x: int, y: int) =
     self.x = x
