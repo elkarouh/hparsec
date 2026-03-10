@@ -37,3 +37,28 @@ def _block_inline_header_comment(block_node):
         return ''
     rn = RichNL.extract_from(block_node.nodes[0])
     return rn.inline_comment() if rn is not None else ''
+
+
+###############################################################################
+# Block statement helpers
+###############################################################################
+
+def _block_last_stmt(block_node):
+    """Return the last stmt_line node in a block, or None.
+
+    Walks the block's Several_Times children to find the last statement,
+    skipping NL/trivia nodes.
+    """
+    last_stmt = None
+    if not block_node or not hasattr(block_node, 'nodes'):
+        return None
+    for node in block_node.nodes:
+        if type(node).__name__ == "Several_Times":
+            for seq in node.nodes:
+                if type(seq).__name__ == "Sequence_Parser" and hasattr(seq, "nodes"):
+                    for child in seq.nodes:
+                        if child is None:
+                            continue
+                        if type(child).__name__ != "Several_Times":
+                            last_stmt = child
+    return last_stmt

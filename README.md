@@ -6,9 +6,10 @@ A lightweight **parser combinator** framework for building recursive descent par
 
 - **Combinator syntax**: Build parsers using intuitive Python operators
 - **Recursive descent**: Supports left-factored grammars naturally
-- **Python 3 parsing**: Complete Python 3.14 parser implementation in `EXAMPLES/`
+- **Python 3 parsing**: Complete Python 3.14 parser implementation in `GRAMMAR/`
 - **AST generation**: Attach semantic actions via the `@method` decorator
-- **Tokenizer integration**: Built-in support for Python's `tokenize` module
+- **Tokenizer integration**: Built-in support for Python's `tokenize` module with `RichNL` for comment/newline handling
+- **Transpilation support**: Includes utilities for Python-to-Python and Python-to-Nim translation
 
 ## Quick Example
 
@@ -44,26 +45,27 @@ print(ast.to_py())  # Output: x:789
 ```
 hparsec/
 ├── hek_parsec.py          # Core parser combinator framework
-├── hek_tokenize.py        # Tokenizer utilities
+├── hek_tokenize.py        # Tokenizer utilities (RichNL, comment handling)
+├── hek_helpers.py         # Shared helper functions for translators
 ├── README.md
-├── .gitignore
-└── EXAMPLES/
-    ├── hek_py3_parser.py      # Python 3 compound statement parser
-    ├── hek_py3_expr.py        # Python expression parser
-    ├── hek_py3_stmt.py        # Python simple statement parser
-    ├── hek_py_declarations.py # Type annotation parsing
-    └── hek_py2py.py           # Python-to-Python transpilation utilities
+├── GRAMMAR/
+│   ├── py3compound_stmt.py    # Python 3 compound statement parser
+│   ├── py3expr.py             # Python expression parser
+│   ├── py3stmt.py             # Python simple statement parser
+│   └── py_declarations.py     # Type annotation parsing
+├── TO_PYTHON/             # Python-to-Python transpilation utilities
+├── TO_NIM/                # Python-to-Nim transpilation utilities
+└── NIM_VERSION/           # Nim version utilities
 ```
 
 ## Usage
 
 ```python
 from hek_parsec import *
-
-# Import example parsers
 import sys
-sys.path.append('EXAMPLES')
-from hek_py3_parser import parse_compound
+sys.path.insert(0, 'GRAMMAR')
+
+from py3compound_stmt import parse_compound
 
 ast = parse_compound("if x:\n    pass\n")
 print(ast.to_py())

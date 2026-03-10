@@ -13,7 +13,7 @@ sys.path.insert(0, os.path.join(_dir, "..", "GRAMMAR"))
 from py3compound_stmt import *  # noqa: F403 — grammar definitions
 from hek_tokenize import RichNL
 from hek_parsec import method
-from hek_helpers import INDENT_STR, _ind, _richnl_lines, _block_inline_header_comment
+from hek_helpers import INDENT_STR, _ind, _richnl_lines, _block_inline_header_comment, _block_last_stmt
 import hek_py3_stmt  # noqa: F401 — registers stmt to_py() methods
 
 ###############################################################################
@@ -788,6 +788,14 @@ def to_py(self, indent=0):
 
     hc = _block_inline_header_comment(block_node) if block_node else ""
     body = block_node.to_py(indent + 1) if block_node else ""
+    # Implicit return: if last statement is a bare expression, add return
+    last_stmt = _block_last_stmt(block_node)
+    if ret_ann and last_stmt and type(last_stmt.nodes[0]).__name__ == "expressions":
+        lines = body.rsplit("\n", 1)
+        last = lines[-1]
+        stripped = last.lstrip()
+        lines[-1] = last[:len(last)-len(stripped)] + "return " + stripped
+        body = "\n".join(lines)
     return f"{decos}{_ind(indent)}def {name}({params}){ret_ann}:{hc}\n{body}"
 
 
@@ -833,6 +841,14 @@ def to_py(self, indent=0):
 
     hc = _block_inline_header_comment(block_node) if block_node else ""
     body = block_node.to_py(indent + 1) if block_node else ""
+    # Implicit return: if last statement is a bare expression, add return
+    last_stmt = _block_last_stmt(block_node)
+    if ret_ann and last_stmt and type(last_stmt.nodes[0]).__name__ == "expressions":
+        lines = body.rsplit("\n", 1)
+        last = lines[-1]
+        stripped = last.lstrip()
+        lines[-1] = last[:len(last)-len(stripped)] + "return " + stripped
+        body = "\n".join(lines)
     return f"{decos}{_ind(indent)}async def {name}({params}){ret_ann}:{hc}\n{body}"
 
 

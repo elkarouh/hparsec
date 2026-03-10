@@ -1,0 +1,20 @@
+type Color = enum RED, BLUE, YELLOW
+def printme(a: [*]int):
+    for x in a:
+        print(x)
+def printcolor(c: Color):
+    match c:
+        case Color.RED:
+            print("Red")
+        case Color.BLUE:
+            print("Blue")
+        case Color.YELLOW:
+            print("Yellow")
+def printcolors(cs: [*]Color):
+    for c in cs:
+        printcolor(c)
+def main():
+    printme([1, 2, 3])
+    printcolor(Color.RED)
+    printcolors([Color.BLUE, Color.YELLOW])
+main()
