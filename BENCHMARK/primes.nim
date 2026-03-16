@@ -1,11 +1,11 @@
-import nimpy, strformat, strutils
+import math, nimpy, strformat, strutils
 let time = pyImport("time")
 
 var N = 1000000
 
 proc is_prime(n: int) =
     var result = true
-    for k in 2 ..< parseInt(n ^ 0.5) + 1:
+    for k in 2 ..< parseInt(pow(float(n), 0.5)) + 1:
         if n mod k == 0:
             result = false
             break

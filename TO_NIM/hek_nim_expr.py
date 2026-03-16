@@ -501,8 +501,7 @@ def to_nim(self, prec=None):
         if raw_name == "int":
             call_node = self.nodes[1].nodes[0]
             arg = _extract_call_arg(call_node)
-            ParserState.nim_imports.add("strutils")
-            return f"parseInt({arg})"
+            return f"int({arg})"
         sym = ParserState.symbol_table.lookup(raw_name)
         if sym and sym.get("kind") == "class":
             result = "new" + raw_name
