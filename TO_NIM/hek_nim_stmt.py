@@ -53,6 +53,7 @@ _PY_MODULE_TO_NIM = {
     "math": "math",
     "json": "json",
     "re": "re",
+    "time": "times",       # time.perf_counter -> cpuTime()
     "typing": None,        # typing imports are erased
 }
 

@@ -523,6 +523,8 @@ def to_nim(self, prec=None):
 _STDLIB_PATTERNS = [
     # Order matters: longer patterns first
     ("os.path.exists", "fileExists"),
+    ("time.perf_counter", "cpuTime"),
+    ("time.time", "epochTime"),
     ("sys.exit", "quit"),
     ("sys.argv", "commandLineParams()"),
 ]

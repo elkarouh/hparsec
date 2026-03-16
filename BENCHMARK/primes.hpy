@@ -3,12 +3,12 @@ import time
 N = 1000000
 
 def is_prime(n: int) -> bool:
-    result = True
+    flag = True
     for k in range(2, int(n**0.5) + 1):
         if n % k == 0:
-            result = False
+            flag = False
             break
-    return result
+    return flag
 
 def count_primes(n: int) -> int:
     count = 0

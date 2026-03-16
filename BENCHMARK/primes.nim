@@ -3,7 +3,7 @@ let time = pyImport("time")
 
 var N = 1000000
 
-proc is_prime(n: int) =
+proc is_prime(n: int): bool =
     var result = true
     for k in 2 ..< int(pow(float(n), 0.5)) + 1:
         if n mod k == 0:
