@@ -239,7 +239,8 @@ array_type = LBRACKET + INTEGER + RBRACKET + type_annotation
 openarray_type = LBRACKET + SSTAR + RBRACKET + type_annotation
 
 # [EnumType]int      -> array[EnumType, int]  (enum-indexed array)
-enum_array_type = LBRACKET + type_name + RBRACKET + type_annotation
+# Also accepts primitive ordinal types like char as array index
+enum_array_type = LBRACKET + (type_name | primitive_type) + RBRACKET + type_annotation
 
 # {str}int          -> dict[str, int]
 dict_type = LBRACE + type_annotation + RBRACE + type_annotation
