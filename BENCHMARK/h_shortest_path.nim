@@ -357,7 +357,7 @@ proc example3() =
 
 const CAPITAL: int = 5
 type Cost_T_4 = float
-type Stage_T = int
+type Stage_T = enum STAGE1, STAGE2, STAGE3, END
 type State_T_4 = tuple
     stage: Stage_T
     budget: Cost_T_4
@@ -367,11 +367,11 @@ type Choice_T = tuple
     cost: Cost_T_4
     revenue: Revenue_T_4
 type CapitalBudgeting = ref object of Optimizer[State_T_4, Decision_T_4]
-    choices: Table[Stage_T, Table[Decision_T_4, Choice_T]]
+    choices: array[Stage_T, Table[Decision_T_4, Choice_T]]
 
 proc newCapitalBudgeting(): CapitalBudgeting =
     new(result)
-    result.choices = {1: {"plant1-p1": (cost: 0.0, revenue: 0.0), "plant1-p2": (cost: 1.0, revenue: 5.0), "plant1-p3": (cost: 2.0, revenue: 6.0)}.toTable, 2: {"plant2-p1": (cost: 0.0, revenue: 0.0), "plant2-p2": (cost: 2.0, revenue: 8.0), "plant2-p3": (cost: 3.0, revenue: 9.0), "plant2-p4": (cost: 4.0, revenue: 12.0)}.toTable, 3: {"plant3-p1": (cost: 0.0, revenue: 0.0), "plant3-p2": (cost: 1.0, revenue: 4.0)}.toTable}.toTable
+    result.choices = [{"plant1-p1": (cost: 0.0, revenue: 0.0), "plant1-p2": (cost: 1.0, revenue: 5.0), "plant1-p3": (cost: 2.0, revenue: 6.0)}.toTable, {"plant2-p1": (cost: 0.0, revenue: 0.0), "plant2-p2": (cost: 2.0, revenue: 8.0), "plant2-p3": (cost: 3.0, revenue: 9.0), "plant2-p4": (cost: 4.0, revenue: 12.0)}.toTable, {"plant3-p1": (cost: 0.0, revenue: 0.0), "plant3-p2": (cost: 1.0, revenue: 4.0)}.toTable, default(typeof({"plant1-p1": (cost: 0.0, revenue: 0.0), "plant1-p2": (cost: 1.0, revenue: 5.0), "plant1-p3": (cost: 2.0, revenue: 6.0)}.toTable))]
 method get_state(self: Optimizer[State_T_4, Decision_T_4], past_decisions: seq[Decision_T_4]): State_T_4 {.base.} =
     raise newException(CatchableError, "Override get_state()")
 
@@ -495,17 +495,18 @@ proc longest_path(self: Optimizer[State_T_4, Decision_T_4], start_state: State_T
     return (best_revenue, best_path)
 
 method get_state(self: CapitalBudgeting, past_decisions: seq[Decision_T_4]): State_T_4 =
-    var stage: int = len(past_decisions)
+    var stage: Stage_T = Stage_T(len(past_decisions))
     var spent: float = 0.0
     for d in past_decisions:
-        for choices in self.choices.values():
+        for s in @[STAGE1, STAGE2, STAGE3]:
+            var choices: Table[Decision_T_4, Choice_T] = self.choices[s]
             if d in choices:
                 spent += choices[d][0]
     return (stage, float(CAPITAL) - spent)
 
 method get_next_decisions(self: CapitalBudgeting, current_state: State_T_4): seq[(Decision_T_4, Cost_T_4)] =
     let (stage, budget) = current_state
-    if stage notin self.choices:
+    if stage == END:
         return @[]
     var choices: Table[Decision_T_4, Choice_T] = self.choices[stage]
     return (collect(for (name, choice) in choices.pairs(): (if choice.cost <= budget: (name, choice.revenue))))
@@ -516,10 +517,10 @@ proc example4() =
     # -----------------------------------------------------------------------
     echo("======= CAPITAL BUDGETING =======")
     var op4: CapitalBudgeting = newCapitalBudgeting()
-    echo(op4.longest_path((stage: 1, budget: float(CAPITAL)), (stage: 3, budget: 0.0)))
+    echo(op4.longest_path((stage: STAGE1, budget: float(CAPITAL)), (stage: END, budget: 0.0)))
 
 const MAX_WEIGHT: int = 5
-type Stage_T_5 = enum STAGE1, STAGE2, STAGE3, END
+type Stage_T_5 = enum STAGE1_5, STAGE2_5, STAGE3_5, END_5
 type State_T_5 = tuple
     stage: Stage_T_5
     remaining: int
@@ -668,7 +669,7 @@ method get_state(self: Knapsack, past_decisions: seq[Decision_T_5]): State_T_5 =
 
 method get_next_decisions(self: Knapsack, current_state: State_T_5): seq[(Decision_T_5, Cost_T)] =
     let (stage, remaining) = current_state
-    if stage == END:
+    if stage == END_5:
         return @[]
     let (weight, benefit) = self.items[stage]
     var decisions: seq[(Decision_T_5, Cost_T)] = @[]
@@ -684,7 +685,7 @@ proc example5() =
     # -----------------------------------------------------------------------
     echo("======= KNAPSACK =======")
     var op5: Knapsack = newKnapsack()
-    echo(op5.longest_path((stage: STAGE1, remaining: MAX_WEIGHT), (stage: END, remaining: 0)))
+    echo(op5.longest_path((stage: STAGE1_5, remaining: MAX_WEIGHT), (stage: END_5, remaining: 0)))
 
 type Decision_T_6 = enum BUY, SELL, KEEP, TRADE
 type Cost_T_6 = float

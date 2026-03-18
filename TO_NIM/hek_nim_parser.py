@@ -985,10 +985,33 @@ def to_nim(self, indent=0):
         # --- Build mangling map: only rename types that conflict with top-level ---
         if not hasattr(ParserState, '_hoisted_type_names'):
             ParserState._hoisted_type_names = set()
+        if not hasattr(ParserState, '_hoisted_enum_members'):
+            ParserState._hoisted_enum_members = set()
+        # Collect enum members for each local type
+        local_enum_members = {}  # type_name -> [member1, member2, ...]
+        for line in body_lines:
+            stripped = line.lstrip()
+            if stripped.startswith("type ") and " enum " in stripped:
+                em = _re_h.match(r"type\s+(\w+)\s*=\s*enum\s+(.*)", stripped)
+                if em:
+                    members = [m.strip().rstrip(",") for m in em.group(2).split(",") if m.strip()]
+                    local_enum_members[em.group(1)] = members
         mangle_map = {}  # old_name -> new_name
         for tname in local_types:
             if suffix and tname in ParserState._hoisted_type_names:
                 mangle_map[tname] = tname + suffix
+                # Also mangle enum members if this type is an enum
+                if tname in local_enum_members:
+                    for member in local_enum_members[tname]:
+                        if member in ParserState._hoisted_enum_members:
+                            mangle_map[member] = member + suffix
+                            ParserState._hoisted_enum_members.add(member + suffix)
+                        else:
+                            ParserState._hoisted_enum_members.add(member)
+            else:
+                if tname in local_enum_members:
+                    for member in local_enum_members[tname]:
+                        ParserState._hoisted_enum_members.add(member)
             ParserState._hoisted_type_names.add(tname if tname not in mangle_map else mangle_map[tname])
 
         def _mangle_line(line):

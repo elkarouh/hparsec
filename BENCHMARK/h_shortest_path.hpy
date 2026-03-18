@@ -270,7 +270,7 @@ def example4():
     # -----------------------------------------------------------------------
     const CAPITAL: int = 5
     type Cost_T is float
-    type Stage_T is int
+    type Stage_T is enum STAGE1, STAGE2, STAGE3, END
     type State_T is tuple:
       stage : Stage_T
       budget: Cost_T
@@ -281,31 +281,32 @@ def example4():
         revenue: Revenue_T
 
     class CapitalBudgeting(Optimizer[State_T, Decision_T]):
-        var _choices: {Stage_T}{Decision_T}Choice_T = {
-            1: {'plant1-p1': (cost:0.0, revenue:0.0), 'plant1-p2': (cost:1.0, revenue:5.0), 'plant1-p3': (cost:2.0, revenue:6.0)},
-            2: {'plant2-p1': (cost:0.0, revenue:0.0), 'plant2-p2': (cost:2.0, revenue:8.0), 'plant2-p3': (cost:3.0, revenue:9.0), 'plant2-p4': (cost:4.0, revenue:12.0)},
-            3: {'plant3-p1': (cost:0.0, revenue:0.0), 'plant3-p2': (cost:1.0, revenue:4.0)},
-        }
+        var _choices: [Stage_T]{Decision_T}Choice_T = [
+            STAGE1: {'plant1-p1': (cost:0.0, revenue:0.0), 'plant1-p2': (cost:1.0, revenue:5.0), 'plant1-p3': (cost:2.0, revenue:6.0)},
+            STAGE2: {'plant2-p1': (cost:0.0, revenue:0.0), 'plant2-p2': (cost:2.0, revenue:8.0), 'plant2-p3': (cost:3.0, revenue:9.0), 'plant2-p4': (cost:4.0, revenue:12.0)},
+            STAGE3: {'plant3-p1': (cost:0.0, revenue:0.0), 'plant3-p2': (cost:1.0, revenue:4.0)},
+        ]
 
         def get_state(self, past_decisions: []Decision_T) -> State_T:
-            stage: int = len(past_decisions)
+            stage: Stage_T = Stage_T(len(past_decisions))
             spent: float = 0.0
             for d in past_decisions:
-                for choices in self._choices.values():
+                for s in [STAGE1, STAGE2, STAGE3]:
+                    choices: {Decision_T}Choice_T = self._choices[s]
                     if d in choices:
                         spent += choices[d][0]
             return stage, float(CAPITAL) - spent
 
         def get_next_decisions(self, current_state: State_T) -> [](Decision_T, Cost_T):
             let (stage, budget) = current_state
-            if stage not in self._choices:
+            if stage == END:
                 return []
             choices: {Decision_T}Choice_T = self._choices[stage]
             return [(name, choice.revenue) for name, choice in choices.items() if choice.cost <= budget]
 
     print('======= CAPITAL BUDGETING =======')
     op4: CapitalBudgeting = CapitalBudgeting()
-    print(op4.longest_path((stage:1, budget:float(CAPITAL)), (stage:3, budget:0.0)))
+    print(op4.longest_path((stage:STAGE1, budget:float(CAPITAL)), (stage:END, budget:0.0)))
 
 def example5():
     # -----------------------------------------------------------------------

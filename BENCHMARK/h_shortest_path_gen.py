@@ -271,7 +271,15 @@ def example4():
     # -----------------------------------------------------------------------
     CAPITAL: int = 5
     Cost_T = float
-    Stage_T = int
+    class Stage_T(Enum):
+        STAGE1 = 0
+        STAGE2 = 1
+        STAGE3 = 2
+        END = 3
+    STAGE1 = Stage_T.STAGE1
+    STAGE2 = Stage_T.STAGE2
+    STAGE3 = Stage_T.STAGE3
+    END = Stage_T.END
     class State_T(NamedTuple):
         stage: Stage_T
         budget: Cost_T
@@ -281,27 +289,28 @@ def example4():
         cost: Cost_T
         revenue: Revenue_T
     class CapitalBudgeting(Optimizer[State_T, Decision_T]):
-        _choices: dict[Stage_T, dict[Decision_T, Choice_T]] = {1: {'plant1-p1': Choice_T(cost=0.0, revenue=0.0), 'plant1-p2': Choice_T(cost=1.0, revenue=5.0), 'plant1-p3': Choice_T(cost=2.0, revenue=6.0)}, 2: {'plant2-p1': Choice_T(cost=0.0, revenue=0.0), 'plant2-p2': Choice_T(cost=2.0, revenue=8.0), 'plant2-p3': Choice_T(cost=3.0, revenue=9.0), 'plant2-p4': Choice_T(cost=4.0, revenue=12.0)}, 3: {'plant3-p1': Choice_T(cost=0.0, revenue=0.0), 'plant3-p2': Choice_T(cost=1.0, revenue=4.0)}}
+        _choices: dict[Stage_T, dict[Decision_T, Choice_T]] = {STAGE1: {'plant1-p1': Choice_T(cost=0.0, revenue=0.0), 'plant1-p2': Choice_T(cost=1.0, revenue=5.0), 'plant1-p3': Choice_T(cost=2.0, revenue=6.0)}, STAGE2: {'plant2-p1': Choice_T(cost=0.0, revenue=0.0), 'plant2-p2': Choice_T(cost=2.0, revenue=8.0), 'plant2-p3': Choice_T(cost=3.0, revenue=9.0), 'plant2-p4': Choice_T(cost=4.0, revenue=12.0)}, STAGE3: {'plant3-p1': Choice_T(cost=0.0, revenue=0.0), 'plant3-p2': Choice_T(cost=1.0, revenue=4.0)}}
 
         def get_state(self, past_decisions: list[Decision_T]) -> State_T:
-            stage: int = len(past_decisions)
+            stage: Stage_T = Stage_T(len(past_decisions))
             spent: float = 0.0
             for d in past_decisions:
-                for choices in self._choices.values():
+                for s in [STAGE1, STAGE2, STAGE3]:
+                    choices: dict[Decision_T, Choice_T] = self._choices[s]
                     if d in choices:
                         spent += choices[d][0]
             return stage, float(CAPITAL) - spent
 
         def get_next_decisions(self, current_state: State_T) -> list[tuple[Decision_T, Cost_T]]:
             (stage, budget) = current_state
-            if stage not in self._choices:
+            if stage == END:
                 return []
             choices: dict[Decision_T, Choice_T] = self._choices[stage]
             return [(name, choice.revenue) for name, choice in choices.items() if choice.cost <= budget]
 
     print('======= CAPITAL BUDGETING =======')
     op4: CapitalBudgeting = CapitalBudgeting()
-    print(op4.longest_path(State_T(stage=1, budget=float(CAPITAL)), State_T(stage=3, budget=0.0)))
+    print(op4.longest_path(State_T(stage=STAGE1, budget=float(CAPITAL)), State_T(stage=END, budget=0.0)))
 
 def example5():
     # -----------------------------------------------------------------------
