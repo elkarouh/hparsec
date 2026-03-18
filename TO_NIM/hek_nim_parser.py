@@ -149,6 +149,7 @@ def to_nim(self, indent=0, is_virtual=False, class_name=None, parent_name=None, 
         # Emit a blank line after fields for readability
         if fields:
             result_lines.append("")
+
         
         inits = []
         other_methods = []
@@ -1035,6 +1036,9 @@ def to_nim(self, indent=0):
                     continue
                 else:
                     in_type = False
+            # Drop import statements (already handled at top level by nim_imports)
+            if stripped.startswith("import "):
+                continue
             # Hoist const declarations and ALL_CAPS var declarations
             if stripped.startswith("const ") or stripped.startswith("let "):
                 dedented_line = line[cur_indent:] if cur_indent > 0 else line

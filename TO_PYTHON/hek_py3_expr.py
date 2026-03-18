@@ -332,6 +332,11 @@ def to_py(self, prec=None):
     return "{" + self.nodes[1].to_py() + "}"
 
 
+@method(enum_array_display)
+def to_py(self, prec=None):
+    return "{" + self.nodes[1].to_py() + "}"
+
+
 @method(set_display)
 def to_py(self, prec=None):
     """set_display: '{' (setcomp | setmaker) '}'"""

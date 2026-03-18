@@ -367,11 +367,59 @@ def to_nim(self, prec=None):
 @method(dict_display)
 def to_nim(self, prec=None):
     inner_node = self.nodes[1]
-    # If inner is a dictcomp, collect() handles it — no {} wrapper
     if type(inner_node).__name__ == "dictcomp":
         return inner_node.to_nim()
     ParserState.nim_imports.add("tables")
     return "{" + inner_node.to_nim() + "}.toTable"
+
+
+@method(enum_array_display)
+def to_nim(self, prec=None):
+    """[KEY: val, KEY: val] -> [val1, val2, ...] in enum declaration order."""
+    inner_node = self.nodes[1]  # dictmaker
+    # Extract key-value pairs from dictmaker AST
+    def _extract_kv(node):
+        pairs = []
+        nodes = node.nodes if hasattr(node, "nodes") else []
+        if len(nodes) >= 3:
+            key_text = nodes[0].to_nim().strip()
+            pairs.append((key_text, nodes[2]))
+            for child in nodes[3:]:
+                if type(child).__name__ == "Several_Times":
+                    for seq in child.nodes:
+                        kv = seq if type(seq).__name__ == "kvpair" else None
+                        if kv is None and hasattr(seq, "nodes"):
+                            for inner in seq.nodes:
+                                if type(inner).__name__ == "kvpair":
+                                    kv = inner
+                                    break
+                        if kv and hasattr(kv, "nodes") and len(kv.nodes) >= 3:
+                            pairs.append((kv.nodes[0].to_nim().strip(), kv.nodes[2]))
+        return pairs
+    kv_pairs = _extract_kv(inner_node)
+    if not kv_pairs:
+        return "[]"
+    # Find which enum the keys belong to
+    first_key = kv_pairs[0][0]
+    enum_members = None
+    for tname, info in ParserState.tick_types.items():
+        if "members" in info and first_key in info["members"]:
+            enum_members = info["members"]
+            break
+    if enum_members:
+        # Emit values in enum declaration order, default for missing members
+        kv_dict = {k: v for k, v in kv_pairs}
+        vals = []
+        for m in enum_members:
+            if m in kv_dict:
+                vals.append(kv_dict[m].to_nim().strip())
+            else:
+                sample_val = kv_pairs[0][1].to_nim().strip()
+                vals.append("default(typeof(" + sample_val + "))")
+        return "[" + ", ".join(vals) + "]"
+    # Fallback: emit values in order given
+    vals = [v.to_nim().strip() for _, v in kv_pairs]
+    return "[" + ", ".join(vals) + "]"
 
 
 @method(set_display)
@@ -553,6 +601,12 @@ def to_nim(self, prec=None):
             call_node = self.nodes[1].nodes[0]
             arg = _extract_call_arg(call_node)
             return f"int({arg})"
+        if raw_name == "log":
+            call_node = self.nodes[1].nodes[0]
+            args = _extract_call_args(call_node)
+            ParserState.nim_imports.add("math")
+            if len(args) == 1:
+                return f"ln({args[0]})"
         # Map stdlib queue constructors to their Nim init functions
         _STDLIB_CTORS = {"PriorityQueue": ("initPriorityQueue", "newPriorityQueueWith"),
                          "FifoQueue": ("initFifoQueue", "newFifoQueueWith"),
