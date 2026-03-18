@@ -202,6 +202,11 @@ def to_nim(self, prec=None):
     # Nim uses double quotes for strings; single quotes are char literals
     if s.startswith(chr(39)) and s.endswith(chr(39)) and len(s) > 2:
         inner = s[1:-1]
+        # Single character -> Nim char literal (keep single quotes)
+        if len(inner) == 1:
+            return s
+        if len(inner) == 2 and inner[0] == chr(92):
+            return s  # escaped char like '\n'
         inner = inner.replace(chr(34), chr(92) + chr(34))
         return chr(34) + inner + chr(34)
     return s

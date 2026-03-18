@@ -17,8 +17,8 @@ import os
 type Digit_T is enum D0, D1, D2, D3, D4, D5, D6, D7, D8, D9
 type Result_T is [][]str
 
-def _build_char_to_digit() -> [char]Digit_T:
-    var mapping: [char]Digit_T = {}
+def _build_char_to_digit() -> {char}Digit_T:
+    var mapping: {char}Digit_T = {}
 
     def m(chars: str, digit: Digit_T):
         for c in chars:
@@ -41,7 +41,7 @@ def _build_char_to_digit() -> [char]Digit_T:
 
     return mapping
 
-var CHAR_TO_DIGIT: [char]Digit_T = _build_char_to_digit()
+var CHAR_TO_DIGIT: {char}Digit_T = _build_char_to_digit()
 
 # ---------------------------------------------------------------------------
 # Trie

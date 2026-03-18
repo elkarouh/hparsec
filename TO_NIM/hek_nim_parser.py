@@ -1076,23 +1076,34 @@ def to_nim(self, indent=0):
             # Drop import statements (already handled at top level by nim_imports)
             if stripped.startswith("import "):
                 continue
-            # Hoist const declarations and ALL_CAPS var declarations
-            if stripped.startswith("const ") or stripped.startswith("let "):
+            # Hoist const declarations and ALL_CAPS let/var declarations
+            if stripped.startswith("const "):
                 dedented_line = line[cur_indent:] if cur_indent > 0 else line
                 hoisted.append(_mangle_line(dedented_line))
                 continue
+            if stripped.startswith("let "):
+                let_m = _re_h.match(r"let\s+([A-Z][A-Z_0-9]*)\s*:", stripped)
+                if let_m:
+                    dedented_line = line[cur_indent:] if cur_indent > 0 else line
+                    hoisted.append(_mangle_line(dedented_line))
+                    continue
             if stripped.startswith("var "):
                 var_m = _re_h.match(r"var\s+([A-Z][A-Z_0-9]*)\s*:", stripped)
                 if var_m:
                     dedented_line = line[cur_indent:] if cur_indent > 0 else line
                     hoisted.append(_mangle_line(dedented_line))
                     continue
-            # Hoist proc/func declarations (constructors, helpers)
+            # Hoist proc/func declarations that are methods (have self/base param)
+            # or constructors (init/new prefixed).  Keep nested procs that
+            # are plain closures — they need enclosing scope variables.
             if stripped.startswith("proc ") or stripped.startswith("func "):
-                in_method = True
-                method_indent = cur_indent
-                hoisted.append(_mangle_line(line[method_indent:]))
-                continue
+                _is_method = "(self" in stripped or "(base" in stripped
+                _is_ctor = _re_h.match(r'(?:proc|func)\s+(init|new)', stripped)
+                if _is_method or _is_ctor:
+                    in_method = True
+                    method_indent = cur_indent
+                    hoisted.append(_mangle_line(line[method_indent:]))
+                    continue
             kept.append(_mangle_line(line))
         if hoisted:
             hoisted_block = "\n".join(hoisted) + "\n"

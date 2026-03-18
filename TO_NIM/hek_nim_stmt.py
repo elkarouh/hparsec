@@ -159,7 +159,11 @@ def to_nim(self):
                     _m = _re2.search(r"Table\[(.+)\]", annotation)
                     if _m:
                         value = f"initTable[{_m.group(1)}]()"
-                result += f" = {value}"
+                # array types: {} is unnecessary — arrays are zero-initialized
+                if value == "initTable()" and annotation.startswith("array["):
+                    value = ""
+                if value:
+                    result += f" = {value}"
     return result
 
 
@@ -190,7 +194,11 @@ def to_nim(self):
                     _m = _re2.search(r"Table\[(.+)\]", annotation)
                     if _m:
                         value = f"initTable[{_m.group(1)}]()"
-                result += f" = {value}"
+                # array types: {} is unnecessary — arrays are zero-initialized
+                if value == "initTable()" and annotation.startswith("array["):
+                    value = ""
+                if value:
+                    result += f" = {value}"
     return result
 
 # --- return ---

@@ -51,11 +51,11 @@ type TrieNode = ref object of RootObj
     children: array[Digit_T, TrieNode]
     words: seq[string]
 
-proc add_word(self: TrieNode, word: string, digits: seq[Digit_T]): void
-proc find_exact_word(self: TrieNode, digits: seq[Digit_T]): Option[string]
-proc words_at(self: TrieNode, digits: seq[Digit_T]): seq[string]
-proc load_dictionary(self: TrieNode, filename: string, verbose: bool): void
-proc find_encodings(self: TrieNode, digits: seq[Digit_T], pos: int, current: seq[string], results: var seq[seq[string]]): void
+method add_word(self: TrieNode, word: string, digits: seq[Digit_T]): void {.base.}
+method find_exact_word(self: TrieNode, digits: seq[Digit_T]): Option[string] {.base.}
+method words_at(self: TrieNode, digits: seq[Digit_T]): seq[string] {.base.}
+method load_dictionary(self: TrieNode, filename: string, verbose: bool): void {.base.}
+method find_encodings(self: TrieNode, digits: seq[Digit_T], pos: int, current: seq[string], results: var seq[seq[string]]): void {.base.}
 proc initTrieNode(self: TrieNode, filename: string = "", verbose: bool = false) =
     if filename.len > 0:
         self.load_dictionary(filename, true)
@@ -63,7 +63,7 @@ proc initTrieNode(self: TrieNode, filename: string = "", verbose: bool = false) 
 proc newTrieNode*(filename: string = "", verbose: bool = false): TrieNode =
     new(result)
     initTrieNode(result, filename, verbose)
-proc add_word(self: TrieNode, word: string, digits: seq[Digit_T]): void =
+method add_word(self: TrieNode, word: string, digits: seq[Digit_T]): void {.base.} =
     var node: TrieNode = self
     for digit in digits:
         if node.children[digit] == nil:
@@ -71,7 +71,7 @@ proc add_word(self: TrieNode, word: string, digits: seq[Digit_T]): void =
         node = node.children[digit]
     node.words.add(word)
 
-proc find_exact_word(self: TrieNode, digits: seq[Digit_T]): Option[string] =
+method find_exact_word(self: TrieNode, digits: seq[Digit_T]): Option[string] {.base.} =
     var node: TrieNode = self
     for digit in digits:
         if node.children[digit] == nil:
@@ -81,7 +81,7 @@ proc find_exact_word(self: TrieNode, digits: seq[Digit_T]): Option[string] =
         return some(node.words[0])
     return none(string)
 
-proc words_at(self: TrieNode, digits: seq[Digit_T]): seq[string] =
+method words_at(self: TrieNode, digits: seq[Digit_T]): seq[string] {.base.} =
     var node: TrieNode = self
     for digit in digits:
         if node.children[digit] == nil:
@@ -89,7 +89,7 @@ proc words_at(self: TrieNode, digits: seq[Digit_T]): seq[string] =
         node = node.children[digit]
     return node.words
 
-proc load_dictionary(self: TrieNode, filename: string, verbose: bool): void =
+method load_dictionary(self: TrieNode, filename: string, verbose: bool): void {.base.} =
     var word_count: int = 0
 
     proc word_to_digits(word: string): seq[Digit_T] =
@@ -115,7 +115,7 @@ proc load_dictionary(self: TrieNode, filename: string, verbose: bool): void =
     if verbose:
         echo(fmt"Loaded {word_count} words from {filename}")
 
-proc find_encodings(self: TrieNode, digits: seq[Digit_T], pos: int, current: seq[string], results: var seq[seq[string]]): void =
+method find_encodings(self: TrieNode, digits: seq[Digit_T], pos: int, current: seq[string], results: var seq[seq[string]]): void {.base.} =
     if pos == len(digits):
         results.add(current)
         return
