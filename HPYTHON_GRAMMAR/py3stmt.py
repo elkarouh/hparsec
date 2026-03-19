@@ -121,6 +121,7 @@ import_stmt = fw("import_stmt")
 from_stmt = fw("from_stmt")
 type_stmt = fw("type_stmt")
 nimport_stmt = fw("nimport_stmt")
+print_stmt = fw("print_stmt")
 enum_def = fw("enum_def")
 subrange_def = fw("subrange_def")
 tuple_def = fw("tuple_def")
@@ -224,6 +225,12 @@ from_stmt = from_rel_name | from_rel_bare | from_abs
 # nimport: Nim-only import (stripped in Python output, becomes "import" in Nim)
 nimport_stmt = ikw("nimport") + dotted_name + (COMMA + dotted_name)[:]
 
+# --- print statement (Python 2 / HPython style) ---
+# print expr [, expr ...]  with no parentheses.
+# ~LPAREN ensures print(...) is NOT captured here — it falls through to the
+# expressions fallback and is treated as a normal print() function call.
+print_stmt = ikw("print") + ~LPAREN + _star_expressions
+
 # --- type alias (3.12+) / enum ---
 # type_alias_params: [T] or [T, U] etc. (generic type parameters)
 type_alias_params = LBRACKET + IDENTIFIER + (COMMA + IDENTIFIER)[:] + RBRACKET
@@ -267,6 +274,7 @@ simple_stmt = (
     | from_stmt
     | type_stmt
     | yield_expr
+    | print_stmt
     | expressions
 )
 

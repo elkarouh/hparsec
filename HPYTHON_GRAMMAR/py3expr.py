@@ -241,7 +241,8 @@ enum_array_display = LBRACKET_NODE + dictmaker + RBRACKET
 empty_list = LBRACKET + RBRACKET
 dict_display = LBRACE_NODE + (dictcomp | dictmaker) + RBRACE
 set_display = LBRACE_NODE + (setcomp | setmaker) + RBRACE
-empty_dict = LBRACE + RBRACE
+empty_set  = LBRACE + RBRACE           # {}   -> empty set
+empty_dict = LBRACE + COLON + RBRACE  # {:}  -> empty dict
 str_concat = STRING + STRING[1:]
 
 atom = (
@@ -251,6 +252,7 @@ atom = (
     | empty_list
     | enum_array_display
     | list_display
+    | empty_set
     | empty_dict
     | dict_display
     | set_display

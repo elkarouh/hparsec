@@ -687,6 +687,18 @@ def to_py(self):
 
 
 # --- simple_stmt ---
+@method(print_stmt)
+def to_py(self):
+    """print_stmt: 'print' star_expressions -> Python: print(star_expressions)
+
+    HPython allows Python-2-style bare print statements without parentheses.
+    The transpiler rewrites them as print() calls so the output is valid
+    Python 3.
+    """
+    return f"print({self.nodes[0].to_py()})"
+
+
+# --- simple_stmt ---
 @method(simple_stmt)
 def to_py(self):
     """simple_stmt: ann_assign_stmt | aug_assign_stmt | assign_stmt

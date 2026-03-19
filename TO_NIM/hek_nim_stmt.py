@@ -169,6 +169,19 @@ def to_nim(self):
                 # array types: {} is unnecessary — arrays are zero-initialized
                 if value == "initTable()" and annotation.startswith("array["):
                     value = ""
+                # initHashSet() sentinel: resolve to correct Nim set initialiser
+                if value == "initHashSet()":
+                    import re as _re2
+                    if "HashSet[" in annotation:
+                        _m = _re2.search(r"HashSet\[(.+)\]", annotation)
+                        if _m:
+                            value = f"initHashSet[{_m.group(1)}]()"
+                        ParserState.nim_imports.add("sets")
+                    elif annotation.startswith("set["):
+                        value = "{}"  # built-in ordinal set empty literal
+                    else:
+                        ParserState.nim_imports.add("sets")
+                        # bare fallback — no type params available
                 if value:
                     result += f" = {value}"
     return result
@@ -204,6 +217,19 @@ def to_nim(self):
                 # array types: {} is unnecessary — arrays are zero-initialized
                 if value == "initTable()" and annotation.startswith("array["):
                     value = ""
+                # initHashSet() sentinel: resolve to correct Nim set initialiser
+                if value == "initHashSet()":
+                    import re as _re2
+                    if "HashSet[" in annotation:
+                        _m = _re2.search(r"HashSet\[(.+)\]", annotation)
+                        if _m:
+                            value = f"initHashSet[{_m.group(1)}]()"
+                        ParserState.nim_imports.add("sets")
+                    elif annotation.startswith("set["):
+                        value = "{}"  # built-in ordinal set empty literal
+                    else:
+                        ParserState.nim_imports.add("sets")
+                        # bare fallback — no type params available
                 if value:
                     result += f" = {value}"
     return result
@@ -793,6 +819,17 @@ def to_nim(self):
     if rhs_type not in ("enum_def", "subrange_def", "constrained_subrange_def"):
         ParserState.symbol_table.add(name, value, "type")
     return f"type {name}{params} = {value}"
+
+
+# --- simple_stmt ---
+@method(print_stmt)
+def to_nim(self):
+    """print_stmt: 'print' star_expressions -> Nim: echo star_expressions
+
+    HPython bare print statement. In Nim output, 'print x' becomes 'echo x'.
+    Multiple comma-separated arguments are passed directly to echo.
+    """
+    return f"echo({self.nodes[0].to_nim()})"
 
 
 # --- simple_stmt ---

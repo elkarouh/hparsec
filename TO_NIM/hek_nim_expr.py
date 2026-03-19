@@ -375,9 +375,33 @@ def to_nim(self, prec=None):
     return f"@[{inner_node.to_nim()}]"
 
 
+@method(empty_set)
+def to_nim(self, prec=None):
+    """empty_set: '{' '}' -> Nim: set[T]{} for ordinal types; initHashSet[T]() for hash sets.
+
+    Returns the sentinel string "initHashSet()" so that the enclosing
+    assignment statement (ann_assign_stmt / decl_ann_assign_stmt) can
+    substitute the correct type-parameterised form by inspecting the
+    declared annotation — exactly the same post-processing pattern used for
+    initTable() / empty dicts.
+
+    Dispatch table (based on the Nim annotation of the LHS variable):
+      set[T]         -> {}              (built-in ordinal set literal)
+      HashSet[T]     -> initHashSet[T]()
+      unknown/bare   -> initHashSet()   (fallback)
+    """
+    # Sentinel — picked up by ann_assign_stmt / decl_ann_assign_stmt
+    return "initHashSet()"
+
+
 @method(empty_dict)
 def to_nim(self, prec=None):
-    """empty_dict: '{' '}' -> Nim: 'initTable()' (requires tables import)"""
+    """empty_dict: '{' ':' '}' -> Nim: initTable() (requires tables import)
+
+    HPython uses {:} as the empty dict literal.  Returns the sentinel string
+    "initTable()" so that the enclosing assignment statement can substitute
+    the correct type-parameterised form (initTable[K, V]()) from the annotation.
+    """
     ParserState.nim_imports.add("tables")
     return "initTable()"
 
@@ -458,7 +482,7 @@ def to_nim(self, prec=None):
 
 @method(atom)
 def to_nim(self, prec=None):
-    """atom: empty_paren | paren_group | empty_list | list_display | empty_dict | dict_display | set_display | '...' | 'None' | 'True' | 'False' | IDENTIFIER | NUMBER | str_concat | STRING"""
+    """atom: empty_paren | paren_group | empty_list | list_display | empty_set | empty_dict | dict_display | set_display | '...' | 'None' | 'True' | 'False' | IDENTIFIER | NUMBER | str_concat | STRING"""
     return self.nodes[0].to_nim(prec)
 
 

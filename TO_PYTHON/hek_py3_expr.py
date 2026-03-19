@@ -315,9 +315,24 @@ def to_py(self, prec=None):
     return f"[{self.nodes[1].to_py()}]"
 
 
+@method(empty_set)
+def to_py(self, prec=None):
+    """empty_set: '{' '}' -> Python: set()
+
+    HPython treats {} as an empty set literal.  Python's {} creates an empty
+    dict, so we always emit set() here.  Use type annotations on the variable
+    to convey the element type; the Nim backend reads those to pick the right
+    Nim initialiser.
+    """
+    return "set()"
+
+
 @method(empty_dict)
 def to_py(self, prec=None):
-    """empty_dict: '{' '}'"""
+    """empty_dict: '{' ':' '}' -> Python: {}
+
+    HPython uses {:} as the empty dict literal to free up {} for empty sets.
+    """
     return "{}"
 
 
@@ -353,7 +368,7 @@ def to_py(self, prec=None):
 @method(atom)
 def to_py(self, prec=None):
     """atom: empty_paren | paren_group | empty_list | list_display
-    | empty_dict | dict_display | set_display | '...'
+    | empty_set | empty_dict | dict_display | set_display | '...'
     | 'None' | 'True' | 'False' | IDENTIFIER | NUMBER
     | str_concat | STRING"""
     return self.nodes[0].to_py(prec)

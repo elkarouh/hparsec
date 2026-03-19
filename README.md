@@ -31,8 +31,10 @@ source.hpy
 - [Tick Attributes](#tick-attributes)
 - [Enum Array Literals](#enum-array-literals)
 - [Named Tuple Literals](#named-tuple-literals)
+- [Functions](#functions)
 - [Classes and Inheritance](#classes-and-inheritance)
 - [Nim-Only Imports](#nim-only-imports)
+- [Print Statement](#print-statement)
 - [Shell Statements](#shell-statements)
 - [Architecture](#architecture)
 - [Known Limitations](#known-limitations)
@@ -170,6 +172,50 @@ var maybe:    ?int         = None
 var grid:     [][]float    = [[1.0, 2.0], [3.0, 4.0]]
 var callback: [(int,)]bool = my_predicate
 ```
+
+### Empty collection literals
+
+HPython uses distinct syntax for empty dicts and empty sets, avoiding
+Python's ambiguity where `{}` means an empty dict rather than an empty set:
+
+| Literal | Meaning | Python output | Nim output |
+|---------|---------|---------------|------------|
+| `{:}` | empty dict | `{}` | `initTable[K, V]()` |
+| `{}` | empty set | `set()` | `initHashSet[T]()` or `{}` (ordinal) |
+
+```python
+var counts:  {str}int = {:}    # empty dict
+var visited: {}str    = {}     # empty HashSet
+var flags:   {}bool   = {}     # empty ordinal set
+```
+
+**Python 3 output:**
+
+```python
+counts:  dict[str, int] = {}
+visited: set[str]       = set()
+flags:   set            = set()
+```
+
+**Nim output:**
+
+```nim
+import tables, sets
+var counts:  Table[string, int] = initTable[string, int]()
+var visited: HashSet[string]    = initHashSet[string]()
+var flags:   set[bool]          = {}
+```
+
+The Nim backend uses the type annotation of the receiving variable to emit
+the correct initialiser. For sets, it distinguishes ordinal element types
+(`bool`, `char`, `byte`, `int8`, `int16`, `uint8`, `uint16`, and any
+user-defined enum registered in the symbol table) from hash-set types:
+
+| Declared type | Nim output |
+|---------------|------------|
+| `HashSet[T]` (`{}str`, `{}int`, …) | `initHashSet[T]()` (imports `sets`) |
+| `set[T]` with ordinal T | `{}` (Nim built-in ordinal set) |
+| no annotation | `initHashSet()` fallback |
 
 ---
 
@@ -388,6 +434,67 @@ Nim output:    `p = (x: 1.0, y: 2.5)`
 
 ---
 
+## Functions
+
+Standard Python `def` syntax is used for all functions, with HPython type
+annotations on parameters and return values.
+
+```python
+def add(a: int, b: int) -> int:
+    return a + b
+
+def greet(name: str) -> str:
+    return f"Hello, {name}"
+```
+
+### Implicit return
+
+When a function has a return-type annotation and its last statement is a bare
+expression (not an explicit `return`), HPython automatically promotes that
+expression to a return value. This lets you write single-expression functions
+in the style of Nim or Kotlin:
+
+```python
+def formatTime(dt: str) -> str:
+    dt.format("HH:mm:ss")
+
+def clamp(x: int, lo: int, hi: int) -> int:
+    max(lo, min(x, hi))
+```
+
+**Python output** — the bare expression is wrapped with `return`:
+
+```python
+def formatTime(dt: str) -> str:
+    return dt.format("HH:mm:ss")
+
+def clamp(x: int, lo: int, hi: int) -> int:
+    return max(lo, min(x, hi))
+```
+
+**Nim output** — the expression is left as-is, since Nim treats the last
+expression in a proc as its implicit return value:
+
+```nim
+proc formatTime(dt: string): string =
+    dt.format("HH:mm:ss")
+
+proc clamp(x: int, lo: int, hi: int): int =
+    max(lo, min(x, hi))
+```
+
+Two rules govern when implicit return fires:
+
+- The function must have a return-type annotation (`-> T`). Functions without
+  one are left unchanged.
+- `-> None` is excluded — a void function's last expression stays as a
+  statement, never becomes a return.
+
+Explicit `return` always works too; implicit return is just a convenience for
+functions whose body is a single expression or ends with one.
+
+---
+
 ## Classes and Inheritance
 
 Standard Python class syntax is fully supported, including inheritance,
@@ -440,6 +547,40 @@ nimport strutils, sequtils, algorithm
 Regular `import` statements are translated automatically: known stdlib modules
 (`os`, `math`, `json`, `re`, `time`) are mapped to their Nim counterparts;
 others are wrapped with `pyImport(...)` via the `nimpy` bridge.
+
+---
+
+## Print Statement
+
+HPython supports Python-2-style `print` without parentheses. The transpiler
+rewrites it to `print(...)` in Python 3 output and `echo(...)` in Nim output,
+so you never need to think about the target.
+
+```python
+print "hello"
+print f"result: {value}"
+print "x =", x
+```
+
+**Python 3 output:**
+
+```python
+print("hello")
+print(f"result: {value}")
+print("x =", x)
+```
+
+**Nim output:**
+
+```nim
+echo("hello")
+echo(fmt"result: {value}")  # strformat imported automatically
+echo("x =", x)
+```
+
+The call form `print(...)` still works unchanged — the parser only intercepts
+`print` when it is *not* immediately followed by `(`, so existing Python 3
+code is never affected.
 
 ---
 
