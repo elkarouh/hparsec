@@ -140,6 +140,36 @@ class Tokenizer:
     import re as _re
     _TICK_RE = _re.compile(r"(\b[A-Za-z_]\w*)'([A-Za-z_]\w*)")
 
+    # Range-operator patterns: the issue is that Python's tokenizer greedily
+    # merges a digit adjacent to '.' into a float literal, so:
+    #   '0..10'  ->  NUMBER('0.')  NUMBER('.10')   (broken)
+    #   'x..10'  ->  NAME('x')  OP('.')  NUMBER('.10')  (broken)
+    #   '0..y'   ->  NUMBER('0.')  OP('.')  NAME('y')   (broken)
+    # We insert a space on each side of '..' / '..<' when a digit is adjacent,
+    # before Python's tokenizer ever sees the source.
+    #   Pass 1:  digit immediately before '..' -> insert space between them
+    #   Pass 2:  digit immediately after  '..' -> insert space between them
+    _RANGE_LEFT_RE  = _re.compile(r'(\d)(\.\.<?)')   # '0..'  -> '0 ..'
+    _RANGE_RIGHT_RE = _re.compile(r'(\.\.<?)(\d)')   # '..10' -> '.. 10'
+
+    @staticmethod
+    def _preprocess_range_operators(s):
+        """Insert spaces around '..' and '..<' when a digit is directly adjacent.
+
+        Python's tokenizer merges digits and dots into floats (e.g. '0.' and
+        '.10'), which breaks range literals written without spaces.  Two regex
+        passes cover all problem combinations::
+
+            0..10   -> 0 .. 10
+            0..<10  -> 0 ..< 10
+            x..10   -> x.. 10
+            0..y    -> 0 ..y    (right side fine: '..y' = OP OP NAME)
+            x..y    -> x..y     (both sides fine already)
+        """
+        s = Tokenizer._RANGE_LEFT_RE.sub(r'\1 \2', s)
+        s = Tokenizer._RANGE_RIGHT_RE.sub(r'\1 \2', s)
+        return s
+
     @staticmethod
     def _preprocess_tick_attributes(s):
         """Replace Ada-style tick attributes (e.g. Type'First) with
@@ -148,6 +178,7 @@ class Tokenizer:
 
     def __init__(self, s):
         s = self._preprocess_tick_attributes(s)
+        s = self._preprocess_range_operators(s)
         self.tokengen = tokenize_string(s)
         self.source_lines = s.splitlines(True)  # keep line endings for span extraction
         self.tokens = []  # a list of 2-tuples (token, list_of_expected_but_failed_tokens)
