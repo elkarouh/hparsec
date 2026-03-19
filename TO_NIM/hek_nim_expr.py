@@ -1247,15 +1247,19 @@ def to_nim(self, prec=None):
 
 @method(slice_2)
 def to_nim(self, prec=None):
-    """slice_2: expression ':' expression -> Nim: a[lo..<hi]"""
-    # a:b -> a..<b (exclusive end)
-    return f"{self.nodes[0].to_nim()}..<{self.nodes[2].to_nim()}"
+    """slice_2: expression ':' expression -> Nim: a[lo..<hi] or a[lo..^n] for negative index"""
+    lo = self.nodes[0].to_nim()
+    hi = self.nodes[2].to_nim()
+    # Negative index: a[lo:-n] -> a[lo..^n]
+    if hi.startswith("-") and hi[1:].isdigit():
+        return f"{lo}..^{hi[1:]}"
+    return f"{lo}..<{hi}"
 
 
 @method(slice_1_start)
 def to_nim(self, prec=None):
     """slice_1_start: expression ':' -> Nim: a[lo..^1]"""
-    return f"{self.nodes[0].to_nim()}..<len"
+    return f"{self.nodes[0].to_nim()}..^1"
 
 
 @method(slice_1_stop)

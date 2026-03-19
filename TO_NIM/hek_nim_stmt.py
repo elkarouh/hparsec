@@ -108,6 +108,9 @@ def to_nim(self):
         prefix = ""
     else:
         prefix = "var "
+    # Nim's implicit 'result' variable: no var needed inside typed procs
+    if lhs == "result" and getattr(ParserState, '_current_return_type', ''):
+        prefix = ""
     # Record type in symbol table (after checking for re-declaration)
     name = self.nodes[0].to_nim() if hasattr(self.nodes[0], "to_nim") else None
     if name and rhs_node and ParserState.symbol_table.depth() > 0:
@@ -150,7 +153,13 @@ def to_nim(self):
     # Record type in symbol table
     if ParserState.symbol_table.depth() > 0:
         ParserState.symbol_table.add(name, annotation, "var")
-    result = f"var {name}: {annotation}"
+    # Nim's implicit result variable: skip var and type inside typed procs
+    if name == "result" and getattr(ParserState, '_current_return_type', ''):
+        kw = ""
+        result = f"{name}"  # just 'result', no type annotation needed
+    else:
+        kw = "var "
+        result = f"{kw}{name}: {annotation}"
     for node in self.nodes[3:]:
         if not hasattr(node, "nodes") or not node.nodes:
             continue

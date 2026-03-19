@@ -327,6 +327,10 @@ def to_nim(self, indent=0):
     # Nim tuple unpacking in for: for x, y in seq -> for (x, y) in seq
     if "," in target and not target.startswith("("):
         target = f"({target})"
+        # Two-variable unpacking (i, elem) needs .pairs for index iteration
+        parts = [p.strip() for p in target.strip("()").split(",")]
+        if len(parts) == 2 and not iterable.endswith(".pairs"):
+            iterable += ".pairs"
     hc = _block_inline_header_comment(self.nodes[2])
     body = self.nodes[2].to_nim(indent + 1)
     result = f"{_ind(indent)}for {target} in {iterable}:{hc}\n{body}"
@@ -979,6 +983,11 @@ def to_nim(self, indent=0):
     body = block_node.to_nim(indent + 1) if block_node else ""
     ParserState.symbol_table.pop_scope()
     ParserState._current_return_type = ""
+    # Strip trailing bare result -- Nim implicit return variable makes it redundant
+    if ret_ann and body:
+        _blines = body.rstrip().splitlines()
+        if _blines and _blines[-1].strip() == "result":
+            body = chr(10).join(_blines[:-1]) + chr(10)
     _shadow_vars = []
     # Add var to params that are mutated in body (assigned to or .add called)
     if params and body:

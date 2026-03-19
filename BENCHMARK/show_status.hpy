@@ -10,8 +10,8 @@ def getTestStatusLines() -> []str:
 
 def parseRunningTest(lines: []str) -> str:
   "Extract the currently running test name from status lines."
-  result : str = ""
-  for i, line in enumerate(lines):
+  result = ""
+  for i, line in lines:
     if line.strip() == "RUNNING:":
       if i + 1 < len(lines):
         test : str = lines[i + 1].strip()
