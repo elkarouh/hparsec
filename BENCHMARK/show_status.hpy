@@ -68,7 +68,7 @@ while True:
 
   # Track newly completed tests
   for test in parseCompletedTests(lines):
-    if not completedTests.contains(test):
+    if test not in completedTests:
       completedTests.add(test)
       intervalTests.add(test)
 
