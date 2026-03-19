@@ -108,12 +108,30 @@ def to_nim(self):
         prefix = ""
     # Record type in symbol table (after checking for re-declaration)
     name = self.nodes[0].to_nim() if hasattr(self.nodes[0], "to_nim") else None
-    if name and rhs_node and ParserState.symbol_table.depth() > 0:
+    if name and rhs_node:
         inferred = _infer_literal_nim_type(rhs_node)
-        ParserState.symbol_table.add(name, inferred, "var")
+        if inferred is not None:
+            ParserState.symbol_table.add(name, inferred, "var")
     if prefix == "var " and len(parts) == 2 and parts[1] in ("@[]", "@{}", "initTable()"):
         import sys as _sys
         print(f"Error: '{lhs} = {parts[1]}' needs a type annotation (e.g. '{lhs}: Type = {parts[1]}')", file=_sys.stderr)
+    # When re-assigning initHashSet()/initTable() to an existing variable, add type param
+    if len(parts) == 2 and parts[1] == "initHashSet()":
+        sym = ParserState.symbol_table.lookup(lhs)
+        if sym:
+            stype = sym.get("type") or ""
+            import re as _re_hs
+            m = _re_hs.match(r"HashSet\[(\w+)\]", stype)
+            if m:
+                parts[1] = f"initHashSet[{m.group(1)}]()"
+    if len(parts) == 2 and parts[1] == "initTable()":
+        sym = ParserState.symbol_table.lookup(lhs)
+        if sym:
+            stype = sym.get("type") or ""
+            import re as _re_tb
+            m = _re_tb.match(r"Table\[([^,]+),\s*([^\]]+)\]", stype)
+            if m:
+                parts[1] = f"initTable[{m.group(1)}, {m.group(2)}]()"
     return prefix + " = ".join(parts)
 
 
@@ -146,8 +164,7 @@ def to_nim(self):
     name = self.nodes[0].to_nim()
     annotation = self.nodes[2].to_nim()
     # Record type in symbol table
-    if ParserState.symbol_table.depth() > 0:
-        ParserState.symbol_table.add(name, annotation, "var")
+    ParserState.symbol_table.add(name, annotation, "var")
     # Nim's implicit result variable: skip var and type inside typed procs
     if name == "result" and getattr(ParserState, '_current_return_type', ''):
         kw = ""
@@ -200,8 +217,7 @@ def to_nim(self):
     keyword = self.nodes[0].nodes[0]
     name = self.nodes[1].to_nim()
     annotation = self.nodes[3].to_nim()
-    if ParserState.symbol_table.depth() > 0:
-        ParserState.symbol_table.add(name, annotation, keyword)
+    ParserState.symbol_table.add(name, annotation, keyword)
     result = f"{keyword} {name}: {annotation}"
     for node in self.nodes[4:]:
         if not hasattr(node, "nodes") or not node.nodes:

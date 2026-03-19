@@ -82,7 +82,7 @@ while True:
       if len(intervalTests) > 0:
         for test in intervalTests:
           print "< 1 min: ", test
-        intervalTests = {}str
+        intervalTests = {}
       else:
         print "(no new tests completed yet)"
 
