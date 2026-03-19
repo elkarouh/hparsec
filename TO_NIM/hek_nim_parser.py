@@ -1637,12 +1637,18 @@ def to_nim(self, indent=0):
                     else:
                         for child in seq.nodes:
                             if hasattr(child, "to_nim"):
-                                parts.append(_ind(indent) + child.to_nim())
+                                val = child.to_nim()
+                                if val is not None:
+                                    parts.append(_ind(indent) + val)
         elif hasattr(node, "to_nim"):
             try:
-                parts.append(node.to_nim(indent))
+                val = node.to_nim(indent)
+                if val is not None:
+                    parts.append(val)
             except TypeError:
-                parts.append(_ind(indent) + node.to_nim())
+                val = node.to_nim()
+                if val is not None:
+                    parts.append(_ind(indent) + val)
 
     if not parts:
         parts = [_ind(indent) + self.nodes[0].to_nim()]

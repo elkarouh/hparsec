@@ -47,7 +47,6 @@ _AUGOP_TO_NIM = {
 
 # Python stdlib module -> Nim import mapping
 _PY_MODULE_TO_NIM = {
-    "sys": "os",           # sys.argv -> paramStr(), sys.exit -> quit()
     "os": "os",
     "os.path": "os",
     "typing": None,        # typing imports are erased
@@ -436,7 +435,8 @@ def to_nim(self):
     # Map known Python stdlib modules to Nim imports
     nim_module = _PY_MODULE_TO_NIM.get(module)
     if nim_module is not None:
-        return f"import {nim_module}"
+        ParserState.nim_imports.add(nim_module)
+        return None  # handled via nim_imports
     ParserState.nim_imports.add("nimpy")
     return f'let {local} = pyImport("{module}")'  
 
@@ -683,7 +683,10 @@ def to_nim(self):
     # Check if module has a known Nim equivalent
     nim_module = _PY_MODULE_TO_NIM.get(module)
     if nim_module is not None:
-        return f"import {nim_module}"
+        if names_str and names_str != "*":
+            return f"from {nim_module} import {names_str}"
+        ParserState.nim_imports.add(nim_module)
+        return None  # handled via nim_imports
     # Split names and generate one let per name
     # names_str may be "X", "X, Y", "(X, Y)", or "X as A"
     raw = names_str.strip("()")

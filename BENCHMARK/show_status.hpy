@@ -45,7 +45,7 @@ def parseStatusSummary(lines: []str) -> []str:
 
 def formatTime() -> str:
   "Return current time as HH:MM:SS string."
-  time.strftime("%H:%M:%S")
+  str(time.strftime("%H:%M:%S"))
 
 # Main program
 print "Current directory: ", os.getcwd()
@@ -64,7 +64,7 @@ print "Initial tests: ", len(completedTests)
 while True:
   time.sleep(60) # one minute polling interval
   let lines : []str = getTestStatusLines()
-  let currentMinute : int = int(time.strftime("%M"))
+  let currentMinute : int = parseInt(str(time.strftime("%M")))
 
   # Track newly completed tests
   for test in parseCompletedTests(lines):
@@ -82,7 +82,7 @@ while True:
       if len(intervalTests) > 0:
         for test in intervalTests:
           print "< 1 min: ", test
-        intervalTests = {}
+        intervalTests = {}str
       else:
         print "(no new tests completed yet)"
 

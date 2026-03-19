@@ -87,12 +87,12 @@ class TrieNode:
         var word_count: int = 0
 
         def word_to_digits(word: str) -> []Digit_T:
-            var result: []Digit_T = []
+            var digits: []Digit_T = []
             for c in word.lower():
                 if c not in CHAR_TO_DIGIT:
                     return []
-                result.append(CHAR_TO_DIGIT[c])
-            return result
+                digits.append(CHAR_TO_DIGIT[c])
+            return digits
 
         with open(filename, "r") as f:
             for line in f:
@@ -141,17 +141,17 @@ def main():
     if len(sys.argv) < 3:
         print("Usage: phonecode <dictionary_file> <phone_numbers_file>")
         print("Example: phonecode words.txt phones.txt")
-        sys.exit(1)
+        quit(1)
 
-    let dict_file: str = sys.argv[1]
-    let phone_file: str = sys.argv[2]
+    let dict_file: str = str(sys.argv[1])
+    let phone_file: str = str(sys.argv[2])
 
     if not os.path.exists(dict_file):
         print(f"Error: Dictionary file not found: {dict_file}")
-        sys.exit(1)
+        quit(1)
     if not os.path.exists(phone_file):
         print(f"Error: Phone numbers file not found: {phone_file}")
-        sys.exit(1)
+        quit(1)
 
     var trie: TrieNode = TrieNode(dict_file, True)
 

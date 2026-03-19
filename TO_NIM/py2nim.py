@@ -241,6 +241,28 @@ def translate(code):
                 insert_pos = i
                 break
         output.insert(insert_pos, import_line)
+        # When nimpy is used, emit a len() helper for PyObject
+        if "nimpy" in ParserState.nim_imports:
+            helper = 'proc len(o: PyObject): int = pyBuiltinsModule().len(o).to(int)'
+            # Insert right after the pyImport lines (find last pyImport line)
+            helper_pos = len(output)
+            for j in range(len(output) - 1, -1, -1):
+                if 'pyImport(' in output[j]:
+                    helper_pos = j + 1
+                    break
+            output.insert(helper_pos, helper)
+            # If sys was imported via pyImport, initialize sys.argv from Nim args
+            has_sys_import = any('pyImport("sys")' in line for line in output)
+            if has_sys_import:
+                argv_init = 'discard pyBuiltinsModule().setattr(sys, "argv", @[getAppFilename()] & commandLineParams())'
+                output.insert(helper_pos + 1, argv_init)
+                ParserState.nim_imports.add("std/cmdline")
+                ParserState.nim_imports.add("os")
+                # Re-generate the import line with the new module
+                for k, line in enumerate(output):
+                    if line.startswith("import "):
+                        output[k] = "import " + ", ".join(sorted(ParserState.nim_imports))
+                        break
 
     result = chr(10).join(output)
     # Deduplicate top-level type declarations.

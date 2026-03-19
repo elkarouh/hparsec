@@ -736,8 +736,6 @@ _STDLIB_PATTERNS = [
     ("time.perf_counter", "cpuTime", "times"),
     ("time.time", "epochTime", "times"),
     ("time.sleep", "sleep", "os"),
-    ("sys.exit", "quit", None),
-    ("sys.argv", "commandLineParams()", "os"),
 ]
 
 def _translate_stdlib_patterns(expr):
@@ -755,16 +753,6 @@ def _translate_stdlib_patterns(expr):
                 ParserState.nim_imports.add(nim_import)
             return nim_equiv + expr[len(py_pattern):]
 
-    # sys.argv[N] -> paramStr(N)
-    import re as _re_sys
-    _argv_match = _re_sys.match(r'commandLineParams\(\)\[(\d+)\]', expr)
-    if _argv_match:
-        ParserState.nim_imports.add("os")
-        return f"paramStr({_argv_match.group(1)})"
-    # len(sys.argv) -> paramCount() + 1
-    if "len(commandLineParams())" in expr:
-        ParserState.nim_imports.add("os")
-        expr = expr.replace("len(commandLineParams())", "(paramCount() + 1)")
     # 'sep'.join(x) -> x.join("sep") — Python join has receiver/arg swapped vs Nim
     import re as _re
     m = _re.match(r"^(.+)\.join\((.+)\)$", expr)
