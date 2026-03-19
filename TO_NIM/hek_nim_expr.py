@@ -192,7 +192,9 @@ def to_nim(self, prec=None):
 
 @method(STRING)
 def to_nim(self, prec=None):
-    """STRING: string literal -> Nim: single-quoted strings become double-quoted; triple-quoted become ## doc-comments"""
+    """STRING: string literal -> Nim: single-quoted strings become double-quoted; triple-quoted become ## doc-comments.
+    If the entire string content is a __bash_*__ placeholder (e.g. "$1" tokenised as "__bash_arg1__"),
+    emit the Nim call directly (paramStr(1) etc.) instead of a string literal."""
     s = self.node
     # Convert triple-quoted strings to Nim ## comments
     triple_dq = chr(34)*3
@@ -201,6 +203,13 @@ def to_nim(self, prec=None):
         inner = s[3:-3]
         comment_lines = ["## " + line for line in inner.strip().splitlines()]
         return chr(10).join(comment_lines)
+    # Unwrap single- or double-quoted string and check for a bash placeholder
+    if (s.startswith(chr(34)) and s.endswith(chr(34)) and len(s) > 2) or \
+       (s.startswith(chr(39)) and s.endswith(chr(39)) and len(s) > 2):
+        inner = s[1:-1]
+        if inner.startswith("__bash_") and inner.endswith("__"):
+            from hek_nim_parser import _bash_to_nim
+            return _bash_to_nim(inner)
     # Nim uses double quotes for strings; single quotes are char literals
     if s.startswith(chr(39)) and s.endswith(chr(39)) and len(s) > 2:
         inner = s[1:-1]

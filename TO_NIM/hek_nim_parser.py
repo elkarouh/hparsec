@@ -56,15 +56,6 @@ def _is_new_method(class_name, method_name):
 
 _BASH_NIM = {
     "__bash_arg0__": "getAppFilename()",
-    "__bash_arg1__": "paramStr(1)",
-    "__bash_arg2__": "paramStr(2)",
-    "__bash_arg3__": "paramStr(3)",
-    "__bash_arg4__": "paramStr(4)",
-    "__bash_arg5__": "paramStr(5)",
-    "__bash_arg6__": "paramStr(6)",
-    "__bash_arg7__": "paramStr(7)",
-    "__bash_arg8__": "paramStr(8)",
-    "__bash_arg9__": "paramStr(9)",
     "__bash_args__": "commandLineParams()",
     "__bash_argc__": "paramCount()",
 }
@@ -74,11 +65,14 @@ def _bash_to_nim(placeholder):
     """Translate a __bash_*__ placeholder to its Nim equivalent.
 
     Dispatch table:
-      $0        -> getAppFilename()      (requires os)
-      $1 .. $9  -> paramStr(N)           (requires os)
-      $@        -> commandLineParams()   (requires os)
-      $#        -> paramCount()          (requires os)
-      $NAME     -> getEnv("NAME")        (requires os)
+      $0        -> getAppFilename()                          (requires os)
+      $1 .. $9  -> (if paramCount() >= N: paramStr(N) else: "")
+                   Guards against IndexDefect when the script is called
+                   with fewer arguments than expected, matching bash
+                   semantics where unset positional params expand to "".
+      $@        -> commandLineParams()                       (requires os)
+      $#        -> paramCount()                              (requires os)
+      $NAME     -> getEnv("NAME")                           (requires os)
 
     All forms add ``os`` to ParserState.nim_imports so that the translate()
     driver inserts ``import os`` at the top of the output.
@@ -86,6 +80,13 @@ def _bash_to_nim(placeholder):
     if placeholder in _BASH_NIM:
         ParserState.nim_imports.add("os")
         return _BASH_NIM[placeholder]
+    # $1 .. $9 — safe, bash-compatible: return "" when argument is absent
+    if placeholder.startswith("__bash_arg") and placeholder.endswith("__"):
+        num_str = placeholder[len("__bash_arg"):-2]
+        if num_str.isdigit() and num_str != "0":
+            n = int(num_str)
+            ParserState.nim_imports.add("os")
+            return f'(if paramCount() >= {n}: paramStr({n}) else: "")'
     if placeholder.startswith("__bash_env_") and placeholder.endswith("__"):
         env_name = placeholder[len("__bash_env_"):-2]
         ParserState.nim_imports.add("os")
@@ -107,7 +108,7 @@ def to_nim(self, indent=0, is_virtual=False, class_name=None, parent_name=None, 
     lines = []
     fields = []
     methods = []
-    
+
     for node in self.nodes:
         tname = type(node).__name__
         if tname in ("Fmap", "Filter"):
@@ -168,7 +169,7 @@ def to_nim(self, indent=0, is_virtual=False, class_name=None, parent_name=None, 
                 lines.append(node.to_nim(indent))
             except TypeError:
                 lines.append(_ind(indent) + node.to_nim())
-    
+
     if class_name:  # Process all classes with fields/methods
         result_lines = []
         field_defaults = []  # list of (field_name, default_expr) for constructor init
@@ -188,12 +189,12 @@ def to_nim(self, indent=0, is_virtual=False, class_name=None, parent_name=None, 
             # Strip default value: Nim object fields don't support inline defaults
             line = _re.sub(r' = .+$', '', line)
             result_lines.append(line)
-        
+
         # Emit a blank line after fields for readability
         if fields:
             result_lines.append("")
 
-        
+
         inits = []
         other_methods = []
         for method in methods:
@@ -215,7 +216,7 @@ def to_nim(self, indent=0, is_virtual=False, class_name=None, parent_name=None, 
                         else:
                             other_methods.append((func_node, method_name))
                         break
-        
+
         # Register all method names for this class
         if class_name:
             _class_methods[class_name] = set()
@@ -229,7 +230,7 @@ def to_nim(self, indent=0, is_virtual=False, class_name=None, parent_name=None, 
         # Use base_indent for procs/methods (top level), not the indented value
         base_indent = getattr(self, '_base_indent', indent)
         class_type = class_name + type_params if class_name else None
-        
+
         # Emit forward declarations for methods so __init__ can call them
         if inits and other_methods:
             for func_node_m, mname in other_methods:
@@ -248,7 +249,7 @@ def to_nim(self, indent=0, is_virtual=False, class_name=None, parent_name=None, 
             init_lines, new_lines = _generate_init_new(func_node, base_indent, class_name, parent_name, is_virtual_class, type_params, field_defaults=field_defaults)
             result_lines.extend(init_lines)
             result_lines.extend(new_lines)
-        
+
 
         # If no __init__ but class needs a constructor, generate a default newClassName
         if not inits and class_name:
@@ -263,12 +264,12 @@ def to_nim(self, indent=0, is_virtual=False, class_name=None, parent_name=None, 
             # Generate methods at top level (same indent as type definition)
             method_lines = _generate_method_decl(func_node, base_indent, class_name, parent_name, is_virtual_class, type_params)
             result_lines.extend(method_lines)
-        
+
         # If no fields or methods, emit discard for empty body
         if not result_lines:
             result_lines.append(_ind(indent) + "discard")
         return "\n".join(result_lines)
-    
+
     # For non-class blocks, if empty emit discard
     if not lines:
         return _ind(indent) + "discard"
@@ -1379,7 +1380,7 @@ def to_nim(self, indent=0):
     # Always use is_virtual=True for block processing to get init/new procs
     # The 'ref' keyword is controlled separately
     body = block_node.to_nim(indent + 1, is_virtual=True, class_name=name, parent_name=parent_name, type_params=type_params) if block_node else ""
-    
+
     parent = f" of {parent_name}" if parent_name else " of RootObj"
     # Check field declarations for self-reference (e.g., children: array[X, TrieNode])
     # Only match lines that look like field decls: "    name: type"
@@ -1647,12 +1648,12 @@ def to_nim(self, indent=0):
         nim_kw = "let"
 
     if target_name:
-        lines.append(f"{ind}let _r = execCmdEx({cmd_str}){timeout_comment}")
+        lines.append(f"{ind}let execResult = execCmdEx({cmd_str}){timeout_comment}")
         if kw == "shellLines":
-            lines.append(f"{ind}{nim_kw} {target_name} = _r[0].splitLines()")
+            lines.append(f"{ind}{nim_kw} {target_name} = execResult[0].splitLines()")
         else:
             lines.append(
-                f"{ind}{nim_kw} {target_name} = (output: _r[0], code: _r[1])"
+                f"{ind}{nim_kw} {target_name} = (output: execResult[0], code: execResult[1])"
             )
     else:
         lines.append(f"{ind}discard execCmd({cmd_str}){timeout_comment}")
@@ -1898,10 +1899,10 @@ def _generate_init_new(func_node, indent, class_name, parent_name, is_virtual=Tr
     class_type = class_name + type_params
     init_lines = []
     new_lines = []
-    
+
     block_node = None
     param_list_node = None
-    
+
     for node in func_node.nodes:
         tname = type(node).__name__
         if tname == "block":
@@ -1911,7 +1912,7 @@ def _generate_init_new(func_node, indent, class_name, parent_name, is_virtual=Tr
                 if type(st).__name__ == "param_list":
                     param_list_node = st
                     break
-    
+
     param_strs = []
     param_names = []
     if param_list_node:
@@ -1934,9 +1935,9 @@ def _generate_init_new(func_node, indent, class_name, parent_name, is_virtual=Tr
                 # Use param_plain.to_nim() to get name: type = default
                 param_strs.append(param_node.to_nim())
                 param_names.append(pname)
-    
+
     params_str = ", ".join(param_strs)
-    
+
     init_name = f"init{class_name}"
     # ref types: self: ClassName; value types: self: var ClassName
     is_ref = is_virtual
@@ -1945,7 +1946,7 @@ def _generate_init_new(func_node, indent, class_name, parent_name, is_virtual=Tr
     else:
         self_param = f"self: var {class_type}"
     init_sig = f"{_ind(indent)}proc {init_name}{type_params}({self_param}{', ' + params_str if params_str else ''}) ="
-    
+
     init_body = []
     if block_node:
         ParserState.symbol_table.push_scope(f"init{class_name}")
@@ -1966,14 +1967,14 @@ def _generate_init_new(func_node, indent, class_name, parent_name, is_virtual=Tr
                     args = match.group(1)
                     line = line.replace(f"super().__init__({args})", f"init{parent_name}(self, {args})")
                 init_body[i] = line
-    
+
     init_lines.append(init_sig)
     # Initialize fields with default values before user's init body
     if field_defaults:
         for fname, fdefault in field_defaults:
             init_lines.append(f"{_ind(indent + 1)}self.{fname} = {fdefault}")
     init_lines.extend(init_body)
-    
+
     new_name = f"new{class_name}"
     export = "*" if indent == 0 else ""
     new_sig = f"{_ind(indent)}proc {new_name}{export}{type_params}({params_str}): {class_type} ="
@@ -1984,22 +1985,22 @@ def _generate_init_new(func_node, indent, class_name, parent_name, is_virtual=Tr
         new_body.append(f"{_ind(indent + 1)}{init_name}(result, {', '.join(param_names)})")
     else:
         new_body.append(f"{_ind(indent + 1)}{init_name}(result)")
-    
+
     new_lines.append(new_sig)
     new_lines.extend(new_body)
-    
+
     return init_lines, new_lines
 
 
 def _generate_method_decl(func_node, indent, class_name, parent_name, is_virtual=False, type_params=""):
     """Generate method declaration. Uses 'method' for virtual, 'proc' for non-virtual."""
     lines = []
-    
+
     name = ""
     params = []
     ret_ann = ""
     block_node = None
-    
+
     for node in func_node.nodes:
         tname = type(node).__name__
         if tname == "IDENTIFIER":
@@ -2042,7 +2043,7 @@ def _generate_method_decl(func_node, indent, class_name, parent_name, is_virtual
             ret_ann = node.to_nim()
         elif tname == "block":
             block_node = node
-    
+
     # Store return type so return_stmt can use it for Option wrapping
     ParserState._current_return_type = ret_ann  # e.g. ': Option[string]'
     # Push scope and register params for body translation
