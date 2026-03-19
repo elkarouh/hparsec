@@ -6,7 +6,8 @@ type-safe code in a familiar Python syntax and target either ecosystem.
 
 Every valid Python 3.14 file is also valid HPython. The extra features are
 purely additive: left-to-right type annotations, Ada-style enums and variant
-records, tick attributes, range expressions, and `case/when` pattern matching.
+records, tick attributes, range expressions, `case/when` pattern matching,
+and first-class shell command integration.
 
 ```
 source.hpy
@@ -32,6 +33,7 @@ source.hpy
 - [Named Tuple Literals](#named-tuple-literals)
 - [Classes and Inheritance](#classes-and-inheritance)
 - [Nim-Only Imports](#nim-only-imports)
+- [Shell Statements](#shell-statements)
 - [Architecture](#architecture)
 - [Known Limitations](#known-limitations)
 
@@ -441,6 +443,96 @@ others are wrapped with `pyImport(...)` via the `nimpy` bridge.
 
 ---
 
+## Shell Statements
+
+HPython has first-class syntax for running shell commands. The `shell` and
+`shellLines` keywords integrate subprocess execution directly into the
+language, with variable interpolation, output capture, and options for working
+directory and timeout.
+
+### Basic usage
+
+```python
+let result = shell: echo hello
+print(result.output)   # stdout as a string
+print(result.stderr)   # stderr as a string
+print(result.code)     # exit code as int
+```
+
+### Variable interpolation
+
+Use `{name}` anywhere in the command body to interpolate an HPython variable.
+The transpiler detects the braces and emits an f-string automatically.
+
+```python
+let name = "world"
+let result = shell: echo hello {name}
+print(result.output)
+```
+
+### Getting output as lines
+
+`shellLines` captures stdout and splits it into a list of strings, one per
+line — no `.splitlines()` call needed at the call site.
+
+```python
+let lines = shellLines: ls -la
+for line in lines:
+    print(line)
+```
+
+### Options
+
+Options are passed in parentheses between the keyword and the colon.
+
+```python
+# Working directory
+let result = shell(cwd = "/tmp"): pwd
+
+# Timeout in milliseconds
+let result = shell(timeout = 5000): slow-command
+
+# Both together
+let result = shell(cwd = "/tmp", timeout = 3000): ls -la
+```
+
+### Discarding output
+
+Omit the assignment target when you don't need the result.
+
+```python
+shell: rm -rf /tmp/build
+```
+
+### Inside functions
+
+`shell` is a statement, so it works at any indentation level.
+
+```python
+def build(target: str) -> str:
+    let result = shell: make {target}
+    if result.code != 0:
+        raise RuntimeError(result.stderr)
+    return result.output
+```
+
+### Translation reference
+
+| HPython | Python 3 | Nim |
+|---------|----------|-----|
+| `let r = shell: cmd` | `_r = subprocess.run("""cmd""", shell=True, capture_output=True, text=True)` then `SimpleNamespace(output=…, stderr=…, code=…)` | `let _r = execCmdEx("cmd")` then `(output: _r[0], code: _r[1])` |
+| `let ls = shellLines: cmd` | `…run(…).stdout.splitlines()` | `execCmdEx("cmd")[0].splitLines()` |
+| `shell: cmd` | `subprocess.run("""cmd""", shell=True)` | `discard execCmd("cmd")` |
+| `shell(cwd="/x"): cmd` | `…run(…, cwd="/x")` | `execCmdEx("cd /x && cmd")` |
+| `shell(timeout=5000): cmd` | `…run(…, timeout=5.0)` | `execCmdEx("cmd")  # timeout: 5000ms` |
+| `{var}` in body | `f"""…{var}…"""` | `fmt"""…{var}…"""` (imports `strformat`) |
+
+The required imports (`subprocess`, `types`, `osproc`, `strformat`) are
+inserted automatically at the top of the output — you never write them by
+hand.
+
+---
+
 ## Architecture
 
 ```
@@ -459,7 +551,7 @@ hparsec/
 ├── HPYTHON_GRAMMAR/            Language-neutral grammar definitions
 │   ├── py3expr.py              Expression grammar (precedence, all operators)
 │   ├── py3stmt.py              Simple statements (assignment, import, raise, …)
-│   ├── py3compound_stmt.py     Compound statements (if/while/for/def/class/…)
+│   ├── py3compound_stmt.py     Compound statements (if/while/for/def/class/shell/…)
 │   └── py_declarations.py      HPython type annotations and type declarations
 │
 ├── TO_PYTHON/                  Python 3 backend

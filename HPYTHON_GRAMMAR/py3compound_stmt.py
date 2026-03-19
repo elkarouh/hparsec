@@ -357,6 +357,43 @@ async_with_stmt = (
     ikw("async") + ikw("with") + with_item + (COMMA + with_item)[:] + COLON + block
 )
 
+# ---------------------------------------------------------------------------
+# Shell statement
+#
+# Syntax:
+#   shell: cmd tokens...
+#   let/var/const name = shell: cmd tokens...
+#   let/var/const name = shell(opt=val, ...): cmd tokens...
+#   let/var/const name = shellLines: cmd tokens...
+#
+# The shell body is the raw token sequence from after ':' to end-of-line.
+# Variable interpolation uses {name} syntax in the body (becomes an f-string).
+# ---------------------------------------------------------------------------
+
+import tokenize as _tkn_sh
+
+# Any token that is not a line-ending: NEWLINE, NL, or ENDMARKER.
+# filt(pred, shift) is the idiomatic pattern used throughout this codebase.
+_SHELL_STOP = frozenset({_tkn_sh.NEWLINE, _tkn_sh.NL, _tkn_sh.ENDMARKER, 0})
+shell_body_token = filt(
+    lambda tok: getattr(tok, "type", 0) not in _SHELL_STOP,
+    shift,
+)
+
+# Single keyword option: key = value  (the '=' is ignored)
+shell_opt = IDENTIFIER + iop("=") + expression
+# Parenthesised option list: (key=val, key=val, ...)
+shell_opts = LPAREN + shell_opt + (COMMA + shell_opt)[:] + RPAREN
+
+# Keyword — shellLines must come before shell to avoid prefix match
+shell_kw = literal("shellLines") | literal("shell")
+
+# Optional assignment target: let/var/const name =
+shell_target = decl_keyword + IDENTIFIER + V_EQUAL
+
+# Full shell statement: [target =] keyword [(opts)]: body...
+shell_stmt = shell_target[:] + shell_kw + shell_opts[:] + COLON + shell_body_token[1:] + ignore(NEWLINE)
+
 # --- compound_stmt: choice of all compound statement types ---
 compound_stmt = (
     if_stmt
@@ -366,6 +403,7 @@ compound_stmt = (
     | with_stmt_paren
     | with_stmt
     | case_stmt
+    | shell_stmt
     | async_func_def
     | func_def
     | type_block_stmt

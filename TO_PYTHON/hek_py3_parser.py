@@ -1147,10 +1147,219 @@ def to_py(self, indent=0):
     return f"{_ind(indent)}async with {', '.join(items)}:{hc}\n{body}"
 
 
+# ---------------------------------------------------------------------------
+# Shell statement helpers and to_py()
+# ---------------------------------------------------------------------------
+
+def _extract_shell_opts(node):
+    """Walk a shell_opts Several_Times node, returning a {key: value_str} dict.
+
+    shell_opt grammar: IDENTIFIER iop("=") expression
+    Terminal nodes (STRING, NUMBER, IDENTIFIER) all store their string value in
+    .node regardless of what @method() renamed their class to.  We therefore
+    match terminals by isinstance(node.node, str) rather than by class name,
+    which is stable across decorator renames.
+    """
+    opts = {}
+
+    def _find_str_value(n):
+        """Return the first plain-string .node value found depth-first.
+
+        Skips IDENTIFIER-valued nodes whose string is a keyword or option-name
+        to avoid returning the key instead of the value.
+        """
+        val = getattr(n, "node", None)
+        if isinstance(val, str):
+            return val
+        if hasattr(n, "nodes"):
+            for c in n.nodes:
+                if c is not None:
+                    r = _find_str_value(c)
+                    if r is not None:
+                        return r
+        return None
+
+    def _walk(n):
+        if n is None:
+            return
+        # A shell_opt Sequence_Parser: first child is IDENTIFIER (key), rest is expression.
+        # @method(IDENTIFIER) renames the class from "Filter" to "IDENTIFIER", so we
+        # match by isidentifier() on the string value rather than the class name.
+        if type(n).__name__ == "Sequence_Parser" and hasattr(n, "nodes") and n.nodes:
+            first = n.nodes[0]
+            first_val = getattr(first, "node", None)
+            if isinstance(first_val, str) and first_val.isidentifier():
+                for sibling in n.nodes[1:]:
+                    val = _find_str_value(sibling)
+                    if val is not None:
+                        opts[first_val] = val
+                        return  # consumed this opt, don't recurse deeper
+        if hasattr(n, "nodes"):
+            for c in n.nodes:
+                _walk(c)
+
+    _walk(node)
+    return opts
+
+
+def _extract_shell_body(body_st):
+    """Reconstruct the shell command string from the body Several_Times node.
+
+    Preserves original spacing using token source positions.
+    Returns (cmd_str, needs_fstring) where needs_fstring is True when any
+    bare '{' or '}' OP token appears (indicating {var} interpolation).
+    """
+    import tokenize as _tkn
+    tokens = []
+    for node in body_st.nodes:
+        tok = getattr(node, "node", None)
+        if tok is not None and hasattr(tok, "string"):
+            tokens.append(tok)
+    if not tokens:
+        return "", False
+
+    parts = []
+    for i, tok in enumerate(tokens):
+        if i > 0:
+            prev = tokens[i - 1]
+            gap = tok.start[1] - prev.end[1]
+            parts.append(" " * max(gap, 1) if gap >= 1 else "")
+        parts.append(tok.string)
+
+    cmd = "".join(parts)
+    needs_fstring = any(
+        tok.type == _tkn.OP and tok.string in ("{", "}")
+        for tok in tokens
+    )
+    return cmd, needs_fstring
+
+
+def _parse_shell_stmt(node):
+    """Decompose a shell_stmt AST node into its logical parts.
+
+    Returns (target_kw, target_name, kw, opts, cmd, needs_fstring) where:
+      target_kw   -- 'let' | 'var' | 'const' | None
+      target_name -- str | None
+      kw          -- 'shell' | 'shellLines'
+      opts        -- dict {str: str}
+      cmd         -- reconstructed command string
+      needs_fstring -- bool (True when {var} interpolation tokens present)
+    """
+    nodes = node.nodes
+
+    # Locate the shell keyword node
+    kw = None
+    kw_idx = -1
+    for i, n in enumerate(nodes):
+        val = getattr(n, "node", None)
+        if isinstance(val, str) and val in ("shell", "shellLines"):
+            kw = val
+            kw_idx = i
+            break
+
+    # Optional assignment target sits before the keyword
+    target_kw = target_name = None
+    if kw_idx > 0:
+        target_st = nodes[0]
+        if hasattr(target_st, "nodes") and target_st.nodes:
+            seq = target_st.nodes[0]
+            if hasattr(seq, "nodes"):
+                for n in seq.nodes:
+                    val = getattr(n, "node", None)
+                    if not isinstance(val, str):
+                        continue
+                    if val in ("let", "var", "const"):
+                        target_kw = val
+                    elif val.isidentifier() and val not in ("let", "var", "const", "="):
+                        # IDENTIFIER node: @method(IDENTIFIER) renames its class to "IDENTIFIER",
+                        # so match by value rather than class name to stay rename-safe.
+                        target_name = val
+
+    # Remaining nodes after the keyword: possibly [opts_st, body_st] or [body_st]
+    opts = {}
+    body_st = None
+    for n in nodes[kw_idx + 1 :]:
+        if type(n).__name__ != "Several_Times" or not n.nodes:
+            continue
+        # Body Several_Times: children are Filter nodes wrapping TokenInfo objects
+        first = n.nodes[0]
+        tok = getattr(first, "node", None)
+        if hasattr(tok, "string") and not isinstance(tok, str):
+            body_st = n
+            break
+        # Otherwise it's the opts Several_Times
+        opts = _extract_shell_opts(n)
+
+    cmd, needs_fstring = _extract_shell_body(body_st) if body_st else ("", False)
+    return target_kw, target_name, kw, opts, cmd, needs_fstring
+
+
+@method(shell_stmt)
+def to_py(self, indent=0):
+    """shell_stmt: [decl_keyword IDENTIFIER '='] ('shell'|'shellLines') [shell_opts] ':' cmd+
+
+    Python output:
+      import subprocess as _subprocess, types as _types  (auto-inserted at top)
+
+      # shell: cmd
+      _subprocess.run(\"\"\"cmd\"\"\", shell=True)
+
+      # let result = shell: cmd
+      _r = _subprocess.run(\"\"\"cmd\"\"\", shell=True, capture_output=True, text=True)
+      result = _types.SimpleNamespace(output=_r.stdout, stderr=_r.stderr, code=_r.returncode)
+
+      # let lines = shellLines: cmd
+      _r = _subprocess.run(\"\"\"cmd\"\"\", shell=True, capture_output=True, text=True)
+      lines = _r.stdout.splitlines()
+
+    Variable interpolation: {name} in cmd body -> f\\\"\\\"\\\"...{name}...\\\"\\\"\\\"
+    Options: cwd=\"/tmp\" -> cwd=\"/tmp\"; timeout=5000 -> timeout=5.0 (ms -> s)
+    """
+    ind = _ind(indent)
+    target_kw, target_name, kw, opts, cmd, needs_fstring = _parse_shell_stmt(self)
+
+    # Mark that shell imports are needed; py2py.translate() inserts them at top
+    ParserState.nim_imports.add("import subprocess as _subprocess")
+    if target_name:
+        ParserState.nim_imports.add("import types as _types")
+
+    q = '"""'
+    cmd_str = f"f{q}{cmd}{q}" if needs_fstring else f"{q}{cmd}{q}"
+
+    run_kwargs = ["shell=True"]
+    if target_name:
+        run_kwargs += ["capture_output=True", "text=True"]
+    if "cwd" in opts:
+        run_kwargs.append(f"cwd={opts['cwd']}")
+    if "timeout" in opts:
+        ms = opts["timeout"]
+        try:
+            run_kwargs.append(f"timeout={int(ms) / 1000}")
+        except ValueError:
+            run_kwargs.append(f"timeout={ms} / 1000")
+
+    kwargs_str = ", ".join(run_kwargs)
+    lines = []
+
+    if target_name:
+        lines.append(f"{ind}_r = _subprocess.run({cmd_str}, {kwargs_str})")
+        if kw == "shellLines":
+            lines.append(f"{ind}{target_name} = _r.stdout.splitlines()")
+        else:
+            lines.append(
+                f"{ind}{target_name} = _types.SimpleNamespace("
+                f"output=_r.stdout, stderr=_r.stderr, code=_r.returncode)"
+            )
+    else:
+        lines.append(f"{ind}_subprocess.run({cmd_str}, {kwargs_str})")
+
+    return "\n".join(lines)
+
+
 # --- compound_stmt ---
 @method(compound_stmt)
 def to_py(self, indent=0):
-    """compound_stmt: if | while | for | try | with | match | def | class | async..."""
+    """compound_stmt: if | while | for | try | with | match | def | class | async... | shell_stmt"""
     return self.nodes[0].to_py(indent)
 
 

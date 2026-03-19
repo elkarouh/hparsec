@@ -1518,10 +1518,93 @@ def to_nim(self, indent=0):
     return f"{_ind(indent)}with {', '.join(items)}:{hc}  # async\n{body}"
 
 
+# ---------------------------------------------------------------------------
+# Shell statement — to_nim()
+# ---------------------------------------------------------------------------
+# Reuse the Python-backend helpers by importing them. They live in
+# hek_py3_parser which is already on the import path via hek_nim_parser's
+# sys.path setup.  We import lazily inside the method to avoid a circular
+# import at module load time.
+
+@method(shell_stmt)
+def to_nim(self, indent=0):
+    """shell_stmt: [decl_keyword IDENTIFIER '='] ('shell'|'shellLines') [shell_opts] ':' cmd+
+
+    Nim output:
+      import osproc  (auto-inserted via ParserState.nim_imports)
+      import strformat  (when {var} interpolation is used)
+
+      # shell: cmd
+      discard execCmd(\"cmd\")
+
+      # let result = shell: cmd
+      let _r = execCmdEx(\"cmd\")
+      let result = (output: _r[0], code: _r[1])
+
+      # let lines = shellLines: cmd
+      let _r = execCmdEx(\"cmd\")
+      let lines = _r[0].splitLines()
+
+    Options:
+      cwd=\"/tmp\"     -> command is prefixed with \"cd /tmp && \"
+      timeout=5000   -> comment added; execCmdEx has no timeout parameter
+    """
+    # Import helpers from Python backend (grammar-neutral extraction utilities)
+    import sys as _sys, os as _os
+    _to_py_dir = _os.path.join(_os.path.dirname(__file__), '..', 'TO_PYTHON')
+    if _to_py_dir not in _sys.path:
+        _sys.path.insert(0, _to_py_dir)
+    from hek_py3_parser import _parse_shell_stmt
+
+    ind = _ind(indent)
+    target_kw, target_name, kw, opts, cmd, needs_fstring = _parse_shell_stmt(self)
+
+    ParserState.nim_imports.add("osproc")
+
+    # cwd: prefix the command with "cd <dir> && "
+    if "cwd" in opts:
+        cwd_val = opts["cwd"].strip('"').strip("'")
+        cmd = f"cd {cwd_val} && {cmd}"
+
+    # timeout comment
+    timeout_comment = ""
+    if "timeout" in opts:
+        timeout_comment = f"  # timeout: {opts['timeout']}ms (execCmdEx has no timeout)"
+
+    if needs_fstring:
+        ParserState.nim_imports.add("strformat")
+        q = '"""'
+        cmd_str = f"fmt{q}{cmd}{q}"
+    else:
+        cmd_str = f'"{cmd}"'
+
+    lines = []
+
+    if target_kw == "let" or target_kw is None and target_name:
+        nim_kw = "let"
+    elif target_kw in ("var",):
+        nim_kw = "var"
+    else:
+        nim_kw = "let"
+
+    if target_name:
+        lines.append(f"{ind}let _r = execCmdEx({cmd_str}){timeout_comment}")
+        if kw == "shellLines":
+            lines.append(f"{ind}{nim_kw} {target_name} = _r[0].splitLines()")
+        else:
+            lines.append(
+                f"{ind}{nim_kw} {target_name} = (output: _r[0], code: _r[1])"
+            )
+    else:
+        lines.append(f"{ind}discard execCmd({cmd_str}){timeout_comment}")
+
+    return "\n".join(lines)
+
+
 # --- compound_stmt ---
 @method(compound_stmt)
 def to_nim(self, indent=0):
-    """compound_stmt: if_stmt | while_stmt | for_stmt | try_stmt | with_stmt | match_stmt | func_def | class_def | decorated_def | async_func_def | async_for_stmt | async_with_stmt"""
+    """compound_stmt: if_stmt | while_stmt | for_stmt | try_stmt | with_stmt | match_stmt | func_def | class_def | decorated_def | async_func_def | async_for_stmt | async_with_stmt | shell_stmt"""
     return self.nodes[0].to_nim(indent)
 
 
