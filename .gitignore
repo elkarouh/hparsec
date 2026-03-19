@@ -30,3 +30,4 @@ BENCHMARK/*.nim
 BENCHMARK/IGNORE/
 files.zip
 BENCHMARK/primes
+BENCHMARK/show_status
