@@ -327,10 +327,6 @@ def to_nim(self, indent=0):
     # Nim tuple unpacking in for: for x, y in seq -> for (x, y) in seq
     if "," in target and not target.startswith("("):
         target = f"({target})"
-        # Two-variable unpacking (i, elem) needs .pairs for index iteration
-        parts = [p.strip() for p in target.strip("()").split(",")]
-        if len(parts) == 2 and not iterable.endswith(".pairs"):
-            iterable += ".pairs"
     hc = _block_inline_header_comment(self.nodes[2])
     body = self.nodes[2].to_nim(indent + 1)
     result = f"{_ind(indent)}for {target} in {iterable}:{hc}\n{body}"

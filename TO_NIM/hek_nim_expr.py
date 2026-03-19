@@ -654,6 +654,10 @@ def to_nim(self, prec=None):
             elif len(args) == 3:
                 return f"countup({args[0]}, {args[1]} - 1, {args[2]})"
             return "0 ..< 0"
+        if raw_name == "enumerate":
+            call_node = self.nodes[1].nodes[0]
+            arg = _extract_call_arg(call_node)
+            return f"{arg}.pairs"
         if raw_name == "ord":
             call_node = self.nodes[1].nodes[0]
             arg = _extract_call_arg(call_node)
