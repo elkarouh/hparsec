@@ -29,3 +29,4 @@ BENCHMARK/h_shortest_path
 BENCHMARK/*.nim
 BENCHMARK/IGNORE/
 files.zip
+BENCHMARK/primes

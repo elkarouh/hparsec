@@ -50,10 +50,6 @@ _PY_MODULE_TO_NIM = {
     "sys": "os",           # sys.argv -> paramStr(), sys.exit -> quit()
     "os": "os",
     "os.path": "os",
-    "math": "math",
-    "json": "json",
-    "re": "re",
-    "time": "times",       # time.perf_counter -> cpuTime()
     "typing": None,        # typing imports are erased
     "stdlib": "stdlib",    # local stdlib module
 }

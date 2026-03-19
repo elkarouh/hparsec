@@ -721,31 +721,45 @@ def to_nim(self, prec=None):
 
 
 # Python stdlib dotted-access patterns -> Nim equivalents
+# These translate Python stdlib calls to native Nim equivalents.
+# The required Nim module is auto-imported when a pattern matches.
+# Only patterns that MUST be native Nim (e.g. need native types for arithmetic)
+# belong here. Everything else goes through pyImport() via nimpy.
 _STDLIB_PATTERNS = [
-    # Order matters: longer patterns first
-    ("os.path.exists", "fileExists"),
-    ("time.perf_counter", "cpuTime"),
-    ("time.time", "epochTime"),
-    ("sys.exit", "quit"),
-    ("sys.argv", "commandLineParams()"),
+    # (python_pattern, nim_equivalent, nim_import_needed)
+    ("os.path.exists", "fileExists", "os"),
+    ("os.getcwd", "getCurrentDir", "os"),
+    ("time.perf_counter", "cpuTime", "times"),
+    ("time.time", "epochTime", "times"),
+    ("time.sleep", "sleep", "os"),
+    ("sys.exit", "quit", None),
+    ("sys.argv", "commandLineParams()", "os"),
 ]
 
 def _translate_stdlib_patterns(expr):
-    if "fileExists" in expr or "paramStr" in expr or "paramCount" in expr:
-        ParserState.nim_imports.add("os")
-    for py_pattern, nim_equiv in _STDLIB_PATTERNS:
+    for py_pattern, nim_equiv, nim_import in _STDLIB_PATTERNS:
         if expr == py_pattern:
+            if nim_import:
+                ParserState.nim_imports.add(nim_import)
             return nim_equiv
         if expr.startswith(py_pattern + "("):
+            if nim_import:
+                ParserState.nim_imports.add(nim_import)
             return nim_equiv + expr[len(py_pattern):]
-        # sys.argv[N] -> paramStr(N)
-        if expr.startswith(py_pattern + "[") and py_pattern == "sys.argv":
-            idx = expr[len("sys.argv["):-1]
-            return f"paramStr({idx})"
-    # len(sys.argv) -> paramCount() + 1 (Python includes program name)
-    if "len(sys.argv)" in expr:
-        expr = expr.replace("len(sys.argv)", "(paramCount() + 1)")
+        if expr.startswith(py_pattern + "["):
+            if nim_import:
+                ParserState.nim_imports.add(nim_import)
+            return nim_equiv + expr[len(py_pattern):]
+
+    # sys.argv[N] -> paramStr(N)
+    import re as _re_sys
+    _argv_match = _re_sys.match(r'commandLineParams\(\)\[(\d+)\]', expr)
+    if _argv_match:
+        ParserState.nim_imports.add("os")
+        return f"paramStr({_argv_match.group(1)})"
+    # len(sys.argv) -> paramCount() + 1
     if "len(commandLineParams())" in expr:
+        ParserState.nim_imports.add("os")
         expr = expr.replace("len(commandLineParams())", "(paramCount() + 1)")
     # 'sep'.join(x) -> x.join("sep") — Python join has receiver/arg swapped vs Nim
     import re as _re
