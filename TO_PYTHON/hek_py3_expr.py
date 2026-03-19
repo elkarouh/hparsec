@@ -242,6 +242,7 @@ for _p in [
 
     @method(_p)
     def to_py(self, prec=None):
+        """Visible operator token: returns operator string unchanged."""
         return self.node
 
 
@@ -334,6 +335,7 @@ def to_py(self, prec=None):
 
 @method(enum_array_display)
 def to_py(self, prec=None):
+    """enum_array_display: '[' enum_key ':' value (',' enum_key ':' value)* ']' -> Python: dict {K: V, ...}"""
     return "{" + self.nodes[1].to_py() + "}"
 
 
@@ -431,14 +433,17 @@ def to_py(self, prec=None):
 # --- range expression (.., ..<) ---
 @method(range_incl_op)
 def to_py(self, prec=None):
+    """range_incl_op: '..' (inclusive range operator) -> Python: used in range(lo, hi + 1)"""
     return ".."
 
 @method(range_excl_op)
 def to_py(self, prec=None):
+    """range_excl_op: '..<' (exclusive upper bound) -> Python: used in range(lo, hi)"""
     return "..<"
 
 @method(range_expr)
 def to_py(self, prec=None):
+    """range_expr: bitor_expr (('..' | '..<') bitor_expr)? -> Python: 'lo .. hi' -> range(lo, hi+1); 'lo ..< hi' -> range(lo, hi)"""
     # lo .. hi  -> range(lo, hi + 1)  (inclusive)
     # lo ..< hi -> range(lo, hi)      (exclusive)
     lo = self.nodes[0].to_py(prec)
@@ -1243,12 +1248,14 @@ if __name__ == "__main__":
 
 @method(named_tuple_field)
 def to_py(self, prec=None):
+    """named_tuple_field: IDENTIFIER ':' expression (HPython named-tuple field literal) -> Python: just the value (positional)"""
     # In Python, named tuple fields become positional: just emit the value
     val = self.nodes[2].to_py()
     return val
 
 @method(named_tuple_lit)
 def to_py(self, prec=None):
+    """named_tuple_lit: '(' named_tuple_field (',' named_tuple_field)* ')' -> Python: TypeName(field=val, ...) if type known, else (val, ...)"""
     # Collect field names and values
     def _extract_field(node):
         """Extract (name, value) from a named_tuple_field node."""

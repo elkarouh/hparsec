@@ -62,21 +62,25 @@ _PY_MODULE_TO_NIM = {
 # --- visible tokens ---
 @method(augop)
 def to_nim(self):
+    """augop: '+=' | '-=' | '*=' | '/=' | '%=' | '&=' | '|=' | '^=' | '<<=' | '>>=' | '**=' | '//='"""
     return self.nodes[0].nodes[0]  # raw op string, translated at aug_assign level
 
 
 @method(V_EQUAL)
 def to_nim(self):
+    """V_EQUAL: visible '=' token -> Nim: '='"""
     return "="
 
 
 @method(V_COLON)
 def to_nim(self):
+    """V_COLON: visible ':' operator token"""
     return ":"
 
 
 @method(V_DOT)
 def to_nim(self):
+    """V_DOT: visible '.' token -> unchanged"""
     return "."
 
 
@@ -215,6 +219,7 @@ def to_nim(self):
 
 @method(return_val)
 def to_nim(self):
+    """return_val: 'return' star_expressions -> Nim: 'return expr'; Option-typed returns wrapped in some()/none()"""
     val = self.nodes[0].to_nim()
     ret_type = getattr(ParserState, "_current_return_type", "")
     if ret_type and "Option[" in ret_type:
@@ -236,27 +241,32 @@ def to_nim(self):
 
 @method(return_bare)
 def to_nim(self):
+    """return_bare: 'return' (bare) -> Nim: 'return'"""
     return "return"
 
 
 @method(return_stmt)
 def to_nim(self):
+    """return_stmt: return_val | return_bare"""
     return self.nodes[0].to_nim()
 
 
 # --- pass / break / continue ---
 @method(pass_stmt)
 def to_nim(self):
+    """pass_stmt: 'pass' -> Nim: 'discard'"""
     return "discard"
 
 
 @method(break_stmt)
 def to_nim(self):
+    """break_stmt: 'break' -> Nim: 'break'"""
     return "break"
 
 
 @method(continue_stmt)
 def to_nim(self):
+    """continue_stmt: 'continue' -> Nim: 'continue'"""
     return "continue"
 
 
@@ -270,16 +280,19 @@ def to_nim(self):
 # --- assert ---
 @method(assert_msg)
 def to_nim(self):
+    """assert_msg: 'assert' expression ',' expression -> Nim: 'assert cond, msg'"""
     return f"assert {self.nodes[0].to_nim()}, {self.nodes[1].to_nim()}"
 
 
 @method(assert_simple)
 def to_nim(self):
+    """assert_simple: 'assert' expression -> Nim: 'assert cond'"""
     return f"assert {self.nodes[0].to_nim()}"
 
 
 @method(assert_stmt)
 def to_nim(self):
+    """assert_stmt: assert_msg | assert_simple"""
     return self.nodes[0].to_nim()
 
 
@@ -302,6 +315,7 @@ _PY_EXCEPTIONS = {
 
 @method(raise_exc)
 def to_nim(self):
+    """raise_exc: 'raise' expression -> Nim: 'raise newException(Type, msg)' for known Python exceptions"""
     import re as _re
     val = self.nodes[0].to_nim()
     # Translate Python exception constructors: raise XError("msg") -> raise newException(NimError, "msg")
@@ -315,17 +329,20 @@ def to_nim(self):
 
 @method(raise_bare)
 def to_nim(self):
+    """raise_bare: 'raise' (re-raise) -> Nim: 'raise'"""
     return "raise"
 
 
 @method(raise_stmt)
 def to_nim(self):
+    """raise_stmt: raise_from | raise_exc | raise_bare"""
     return self.nodes[0].to_nim()
 
 
 # --- global / nonlocal (no Nim equivalent — emit as comment) ---
 @method(global_stmt)
 def to_nim(self):
+    """global_stmt: 'global' IDENTIFIER (',' IDENTIFIER)* -> Nim: emitted as '# global ...' comment (no Nim equivalent)"""
     parts = [self.nodes[0].to_nim()]
     for node in self.nodes[1:]:
         if not hasattr(node, "nodes") or not node.nodes:
@@ -338,6 +355,7 @@ def to_nim(self):
 
 @method(nonlocal_stmt)
 def to_nim(self):
+    """nonlocal_stmt: 'nonlocal' IDENTIFIER (',' IDENTIFIER)* -> Nim: emitted as '# nonlocal ...' comment"""
     parts = [self.nodes[0].to_nim()]
     for node in self.nodes[1:]:
         if not hasattr(node, "nodes") or not node.nodes:
@@ -351,6 +369,7 @@ def to_nim(self):
 # --- import ---
 @method(dotted_name)
 def to_nim(self):
+    """dotted_name: IDENTIFIER ('.' IDENTIFIER)* -> Nim: joined with '.'"""
     parts = [self.nodes[0].to_nim()]
     for node in self.nodes[1:]:
         if not hasattr(node, "nodes") or not node.nodes:
@@ -363,6 +382,7 @@ def to_nim(self):
 
 @method(import_as)
 def to_nim(self):
+    """import_as: dotted_name ('.' IDENTIFIER)* ('as' IDENTIFIER)? -> Nim: 'import nim_module' or 'let x = pyImport("mod")'"""
     parts = [self.nodes[0].to_nim()]
     alias = None
     for node in self.nodes[1:]:
@@ -392,6 +412,7 @@ def to_nim(self):
 
 @method(import_stmt)
 def to_nim(self):
+    """import_stmt: 'import' import_as (',' import_as)* -> Nim: mapped stdlib imports or pyImport()"""
     parts = [self.nodes[0].to_nim()]
     for node in self.nodes[1:]:
         if not hasattr(node, "nodes") or not node.nodes:
@@ -414,6 +435,7 @@ def to_nim(self):
 # --- from ... import ---
 @method(import_name)
 def to_nim(self):
+    """import_name: IDENTIFIER ('as' IDENTIFIER)? -> Nim: name or 'name as alias'"""
     name = self.nodes[0].to_nim()
     for node in self.nodes[1:]:
         if not hasattr(node, "nodes") or not node.nodes:
@@ -427,11 +449,13 @@ def to_nim(self):
 
 @method(import_star)
 def to_nim(self):
+    """import_star: '*' (from x import *) -> Nim: '*'"""
     return "*"
 
 
 @method(import_names_paren)
 def to_nim(self):
+    """import_names_paren: '(' import_names ')' -> Nim: parenthesised import list"""
     def _find_import_names(node):
         names = []
         if node is None:
@@ -448,6 +472,7 @@ def to_nim(self):
 
 @method(import_names)
 def to_nim(self):
+    """import_names: import_name (',' import_name)* | import_star -> Nim: Nim import names"""
     first = self.nodes[0].to_nim()
     if first == "*":
         return "*"
@@ -520,6 +545,7 @@ def _import_name_to_nim(nodes):
 
 @method(from_rel_name)
 def to_nim(self):
+    """from_rel_name: relative 'from' import with leading dots (e.g. 'from ..pkg import x') -> Nim: pyImport or mapped stdlib"""
     dots = ""
     remaining = []
     for node in self.nodes:
@@ -558,6 +584,7 @@ def to_nim(self):
 
 @method(from_rel_bare)
 def to_nim(self):
+    """from_rel_bare: bare relative import ('from . import x') -> Nim: pyImport('.').x or stdlib import"""
     dots = ""
     names_node = None
     for node in self.nodes:
@@ -589,6 +616,7 @@ def to_nim(self):
 
 @method(from_abs)
 def to_nim(self):
+    """from_abs: absolute 'from module import names' -> Nim: mapped stdlib or pyImport("module").name"""
     source_parts = [self.nodes[0].to_nim()]
     names_start = 1
     for i, nd in enumerate(self.nodes[1:], 1):
@@ -645,6 +673,7 @@ def to_nim(self):
 
 @method(from_stmt)
 def to_nim(self):
+    """from_stmt: from_rel_name | from_rel_bare | from_abs"""
     return self.nodes[0].to_nim()
 
 
@@ -705,6 +734,7 @@ def to_nim(self):
 
 @method(type_alias_params)
 def to_nim(self):
+    """type_alias_params: '[' IDENTIFIER (',' IDENTIFIER)* ']' (generic type parameters) -> Nim: [T, U, ...]"""
     parts = [self.nodes[0].to_nim()]
     for node in self.nodes[1:]:
         if not hasattr(node, "nodes") or not node.nodes:
@@ -768,12 +798,14 @@ def to_nim(self):
 # --- simple_stmt ---
 @method(simple_stmt)
 def to_nim(self):
+    """simple_stmt: assign_stmt | aug_assign_stmt | ann_assign_stmt | decl_* | return_stmt | del_stmt | assert_stmt | raise_stmt | pass_stmt | break_stmt | continue_stmt | import_stmt | from_stmt | type_alias_stmt | expr_stmt"""
     return self.nodes[0].to_nim()
 
 
 # --- stmt_line ---
 @method(stmt_line)
 def to_nim(self):
+    """stmt_line: simple_stmt NL -> Nim: simple statement line"""
     from hek_tokenize import RichNL
 
     parts = [self.nodes[0].to_nim()]

@@ -186,11 +186,13 @@ def binop_to_nim(self, prec=None, my_prec=None):
 # --- leaf tokens: to_nim ---
 @method(NUMBER)
 def to_nim(self, prec=None):
+    """NUMBER: numeric literal -> unchanged"""
     return self.node
 
 
 @method(STRING)
 def to_nim(self, prec=None):
+    """STRING: string literal -> Nim: single-quoted strings become double-quoted; triple-quoted become ## doc-comments"""
     s = self.node
     # Convert triple-quoted strings to Nim ## comments
     triple_dq = chr(34)*3
@@ -223,6 +225,7 @@ _PY_IDENT_TO_NIM = {
 
 @method(IDENTIFIER)
 def to_nim(self, prec=None):
+    """IDENTIFIER: name token -> Nim: mapped via _PY_IDENT_TO_NIM; tick attributes (Type__tick__X) resolved"""
     name = self.node
     # Resolve tick attributes: Type__tick__Attr -> Nim equivalent
     if "__tick__" in name:
@@ -243,21 +246,25 @@ def to_nim(self, prec=None):
 
 @method(K_NONE)
 def to_nim(self, prec=None):
+    """K_NONE: 'None' -> Nim: 'nil'"""
     return "nil"
 
 
 @method(K_TRUE)
 def to_nim(self, prec=None):
+    """K_TRUE: 'True' -> Nim: 'true'"""
     return "true"
 
 
 @method(K_FALSE)
 def to_nim(self, prec=None):
+    """K_FALSE: 'False' -> Nim: 'false'"""
     return "false"
 
 
 @method(ellipsis_lit)
 def to_nim(self, prec=None):
+    """ellipsis_lit: '...' -> unchanged"""
     return "..."
 
 
@@ -270,26 +277,31 @@ for _p in [
 ]:
     @method(_p)
     def to_nim(self, prec=None):
+        """Visible operator token -> Nim: translated via _PY_OP_TO_NIM (e.g. ** -> ^, // -> div, & -> and)."""
         return _PY_OP_TO_NIM.get(self.node, self.node)
 
 
 @method(V_COLON)
 def to_nim(self, prec=None):
+    """V_COLON: visible ':' operator token"""
     return ":"
 
 
 @method(not_in_op)
 def to_nim(self, prec=None):
+    """not_in_op: 'not' 'in' -> Nim: 'notin'"""
     return "notin"
 
 
 @method(is_not_op)
 def to_nim(self, prec=None):
+    """is_not_op: 'is' 'not' -> Nim: 'isnot'"""
     return "isnot"
 
 
 @method(comp_op)
 def to_nim(self, prec=None):
+    """comp_op: '==' | '!=' | '<=' | '<' | '>=' | '>' | not_in_op | is_not_op | 'in' | 'is'"""
     return self.nodes[0].to_nim()
 
 
@@ -324,6 +336,7 @@ def to_nim(self, prec=None):
 # --- str_concat ---
 @method(str_concat)
 def to_nim(self, prec=None):
+    """str_concat: STRING STRING+ -> Nim: joined with '&'"""
     parts = [self.nodes[0].to_nim()]
     rep = self.nodes[1]
     if hasattr(rep, "nodes"):
@@ -336,21 +349,25 @@ def to_nim(self, prec=None):
 # --- atom containers ---
 @method(empty_paren)
 def to_nim(self, prec=None):
+    """empty_paren: '(' ')' -> Nim: '()'"""
     return "()"
 
 
 @method(paren_group)
 def to_nim(self, prec=None):
+    """paren_group: '(' (yield_expr | walrus | expressions) ')' -> Nim: '(expr)'"""
     return f"({self.nodes[1].to_nim()})"
 
 
 @method(empty_list)
 def to_nim(self, prec=None):
+    """empty_list: '[' ']' -> Nim: '@[]'"""
     return "@[]"
 
 
 @method(list_display)
 def to_nim(self, prec=None):
+    """list_display: '[' (listcomp | star_expressions) ']' -> Nim: '@[...]' or sequence comprehension"""
     inner_node = self.nodes[1]
     # If inner is a listcomp, collect() handles it — no @[] wrapper
     if type(inner_node).__name__ == "listcomp":
@@ -360,12 +377,14 @@ def to_nim(self, prec=None):
 
 @method(empty_dict)
 def to_nim(self, prec=None):
+    """empty_dict: '{' '}' -> Nim: 'initTable()' (requires tables import)"""
     ParserState.nim_imports.add("tables")
     return "initTable()"
 
 
 @method(dict_display)
 def to_nim(self, prec=None):
+    """dict_display: '{' (dictcomp | dictmaker) '}' -> Nim: '{k: v}.toTable'"""
     inner_node = self.nodes[1]
     if type(inner_node).__name__ == "dictcomp":
         return inner_node.to_nim()
@@ -424,6 +443,7 @@ def to_nim(self, prec=None):
 
 @method(set_display)
 def to_nim(self, prec=None):
+    """set_display: '{' (setcomp | setmaker) '}' -> Nim: toHashSet([...]) or ordinal set literal"""
     inner_node = self.nodes[1]
     # If inner is a setcomp, collect() handles it — no {} wrapper
     if type(inner_node).__name__ == "setcomp":
@@ -438,12 +458,14 @@ def to_nim(self, prec=None):
 
 @method(atom)
 def to_nim(self, prec=None):
+    """atom: empty_paren | paren_group | empty_list | list_display | empty_dict | dict_display | set_display | '...' | 'None' | 'True' | 'False' | IDENTIFIER | NUMBER | str_concat | STRING"""
     return self.nodes[0].to_nim(prec)
 
 
 # --- trailers ---
 @method(call_trailer)
 def to_nim(self, prec=None):
+    """call_trailer: '(' arguments? ')' -> Nim: method call or proc call"""
     if len(self.nodes) > 1 and hasattr(self.nodes[1], "nodes") and self.nodes[1].nodes:
         return "(" + self.nodes[1].nodes[0].to_nim() + ")"
     elif len(self.nodes) > 1 and hasattr(self.nodes[1], "to_nim"):
@@ -453,6 +475,7 @@ def to_nim(self, prec=None):
 
 @method(slice_trailer)
 def to_nim(self, prec=None):
+    """slice_trailer: '[' slices ']' -> Nim: Python slice a[x:y] -> a[x..<y] or a[x..y]"""
     inner = self.nodes[0].to_nim()
     # Convert negative indexing: [-1] -> [^1], [-2] -> [^2], etc.
     import re as _re
@@ -476,6 +499,7 @@ _PY_METHOD_TO_NIM = {
 
 @method(attr_trailer)
 def to_nim(self, prec=None):
+    """attr_trailer: '.' IDENTIFIER -> Nim: '.field'; tick attrs (.field'Next) handled specially"""
     attr_name = self.nodes[0].to_nim()
     # Handle tick attributes on expressions: .field'Next -> .field.succ, .field'Prev -> .field.pred
     if "__tick__" in attr_name:
@@ -489,6 +513,7 @@ def to_nim(self, prec=None):
 
 @method(trailer)
 def to_nim(self, prec=None):
+    """trailer: call_trailer | slice_trailer | attr_trailer"""
     return self.nodes[0].to_nim()
 
 
@@ -563,6 +588,7 @@ def _extract_call_args(call_node):
 
 @method(primary)
 def to_nim(self, prec=None):
+    """primary: atom trailer* -> Nim: base.trailer1.trailer2..."""
     result = self.nodes[0].to_nim()
     # Map Python builtin names to Nim equivalents
     raw_name = result
@@ -721,25 +747,30 @@ def _translate_stdlib_patterns(expr):
 # --- await ---
 @method(await_expr)
 def to_nim(self, prec=None):
+    """await_expr: 'await' primary -> Nim: 'await primary' (requires asyncdispatch)"""
     return f"await {self.nodes[0].to_nim()}"
 
 
 @method(await_primary)
 def to_nim(self, prec=None):
+    """await_primary: await_expr | primary"""
     return self.nodes[0].to_nim(prec)
 
 
 # --- range expression (.., ..<) ---
 @method(range_incl_op)
 def to_nim(self, prec=None):
+    """range_incl_op: '..' (inclusive range operator) -> Nim: '..'"""
     return ".."
 
 @method(range_excl_op)
 def to_nim(self, prec=None):
+    """range_excl_op: '..<' (exclusive upper bound) -> Nim: '..<'"""
     return "..<"
 
 @method(range_expr)
 def to_nim(self, prec=None):
+    """range_expr: bitor_expr (('..' | '..<') bitor_expr)? -> Nim: lo .. hi or lo ..< hi"""
     # range_expr: bitor_expr (('..' | '..<') bitor_expr)*
     result = self.nodes[0].to_nim(prec)
     for node in self.nodes[1:]:
@@ -757,11 +788,13 @@ def to_nim(self, prec=None):
 # --- power ---
 @method(power_rhs)
 def to_nim(self, prec=None):
+    """power_rhs: '**' factor -> Nim: '^ factor' (power uses ^ in Nim)"""
     return f"^ {self.nodes[1].to_nim(prec)}"
 
 
 @method(power)
 def to_nim(self, prec=None):
+    """power: await_primary power_rhs* (right-associative) -> Nim: ** -> ^"""
     has_power = False
     for node in self.nodes[1:]:
         if not hasattr(node, "nodes") or not node.nodes:
@@ -806,6 +839,7 @@ def to_nim(self, prec=None):
 # --- factor (unary) ---
 @method(unary_plus)
 def to_nim(self, prec=None):
+    """unary_plus: '+' factor -> Nim: '+factor'"""
     result = f"+{self.nodes[0].to_nim(PREC_UNARY)}"
     if prec is not None and PREC_UNARY < prec:
         return f"({result})"
@@ -814,6 +848,7 @@ def to_nim(self, prec=None):
 
 @method(unary_minus)
 def to_nim(self, prec=None):
+    """unary_minus: '-' factor -> Nim: '-factor'"""
     result = f"-{self.nodes[0].to_nim(PREC_UNARY)}"
     if prec is not None and PREC_UNARY < prec:
         return f"({result})"
@@ -822,6 +857,7 @@ def to_nim(self, prec=None):
 
 @method(unary_tilde)
 def to_nim(self, prec=None):
+    """unary_tilde: '~' factor -> Nim: 'not factor'"""
     result = f"not {self.nodes[0].to_nim(PREC_UNARY)}"
     if prec is not None and PREC_UNARY < prec:
         return f"({result})"
@@ -830,43 +866,51 @@ def to_nim(self, prec=None):
 
 @method(factor)
 def to_nim(self, prec=None):
+    """factor: unary_plus | unary_minus | unary_tilde | power"""
     return self.nodes[0].to_nim(prec)
 
 
 # --- left-associative binary ops ---
 @method(term)
 def to_nim(self, prec=None):
+    """term: factor (('*' | '/' | '//' | '%' | '@') factor)* -> Nim: // -> div, % -> mod"""
     return binop_to_nim(self, prec, PREC_TERM)
 
 
 @method(sum_expr)
 def to_nim(self, prec=None):
+    """sum_expr: term (('+' | '-') term)* -> Nim: str/seq '+' may become '&'"""
     return binop_to_nim(self, prec, PREC_ARITH)
 
 
 @method(shift_expr)
 def to_nim(self, prec=None):
+    """shift_expr: sum_expr (('<<' | '>>') sum_expr)* -> Nim: << -> shl, >> -> shr"""
     return binop_to_nim(self, prec, PREC_SHIFT)
 
 
 @method(bitand_expr)
 def to_nim(self, prec=None):
+    """bitand_expr: shift_expr ('&' shift_expr)* -> Nim: '&' -> 'and'"""
     return binop_to_nim(self, prec, PREC_BAND)
 
 
 @method(bitxor_expr)
 def to_nim(self, prec=None):
+    """bitxor_expr: bitand_expr ('^' bitand_expr)* -> Nim: '^' -> 'xor'"""
     return binop_to_nim(self, prec, PREC_BXOR)
 
 
 @method(bitor_expr)
 def to_nim(self, prec=None):
+    """bitor_expr: bitxor_expr ('|' bitxor_expr)* -> Nim: '|' -> 'or'"""
     return binop_to_nim(self, prec, PREC_BOR)
 
 
 # --- comparison ---
 @method(comparison)
 def to_nim(self, prec=None):
+    """comparison: bitor_expr (comp_op bitor_expr)* -> Nim: 'not in' -> 'notin', 'is not' -> 'isnot'; range 'in x .. y' -> 'x <= v and v <= y'"""
     last_comp_idx = None
     for i in range(len(self.nodes) - 1, -1, -1):
         node = self.nodes[i]
@@ -940,6 +984,7 @@ def to_nim(self, prec=None):
 # --- inversion ---
 @method(not_prefix)
 def to_nim(self, prec=None):
+    """not_prefix: 'not' inversion -> Nim: 'not inversion'"""
     operand = self.nodes[0].to_nim(PREC_NOT)
     # Check if operand is a string/seq variable — Nim has no truthiness for these
     truthy = _nim_truthiness(operand)
@@ -954,23 +999,27 @@ def to_nim(self, prec=None):
 
 @method(inversion)
 def to_nim(self, prec=None):
+    """inversion: not_prefix | comparison"""
     return self.nodes[0].to_nim(prec)
 
 
 # --- conjunction / disjunction ---
 @method(conjunction)
 def to_nim(self, prec=None):
+    """conjunction: inversion ('and' inversion)* -> Nim: 'and' unchanged"""
     return binop_to_nim(self, prec, PREC_AND)
 
 
 @method(disjunction)
 def to_nim(self, prec=None):
+    """disjunction: conjunction ('or' conjunction)* -> Nim: 'or' unchanged"""
     return binop_to_nim(self, prec, PREC_OR)
 
 
 # --- walrus ---
 @method(walrus)
 def to_nim(self, prec=None):
+    """walrus: IDENTIFIER ':=' expression -> Nim: IDENTIFIER = expression (no walrus in Nim)"""
     # Nim has no walrus; emit as assignment
     name = self.nodes[0].to_nim()
     val = self.nodes[2].to_nim()
@@ -982,12 +1031,14 @@ def to_nim(self, prec=None):
 
 @method(named_expression)
 def to_nim(self, prec=None):
+    """named_expression: walrus | expression"""
     return self.nodes[0].to_nim(prec)
 
 
 # --- conditional ---
 @method(conditional)
 def to_nim(self, prec=None):
+    """conditional: disjunction 'if' disjunction 'else' expression -> Nim: 'if cond: a else: b'"""
     # Python: value if cond else alt -> Nim: (if cond: value else: alt)
     value = self.nodes[0].to_nim()
     cond = self.nodes[1].to_nim()
@@ -999,6 +1050,7 @@ def to_nim(self, prec=None):
 # --- lambda ---
 @method(lambda_param)
 def to_nim(self, prec=None):
+    """lambda_param: IDENTIFIER ['=' expression] -> Nim: param declaration in proc"""
     name = self.nodes[0].to_nim()
     if len(self.nodes) > 1 and hasattr(self.nodes[1], "nodes") and self.nodes[1].nodes:
         seq = self.nodes[1].nodes[0]
@@ -1009,23 +1061,27 @@ def to_nim(self, prec=None):
 
 @method(lambda_star)
 def to_nim(self, prec=None):
+    """lambda_star: '*' IDENTIFIER -> Nim: varargs (approximated)"""
     # Nim has no *args; emit as varargs
     return f"{self.nodes[1].to_nim()}: varargs[auto]"
 
 
 @method(lambda_dstar)
 def to_nim(self, prec=None):
+    """lambda_dstar: '**' IDENTIFIER -> Nim: (no direct equivalent, emitted as comment)"""
     # Nim has no **kwargs; keep as-is
     return f"**{self.nodes[0].to_nim()}"
 
 
 @method(lambda_params_entry)
 def to_nim(self, prec=None):
+    """lambda_params_entry: lambda_dstar | lambda_star | lambda_param"""
     return self.nodes[0].to_nim()
 
 
 @method(lambda_params)
 def to_nim(self, prec=None):
+    """lambda_params: lambda_params_entry (',' lambda_params_entry)* -> Nim: comma-separated proc params"""
     parts = [self.nodes[0].to_nim()]
     if len(self.nodes) > 1 and hasattr(self.nodes[1], "nodes"):
         for seq in self.nodes[1].nodes:
@@ -1036,6 +1092,7 @@ def to_nim(self, prec=None):
 
 @method(lambda_expr)
 def to_nim(self, prec=None):
+    """lambda_expr: 'lambda' lambda_params? ':' expression -> Nim: 'proc(params): expr'"""
     if len(self.nodes) >= 2:
         params_st = self.nodes[0]
         if hasattr(params_st, "nodes") and params_st.nodes:
@@ -1055,12 +1112,14 @@ def to_nim(self, prec=None):
 # --- expression ---
 @method(expression)
 def to_nim(self, prec=None):
+    """expression: conditional | lambda_expr | disjunction"""
     return self.nodes[0].to_nim(prec)
 
 
 # --- expressions ---
 @method(expressions)
 def to_nim(self, prec=None):
+    """expressions: expression (',' expression)* ','? -> Nim: comma-separated; trailing comma omitted"""
     parts = [self.nodes[0].to_nim()]
     trailing_comma = False
     for node in self.nodes[1:]:
@@ -1082,12 +1141,14 @@ def to_nim(self, prec=None):
 # --- yield ---
 @method(yield_from)
 def to_nim(self, prec=None):
+    """yield_from: 'yield' 'from' expression -> Nim: 'yield expression' (iterator)"""
     # Nim has no yield from; emit as loop
     return f"for _item in {self.nodes[0].to_nim()}: yield _item"
 
 
 @method(yield_val)
 def to_nim(self, prec=None):
+    """yield_val: 'yield' star_expressions? -> Nim: 'yield expression'"""
     if self.nodes and hasattr(self.nodes[0], "nodes") and self.nodes[0].nodes:
         val = self.nodes[0].nodes[0].to_nim()
         # If yield value contains commas (tuple), wrap in parens for Nim
@@ -1104,22 +1165,26 @@ def to_nim(self, prec=None):
 
 @method(yield_expr)
 def to_nim(self, prec=None):
+    """yield_expr: yield_from | yield_val"""
     return self.nodes[0].to_nim()
 
 
 # --- star expressions ---
 @method(star_single)
 def to_nim(self, prec=None):
+    """star_single: '*' bitor_expr -> Nim: 'bitor_expr' (spread not directly supported)"""
     return f"*{self.nodes[1].to_nim()}"
 
 
 @method(star_expression)
 def to_nim(self, prec=None):
+    """star_expression: star_single | expression"""
     return self.nodes[0].to_nim(prec)
 
 
 @method(star_expressions)
 def to_nim(self, prec=None):
+    """star_expressions: star_expression (',' star_expression)* ','?"""
     parts = [self.nodes[0].to_nim()]
     for node in self.nodes[1:]:
         if not hasattr(node, "nodes") or not node.nodes:
@@ -1133,58 +1198,69 @@ def to_nim(self, prec=None):
 # --- slices ---
 @method(slice_3)
 def to_nim(self, prec=None):
+    """slice_3: expression ':' expression ':' expression -> Nim: a[lo..hi] with step (approximated)"""
     # a:b:c -> countup(a, b-1, c) — complex; emit as-is for now
     return f"{self.nodes[0].to_nim()}:{self.nodes[2].to_nim()}:{self.nodes[4].to_nim()}"
 
 
 @method(slice_3ns)
 def to_nim(self, prec=None):
+    """slice_3ns: expression ':' ':' expression (no stop) -> Nim: a[lo..^1 by step]"""
     return f"{self.nodes[0].to_nim()}::{self.nodes[3].to_nim()}"
 
 
 @method(slice_3nn)
 def to_nim(self, prec=None):
+    """slice_3nn: ':' expression ':' expression (no start) -> Nim: a[0..hi by step]"""
     return f":{self.nodes[1].to_nim()}:{self.nodes[3].to_nim()}"
 
 
 @method(slice_3bare)
 def to_nim(self, prec=None):
+    """slice_3bare: ':' ':' expression (no start, no stop) -> Nim: step-only slice"""
     return f"::{self.nodes[2].to_nim()}"
 
 
 @method(slice_2)
 def to_nim(self, prec=None):
+    """slice_2: expression ':' expression -> Nim: a[lo..<hi]"""
     # a:b -> a..<b (exclusive end)
     return f"{self.nodes[0].to_nim()}..<{self.nodes[2].to_nim()}"
 
 
 @method(slice_1_start)
 def to_nim(self, prec=None):
+    """slice_1_start: expression ':' -> Nim: a[lo..^1]"""
     return f"{self.nodes[0].to_nim()}..<len"
 
 
 @method(slice_1_stop)
 def to_nim(self, prec=None):
+    """slice_1_stop: ':' expression -> Nim: a[0..<hi]"""
     return f"0..<{self.nodes[1].to_nim()}"
 
 
 @method(slice_bare)
 def to_nim(self, prec=None):
+    """slice_bare: ':' (bare slice) -> Nim: a[0..^1]"""
     return ":"
 
 
 @method(slice_full)
 def to_nim(self, prec=None):
+    """slice_full: slice_3 | slice_3ns | slice_3nn | slice_3bare | slice_2 | slice_1_start | slice_1_stop | slice_bare"""
     return self.nodes[0].to_nim()
 
 
 @method(slice_expr)
 def to_nim(self, prec=None):
+    """slice_expr: slice_full | named_expression"""
     return self.nodes[0].to_nim()
 
 
 @method(slices)
 def to_nim(self, prec=None):
+    """slices: slice_expr (',' slice_expr)* ','?"""
     parts = [self.nodes[0].to_nim()]
     for node in self.nodes[1:]:
         if not hasattr(node, "nodes") or not node.nodes:
@@ -1198,26 +1274,31 @@ def to_nim(self, prec=None):
 # --- arguments ---
 @method(kwarg)
 def to_nim(self, prec=None):
+    """kwarg: IDENTIFIER '=' expression -> Nim: 'name = value'"""
     return f"{self.nodes[0].to_nim()} = {self.nodes[1].to_nim()}"
 
 
 @method(star_arg)
 def to_nim(self, prec=None):
+    """star_arg: '*' expression -> Nim: approximated as positional"""
     return f"*{self.nodes[1].to_nim()}"
 
 
 @method(dstar_arg)
 def to_nim(self, prec=None):
+    """dstar_arg: '**' expression -> Nim: approximated"""
     return f"**{self.nodes[0].to_nim()}"
 
 
 @method(arg)
 def to_nim(self, prec=None):
+    """arg: kwarg | dstar_arg | star_arg | expression"""
     return self.nodes[0].to_nim()
 
 
 @method(arguments)
 def to_nim(self, prec=None):
+    """arguments: arg (',' arg)* ','?"""
     parts = [self.nodes[0].to_nim()]
     for node in self.nodes[1:]:
         if not hasattr(node, "nodes") or not node.nodes:
@@ -1230,12 +1311,14 @@ def to_nim(self, prec=None):
 
 @method(genexpr_arg)
 def to_nim(self, prec=None):
+    """genexpr_arg: named_expression (for_if_clauses)? -> Nim: iterator expression argument"""
     return self.nodes[0].to_nim()
 
 
 # --- comprehensions ---
 @method(target)
 def to_nim(self, prec=None):
+    """target: IDENTIFIER (',' IDENTIFIER)* -> Nim: for-loop target, tuple or single var"""
     parts = [self.nodes[0].to_nim()]
     if len(self.nodes) > 1 and hasattr(self.nodes[1], "nodes"):
         for seq in self.nodes[1].nodes:
@@ -1246,6 +1329,7 @@ def to_nim(self, prec=None):
 
 @method(for_if_clause)
 def to_nim(self, prec=None):
+    """for_if_clause: 'for' target 'in' disjunction ('if' disjunction)* -> Nim: 'for target in iter (if cond)'"""
     tgt = self.nodes[0].to_nim()
     # Nim interprets 'for a, b in seq' as index/value; wrap in parens for tuple unpacking
     if "," in tgt and not tgt.startswith("("):
@@ -1265,6 +1349,7 @@ def to_nim(self, prec=None):
 
 @method(for_if_clauses)
 def to_nim(self, prec=None):
+    """for_if_clauses: for_if_clause+ -> Nim: nested for/if clauses"""
     parts = []
     for n in self.nodes:
         if hasattr(n, "to_nim"):
@@ -1278,6 +1363,7 @@ def to_nim(self, prec=None):
 
 @method(listcomp)
 def to_nim(self, prec=None):
+    """listcomp: named_expression for_if_clauses -> Nim: collect(iter.filterIt(cond).mapIt(expr))"""
     # [expr for x in xs] -> collect(for x in xs: expr)
     # [expr for x in xs if cond] -> collect(for x in xs: (if cond: expr))
     ParserState.nim_imports.add("sugar")
@@ -1294,6 +1380,7 @@ def to_nim(self, prec=None):
 
 @method(genexpr)
 def to_nim(self, prec=None):
+    """genexpr: named_expression for_if_clauses -> Nim: iterator expression"""
     # (expr for x in xs) -> collect(for x in xs: expr)
     expr = self.nodes[0].to_nim()
     clauses = self.nodes[1].to_nim()
@@ -1307,6 +1394,7 @@ def to_nim(self, prec=None):
 
 @method(dictcomp)
 def to_nim(self, prec=None):
+    """dictcomp: expression ':' expression for_if_clauses -> Nim: toTable comprehension"""
     # {k: v for ...} -> collect(initTable, for ...: {k: v})
     key = self.nodes[0].to_nim()
     val = self.nodes[1].to_nim()
@@ -1318,6 +1406,7 @@ def to_nim(self, prec=None):
 
 @method(setcomp)
 def to_nim(self, prec=None):
+    """setcomp: expression for_if_clauses -> Nim: toHashSet comprehension"""
     # {expr for x in xs} -> collect(initHashSet, for x in xs: expr)
     expr = self.nodes[0].to_nim()
     clauses = self.nodes[1].to_nim()
@@ -1327,11 +1416,13 @@ def to_nim(self, prec=None):
 # --- dict/set makers ---
 @method(kvpair)
 def to_nim(self, prec=None):
+    """kvpair: expression ':' expression -> Nim: 'key: value' pair"""
     return f"{self.nodes[0].to_nim()}: {self.nodes[2].to_nim()}"
 
 
 @method(dictmaker)
 def to_nim(self, prec=None):
+    """dictmaker: kvpair (',' kvpair)* ','? -> Nim: key-value pairs for toTable"""
     first_pair = f"{self.nodes[0].to_nim()}: {self.nodes[2].to_nim()}"
     parts = [first_pair]
     for node in self.nodes[3:]:
@@ -1345,6 +1436,7 @@ def to_nim(self, prec=None):
 
 @method(setmaker)
 def to_nim(self, prec=None):
+    """setmaker: star_expression (',' star_expression)* ','? -> Nim: elements for toHashSet"""
     parts = [self.nodes[0].to_nim()]
     for node in self.nodes[1:]:
         if not hasattr(node, "nodes") or not node.nodes:
@@ -1479,6 +1571,7 @@ if __name__ == "__main__":
 
 @method(named_tuple_field)
 def to_nim(self, prec=None):
+    """named_tuple_field: IDENTIFIER ':' expression -> Nim: field initializer in object constructor"""
     name = self.nodes[0].to_nim()
     # nodes[1] is V_COLON, nodes[2] is expression
     val = self.nodes[2].to_nim()
@@ -1486,6 +1579,7 @@ def to_nim(self, prec=None):
 
 @method(named_tuple_lit)
 def to_nim(self, prec=None):
+    """named_tuple_lit: '(' named_tuple_field (',' named_tuple_field)* ')' -> Nim: TypeName(field: val, ...)"""
     # nodes[0]=LPAREN_NODE, nodes[1]=first field, nodes[2]=Several_Times of rest
     first = self.nodes[1].to_nim()
     fields = [first]

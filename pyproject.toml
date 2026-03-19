@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "hparsec"
+version = "0.1.0"
+description = "HPython – a statically-typed superset of Python 3 that transpiles to Python 3 and Nim"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+
+[project.scripts]
+hpy2py  = "hparsec.to_python.py2py:main"
+hpy2nim = "hparsec.to_nim.py2nim:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["hparsec*"]
+
+# ---------------------------------------------------------------------------
+# Developer notes
+# ---------------------------------------------------------------------------
+# Until the package is restructured with __init__.py files, the scripts above
+# won't work as installed entry points.  Run the transpilers directly instead:
+#
+#   python3 TO_PYTHON/py2py.py  source.hpy
+#   python3 TO_NIM/py2nim.py    source.hpy
+#
+# The sys.path.insert() calls in each module handle sibling imports in the
+# meantime.  A future refactor would:
+#   1. Add __init__.py to each directory.
+#   2. Replace sys.path.insert with relative imports.
+#   3. Remove the [tool.setuptools.packages.find] override.

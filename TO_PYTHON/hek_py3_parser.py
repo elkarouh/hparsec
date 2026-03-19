@@ -433,11 +433,13 @@ def to_py(self):
 
 @method(pattern_others)
 def to_py(self):
+    """pattern_others: 'others' (default branch) -> Nim: 'else'"""
     return "_"
 
 
 @method(pattern_range)
 def to_py(self):
+    """pattern_range: expression '..' expression (range pattern) -> Nim: 'lo .. hi'"""
     lo = self.nodes[0].to_py()
     hi = self.nodes[-1].to_py()
     return f"{lo} .. {hi}"

@@ -151,6 +151,7 @@ from hek_parsec import method
 
 @method(primitive_type)
 def to_py(self, prec=None):
+    """primitive_type: 'int' | 'str' | 'float' | 'bool' | 'bytes' | 'None' -> Nim: str->string, bytes->seq[byte], None->void"""
     name = self.nodes[0]
     if name == "char":
         return "str"
@@ -159,26 +160,31 @@ def to_py(self, prec=None):
 
 @method(type_name)
 def to_py(self, prec=None):
+    """type_name: IDENTIFIER (type alias or user-defined type) -> Nim: mapped via _PY_TO_NIM if known"""
     return self.nodes[0].to_py()  # delegate to primary expression node
 
 
 @method(seq_type)
 def to_py(self, prec=None):
+    """seq_type: '[]' type_annotation -> Nim: seq[T]"""
     return f"list[{self.nodes[0].to_py()}]"
 
 
 @method(array_type)
 def to_py(self, prec=None):
+    """array_type: '[' INTEGER ']' type_annotation -> Nim: array[N, T]"""
     return f"tuple[{self.nodes[1].to_py()}, ...]"
 
 
 @method(openarray_type)
 def to_py(self, prec=None):
+    """openarray_type: '[*]' type_annotation -> Nim: openArray[T]"""
     return f"Sequence[{self.nodes[1].to_py()}]"
 
 
 @method(enum_array_type)
 def to_py(self, prec=None):
+    """enum_array_type: '[' IDENTIFIER ']' type_annotation (enum-indexed array) -> Nim: array[EnumType, T]"""
     idx = self.nodes[0].to_py()
     elem = self.nodes[1].to_py()
     return f"dict[{idx}, {elem}]"
@@ -186,6 +192,7 @@ def to_py(self, prec=None):
 
 @method(dict_type)
 def to_py(self, prec=None):
+    """dict_type: '{' type_annotation '}' type_annotation -> Nim: Table[K, V] (imports tables)"""
     key = self.nodes[0].to_py()
     val = self.nodes[1].to_py()
     return f"dict[{key}, {val}]"
@@ -193,11 +200,13 @@ def to_py(self, prec=None):
 
 @method(set_type)
 def to_py(self, prec=None):
+    """set_type: '{}' type_annotation -> Nim: set[T] for ordinals; HashSet[T] otherwise"""
     return f"set[{self.nodes[0].to_py()}]"
 
 
 @method(callable_type)
 def to_py(self, prec=None):
+    """callable_type: '[' tuple_type ']' type_annotation -> Nim: proc(a0: T, ...): R"""
     # nodes[0] is the tuple_type (params), nodes[1] is the return type
     tup = self.nodes[0]
     ret = self.nodes[1].to_py()
@@ -209,16 +218,19 @@ def to_py(self, prec=None):
 
 @method(empty_tuple_type)
 def to_py(self, prec=None):
+    """empty_tuple_type: '(' ',' ')' (empty params) -> Nim: '()'"""
     return "tuple[()]"
 
 
 @method(singleton_tuple_type)
 def to_py(self, prec=None):
+    """singleton_tuple_type: '(' type_annotation ',' ')' -> Nim: '(T,)'"""
     return f"tuple[{self.nodes[0].to_py()}]"
 
 
 @method(multi_tuple_type)
 def to_py(self, prec=None):
+    """multi_tuple_type: '(' type_annotation (',' type_annotation)+ [','] ')' -> Nim: '(T, U, ...)'"""
     elems = _tuple_elements(self)
     return f"tuple[{', '.join(elems)}]"
 
@@ -240,11 +252,13 @@ def _tuple_elements(tup):
 
 @method(optional_type)
 def to_py(self, prec=None):
+    """optional_type: '?' type_annotation -> Nim: Option[T] (imports options); ref types stay as-is"""
     return f"{self.nodes[0].to_py()} | None"
 
 
 @method(union_type)
 def to_py(self, prec=None):
+    """union_type: maybe_optional ('|' maybe_optional)+ -> Nim: best-effort 'T | U' (Nim uses object variants instead)"""
     # nodes[0] is first maybe_optional, nodes[1] is Several_Times of (VBAR + maybe_optional)
     parts = [self.nodes[0].to_py()]
     st = self.nodes[1]

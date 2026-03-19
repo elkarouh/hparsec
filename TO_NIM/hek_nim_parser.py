@@ -53,6 +53,7 @@ def _is_new_method(class_name, method_name):
 
 @method(NL)
 def to_nim(self, indent=0):
+    """NL: newline/blank-line token -> emit preserved comment/blank lines from RichNL"""
     rn = RichNL.extract_from(self)
     return rn.to_py() if rn is not None else ''
 
@@ -234,6 +235,7 @@ def to_nim(self, indent=0, is_virtual=False, class_name=None, parent_name=None, 
 
 @method(statement)
 def to_nim(self, indent=0):
+    """statement: compound_stmt | stmt_line -> Nim: delegates to inner node"""
     inner = self.nodes[0]
     try:
         return inner.to_nim(indent)
@@ -244,6 +246,7 @@ def to_nim(self, indent=0):
 # --- if / elif / else ---
 @method(elif_clause)
 def to_nim(self, indent=0):
+    """elif_clause: 'elif' expression ':' block -> Nim: 'elif cond:\n  body'"""
     cond = self.nodes[0].to_nim()
     hc = _block_inline_header_comment(self.nodes[1])
     body = self.nodes[1].to_nim(indent + 1)
@@ -252,6 +255,7 @@ def to_nim(self, indent=0):
 
 @method(else_clause)
 def to_nim(self, indent=0):
+    """else_clause: 'else' ':' block -> Nim: 'else:\n  body'"""
     hc = _block_inline_header_comment(self.nodes[0])
     body = self.nodes[0].to_nim(indent + 1)
     return f"{_ind(indent)}else:{hc}\n{body}"
@@ -259,6 +263,7 @@ def to_nim(self, indent=0):
 
 @method(if_stmt)
 def to_nim(self, indent=0):
+    """if_stmt: 'if' expression ':' block elif_clause* else_clause? -> Nim: 'if cond:'; 'if __name__ == "__main__"' -> 'when isMainModule:'"""
     cond = hek_nim_expr._nim_truthiness(self.nodes[0].to_nim())
     # Detect if __name__ == "__main__": -> when isMainModule:
     cond_stripped = cond.replace(" ", "")
@@ -288,6 +293,7 @@ def to_nim(self, indent=0):
 # --- while ---
 @method(while_stmt)
 def to_nim(self, indent=0):
+    """while_stmt: 'while' expression ':' block else_clause? -> Nim: 'while cond:' (else clause dropped)"""
     cond = hek_nim_expr._nim_truthiness(self.nodes[0].to_nim())
     hc = _block_inline_header_comment(self.nodes[1])
     body = self.nodes[1].to_nim(indent + 1)
@@ -299,6 +305,7 @@ def to_nim(self, indent=0):
 # --- for ---
 @method(for_target)
 def to_nim(self):
+    """for_target: IDENTIFIER (',' IDENTIFIER)* -> Nim: loop variable(s)"""
     parts = [self.nodes[0].to_nim()]
     for node in self.nodes[1:]:
         if type(node).__name__ == "Several_Times" and node.nodes:
@@ -310,6 +317,7 @@ def to_nim(self):
 
 @method(for_stmt)
 def to_nim(self, indent=0):
+    """for_stmt: 'for' for_target 'in' expression ':' block else_clause? -> Nim: 'for target in iter:' (else dropped); file vars -> .lines"""
     target = self.nodes[0].to_nim()
     iterable = self.nodes[1].to_nim()
     # File iteration: for line in f -> for line in f.lines
@@ -329,6 +337,7 @@ def to_nim(self, indent=0):
 # --- try / except / finally ---
 @method(except_clause)
 def to_nim(self, indent=0):
+    """except_clause: 'except' expression ('as' IDENTIFIER)? ':' block -> Nim: 'except Type as name:\n  body'"""
     exc = self.nodes[0].to_nim()
     result = f"except {exc}"
     for node in self.nodes[1:]:
@@ -349,6 +358,7 @@ def to_nim(self, indent=0):
 
 @method(except_star_clause)
 def to_nim(self, indent=0):
+    """except_star_clause: 'except*' expression ('as' IDENTIFIER)? ':' block -> Nim: 'except* Type' (Python 3.11+ ExceptionGroup)"""
     exc = self.nodes[1].to_nim()
     result = f"except* {exc}"
     for node in self.nodes[2:]:
@@ -369,6 +379,7 @@ def to_nim(self, indent=0):
 
 @method(except_bare)
 def to_nim(self, indent=0):
+    """except_bare: 'except' ':' block -> Nim: 'except:\n  body'"""
     hc = _block_inline_header_comment(self.nodes[0])
     body = self.nodes[0].to_nim(indent + 1)
     return f"{_ind(indent)}except:{hc}\n{body}"
@@ -376,6 +387,7 @@ def to_nim(self, indent=0):
 
 @method(finally_clause)
 def to_nim(self, indent=0):
+    """finally_clause: 'finally' ':' block -> Nim: 'finally:\n  body'"""
     hc = _block_inline_header_comment(self.nodes[0])
     body = self.nodes[0].to_nim(indent + 1)
     return f"{_ind(indent)}finally:{hc}\n{body}"
@@ -416,6 +428,7 @@ def _extract_clauses_nim(nodes, indent):
 
 @method(try_except)
 def to_nim(self, indent=0):
+    """try_except: 'try' ':' block (except_clause | except_star_clause)+ else_clause? -> Nim: 'try:\n  body\nexcept ...'"""
     hc = _block_inline_header_comment(self.nodes[0])
     body = self.nodes[0].to_nim(indent + 1)
     result = f"{_ind(indent)}try:{hc}\n{body}"
@@ -431,6 +444,7 @@ def to_nim(self, indent=0):
 
 @method(try_finally)
 def to_nim(self, indent=0):
+    """try_finally: 'try' ':' block finally_clause -> Nim: 'try:\n  body\nfinally:\n  ...'"""
     hc = _block_inline_header_comment(self.nodes[0])
     body = self.nodes[0].to_nim(indent + 1)
     fin = self.nodes[1].to_nim(indent)
@@ -439,12 +453,14 @@ def to_nim(self, indent=0):
 
 @method(try_stmt)
 def to_nim(self, indent=0):
+    """try_stmt: try_except | try_finally"""
     return self.nodes[0].to_nim(indent)
 
 
 # --- with ---
 @method(with_item)
 def to_nim(self):
+    """with_item: expression ('as' IDENTIFIER)? -> Nim: 'expr as name'"""
     expr = self.nodes[0].to_nim()
     for node in self.nodes[1:]:
         if type(node).__name__ == "Several_Times" and node.nodes:
@@ -456,6 +472,7 @@ def to_nim(self):
 
 @method(with_stmt)
 def to_nim(self, indent=0):
+    """with_stmt: 'with' with_item (',' with_item)* ':' block -> Nim: 'block:' with open() pattern or plain 'with'"""
     # Translate with open(file, mode) as var -> Nim open()/defer:close()
     items = [self.nodes[0].to_nim()]
     block_node = None
@@ -513,6 +530,7 @@ def to_nim(self, indent=0):
 
 @method(with_stmt_paren)
 def to_nim(self, indent=0):
+    """with_stmt_paren: 'with' '(' with_item (',' with_item)* ')' ':' block -> Nim: parenthesised with"""
     items = []
     block_node = None
     for node in self.nodes:
@@ -546,6 +564,7 @@ def to_nim(self, indent=0):
 # --- match / case -> Nim case statement ---
 @method(pattern_literal)
 def to_nim(self):
+    """pattern_literal: literal value in case/when pattern -> Nim: literal"""
     n = self.nodes[0]
     if hasattr(n, "to_nim"):
         return n.to_nim()
@@ -558,6 +577,7 @@ def to_nim(self):
 
 @method(pattern_capture)
 def to_nim(self, prec=None):
+    """pattern_capture: IDENTIFIER in pattern (capture variable) -> Nim: name binding"""
     n = self.nodes[0]
     if hasattr(n, "to_nim"):
         name = n.to_nim()
@@ -577,16 +597,19 @@ def to_nim(self, prec=None):
 
 @method(pattern_wildcard)
 def to_nim(self):
+    """pattern_wildcard: '_' (wildcard) -> Nim: '_'"""
     return "_"
 
 
 @method(pattern_others)
 def to_nim(self):
+    """pattern_others: 'others' (default branch) -> Nim: 'else'"""
     return "others"
 
 
 @method(pattern_range)
 def to_nim(self):
+    """pattern_range: expression '..' expression (range pattern) -> Nim: 'lo .. hi'"""
     lo = self.nodes[0].to_nim()
     hi = self.nodes[-1].to_nim()
     return f"{lo} .. {hi}"
@@ -594,11 +617,13 @@ def to_nim(self):
 
 @method(pattern_group)
 def to_nim(self):
+    """pattern_group: '(' pattern ')' -> Nim: '(pattern)'"""
     return f"({self.nodes[0].to_nim()})"
 
 
 @method(pattern_sequence)
 def to_nim(self):
+    """pattern_sequence: '[' pattern (',' pattern)* ']' -> Nim: '@[p1, p2, ...]'"""
     parts = [self.nodes[0].to_nim()]
     for node in self.nodes[1:]:
         if type(node).__name__ == "Several_Times" and node.nodes:
@@ -610,6 +635,7 @@ def to_nim(self):
 
 @method(pattern_or)
 def to_nim(self):
+    """pattern_or: pattern ('|' pattern)+ -> Nim: 'p1, p2, ...' (Nim of-branch alternatives)"""
     parts = [self.nodes[0].to_nim()]
     for node in self.nodes[1:]:
         if type(node).__name__ == "Several_Times" and node.nodes:
@@ -621,6 +647,7 @@ def to_nim(self):
 
 @method(pattern_value)
 def to_nim(self):
+    """pattern_value: IDENTIFIER ('.' IDENTIFIER)+ (attribute pattern) -> Nim: dotted name"""
     parts = [self.nodes[0].to_nim()]
     for node in self.nodes[1:]:
         if type(node).__name__ == "Several_Times" and node.nodes:
@@ -632,16 +659,19 @@ def to_nim(self):
 
 @method(keyword_pattern)
 def to_nim(self):
+    """keyword_pattern: IDENTIFIER '=' pattern -> Nim: 'field = pattern' in class pattern"""
     return f"{self.nodes[0].to_nim()} = {self.nodes[1].to_nim()}"
 
 
 @method(pattern_class_arg)
 def to_nim(self):
+    """pattern_class_arg: pattern (positional or keyword) -> Nim: inner pattern"""
     return self.nodes[0].to_nim()
 
 
 @method(pattern_class)
 def to_nim(self):
+    """pattern_class: IDENTIFIER '(' pattern_class_arg* ')' -> Nim: class pattern"""
     name = self.nodes[0].to_nim()
     patterns = []
     for node in self.nodes[1:]:
@@ -661,6 +691,7 @@ def to_nim(self):
 
 @method(pattern_mapping)
 def to_nim(self):
+    """pattern_mapping: '{' key ':' pattern ... '}' -> Nim: table match (approximated)"""
     pairs = []
     def _extract_pair(nodes):
         key = val = None
@@ -688,11 +719,13 @@ def to_nim(self):
 
 @method(base_pattern)
 def to_nim(self):
+    """base_pattern: pattern_sequence | pattern_mapping | pattern_class | pattern_or | pattern_value | pattern_capture | pattern_wildcard | pattern_literal | pattern_group"""
     return self.nodes[0].to_nim()
 
 
 @method(pattern_as)
 def to_nim(self):
+    """pattern_as: pattern 'as' IDENTIFIER -> Nim: 'pattern as name'"""
     pat = self.nodes[0].to_nim()
     name = self.nodes[1].to_nim()
     return f"{pat} as {name}"
@@ -700,16 +733,19 @@ def to_nim(self):
 
 @method(pattern)
 def to_nim(self):
+    """pattern: pattern_as | base_pattern"""
     return self.nodes[0].to_nim()
 
 
 @method(case_guard)
 def to_nim(self):
+    """case_guard: 'if' expression (match guard) -> Nim: ' if expr'"""
     return f" if {self.nodes[0].to_nim()}"
 
 
 @method(when_clause)
 def to_nim(self, indent=0):
+    """when_clause: 'when' pattern case_guard? ':' block -> Nim: 'of pattern (if guard):\n  body'"""
     pat = self.nodes[0].to_nim()
     guard = ""
     block_node = None
@@ -844,17 +880,20 @@ def to_nim(self):
 
 @method(param_slash)
 def to_nim(self):
+    """param_slash: '/' (positional-only separator, Python 3.8+) -> Nim: omitted (no equivalent)"""
     # Nim has no positional-only separator — omit
     return ""
 
 
 @method(param)
 def to_nim(self):
+    """param: param_star | param_dstar | param_slash | param_kw | param_pos -> Nim: single parameter"""
     return self.nodes[0].to_nim()
 
 
 @method(param_list)
 def to_nim(self):
+    """param_list: param (',' param)* -> Nim: ', '.join(non-empty param strings)"""
     parts = []
     p = self.nodes[0].to_nim()
     if p:
@@ -872,12 +911,14 @@ def to_nim(self):
 # --- Decorators ---
 @method(decorator)
 def to_nim(self, indent=0):
+    """decorator: '@' dotted_name ['(' arguments? ')'] NL -> Nim: pragmas where known (e.g. @property, @staticmethod); others kept as comments"""
     # Nim uses pragmas {.decorator.} — keep @ syntax as best-effort
     return f"{_ind(indent)}@{self.nodes[0].to_nim()}"
 
 
 @method(decorators)
 def to_nim(self, indent=0):
+    """decorators: decorator+ -> Nim: collected decorator lines preceding the proc/type definition"""
     lines = []
     for node in self.nodes:
         if hasattr(node, "to_nim"):
@@ -1433,6 +1474,7 @@ def to_nim(self, indent=0):
 
 @method(class_args)
 def to_nim(self):
+    """class_args: '(' bases? ')' (class inheritance list) -> Nim: base class name for 'ref object of Base'"""
     st = self.nodes[0]
     if hasattr(st, "nodes") and st.nodes:
         args_node = st.nodes[0]
@@ -1443,6 +1485,7 @@ def to_nim(self):
 # --- Async for / with ---
 @method(async_for_stmt)
 def to_nim(self, indent=0):
+    """async_for_stmt: 'async' 'for' for_target 'in' expression ':' block -> Nim: plain 'for' loop (async annotation kept as comment)"""
     target = self.nodes[0].to_nim()
     iterable = self.nodes[1].to_nim()
     hc = _block_inline_header_comment(self.nodes[2])
@@ -1452,6 +1495,7 @@ def to_nim(self, indent=0):
 
 @method(async_with_stmt)
 def to_nim(self, indent=0):
+    """async_with_stmt: 'async' 'with' with_item (',' with_item)* ':' block -> Nim: plain 'with' (async annotation kept as comment)"""
     items = [self.nodes[0].to_nim()]
     block_node = None
     for node in self.nodes[1:]:
@@ -1477,12 +1521,14 @@ def to_nim(self, indent=0):
 # --- compound_stmt ---
 @method(compound_stmt)
 def to_nim(self, indent=0):
+    """compound_stmt: if_stmt | while_stmt | for_stmt | try_stmt | with_stmt | match_stmt | func_def | class_def | decorated_def | async_func_def | async_for_stmt | async_with_stmt"""
     return self.nodes[0].to_nim(indent)
 
 
 # --- stmt_line (override from hek_nim_stmt to call to_nim recursively) ---
 @method(stmt_line)
 def to_nim(self, indent=0):
+    """stmt_line: simple_stmt NL -> Nim: simple statement line"""
     parts = []
     newline_node = None
 

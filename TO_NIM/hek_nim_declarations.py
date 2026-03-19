@@ -53,12 +53,14 @@ def _is_nim_ordinal(nim_type):
 
 @method(primitive_type)
 def to_nim(self, prec=None):
+    """primitive_type: 'int' | 'str' | 'float' | 'bool' | 'bytes' | 'None' -> Nim: str->string, bytes->seq[byte], None->void"""
     name = self.nodes[0]
     return _PY_TO_NIM.get(name, name)
 
 
 @method(type_name)
 def to_nim(self, prec=None):
+    """type_name: IDENTIFIER (type alias or user-defined type) -> Nim: mapped via _PY_TO_NIM if known"""
     # Check if the underlying identifier has a known Nim mapping
     node = self.nodes[0]
     if hasattr(node, 'nodes') and node.nodes and isinstance(node.nodes[0], str):
@@ -80,11 +82,13 @@ def to_nim(self, prec=None):
 
 @method(seq_type)
 def to_nim(self, prec=None):
+    """seq_type: '[]' type_annotation -> Nim: seq[T]"""
     return f"seq[{self.nodes[0].to_nim()}]"
 
 
 @method(array_type)
 def to_nim(self, prec=None):
+    """array_type: '[' INTEGER ']' type_annotation -> Nim: array[N, T]"""
     size = self.nodes[0].nodes[0]  # the integer string
     elem = self.nodes[1].to_nim()
     return f"array[{size}, {elem}]"
@@ -92,12 +96,14 @@ def to_nim(self, prec=None):
 
 @method(openarray_type)
 def to_nim(self, prec=None):
+    """openarray_type: '[*]' type_annotation -> Nim: openArray[T]"""
     elem = self.nodes[1].to_nim()
     return f"openArray[{elem}]"
 
 
 @method(enum_array_type)
 def to_nim(self, prec=None):
+    """enum_array_type: '[' IDENTIFIER ']' type_annotation (enum-indexed array) -> Nim: array[EnumType, T]"""
     idx = self.nodes[0].to_nim()
     elem = self.nodes[1].to_nim()
     return f"array[{idx}, {elem}]"
@@ -105,6 +111,7 @@ def to_nim(self, prec=None):
 
 @method(dict_type)
 def to_nim(self, prec=None):
+    """dict_type: '{' type_annotation '}' type_annotation -> Nim: Table[K, V] (imports tables)"""
     ParserState.nim_imports.add("tables")
     key = self.nodes[0].to_nim()
     val = self.nodes[1].to_nim()
@@ -113,6 +120,7 @@ def to_nim(self, prec=None):
 
 @method(set_type)
 def to_nim(self, prec=None):
+    """set_type: '{}' type_annotation -> Nim: set[T] for ordinals; HashSet[T] otherwise"""
     elem = self.nodes[0].to_nim()
     if _is_nim_ordinal(elem):
         return f"set[{elem}]"
@@ -122,6 +130,7 @@ def to_nim(self, prec=None):
 
 @method(callable_type)
 def to_nim(self, prec=None):
+    """callable_type: '[' tuple_type ']' type_annotation -> Nim: proc(a0: T, ...): R"""
     tup = self.nodes[0]
     ret = self.nodes[1].to_nim()
     params = _tuple_elements_nim(tup)
@@ -136,16 +145,19 @@ def to_nim(self, prec=None):
 
 @method(empty_tuple_type)
 def to_nim(self, prec=None):
+    """empty_tuple_type: '(' ',' ')' (empty params) -> Nim: '()'"""
     return "()"
 
 
 @method(singleton_tuple_type)
 def to_nim(self, prec=None):
+    """singleton_tuple_type: '(' type_annotation ',' ')' -> Nim: '(T,)'"""
     return f"({self.nodes[0].to_nim()},)"
 
 
 @method(multi_tuple_type)
 def to_nim(self, prec=None):
+    """multi_tuple_type: '(' type_annotation (',' type_annotation)+ [','] ')' -> Nim: '(T, U, ...)'"""
     elems = _tuple_elements_nim(self)
     return f"({', '.join(elems)})"
 
@@ -167,6 +179,7 @@ def _tuple_elements_nim(tup):
 
 @method(optional_type)
 def to_nim(self, prec=None):
+    """optional_type: '?' type_annotation -> Nim: Option[T] (imports options); ref types stay as-is"""
     inner = self.nodes[0].to_nim()
     # For ref object types (classes), the type is already nullable — no Option needed
     sym = ParserState.symbol_table.lookup(inner)
@@ -178,6 +191,7 @@ def to_nim(self, prec=None):
 
 @method(union_type)
 def to_nim(self, prec=None):
+    """union_type: maybe_optional ('|' maybe_optional)+ -> Nim: best-effort 'T | U' (Nim uses object variants instead)"""
     # Nim doesn't have union types directly; emit as a comment-annotated first type
     parts = [self.nodes[0].to_nim()]
     st = self.nodes[1]
