@@ -1,0 +1,58 @@
+#https://www.python.org/doc/essays/graphs/
+type Node_T is str
+type Graph_T is {Node_T}[]Node_T
+graph: Graph_T = {'A': ['B', 'C'],
+         'B': ['C', 'D'],
+         'C': ['D'],
+         'D': ['C'],
+         'E': ['F'],
+         'F': ['C']}
+
+def find_path(graph: Graph_T, start_node: Node_T, end_node: Node_T, path:[]Node_T=[]) -> []Node_T:
+    path = path + [start_node]
+    if start_node == end_node:
+        return path
+    if start_node not in graph:
+        return None
+    for node in graph[start_node]:
+        if node not in path:
+            newpath : []Node_T = find_path(graph, node, end_node, path)
+            if newpath:
+              return newpath
+    return None
+
+assert find_path(graph, 'A', 'D') ==  ['A', 'B', 'C', 'D']
+print(find_path(graph, 'A', 'D'))
+
+def find_all_paths(graph: Graph_T, start_node: Node_T, end_node: Node_T, path:[]Node_T=[]) -> [][]Node_T:
+    path = path + [start_node]
+    if start_node == end_node:
+        return [path]
+    if start_node not in graph:
+        return []
+    paths: [][]Node_T = []
+    for node in graph[start_node]:
+        if node not in path:
+            newpaths : [][]Node_T = find_all_paths(graph, node, end_node, path)
+            for newpath in newpaths:
+                paths.append(newpath)
+    return paths
+assert find_all_paths(graph, 'A', 'D') == [['A', 'B', 'C', 'D'], ['A', 'B', 'D'], ['A', 'C', 'D']]
+print(find_all_paths(graph, 'A', 'D'))
+
+def find_shortest_path(graph: Graph_T, start_node: Node_T, end_node: Node_T, path:[]Node_T=[]) -> []Node_T:
+    path = path + [start_node]
+    if start_node == end_node:
+        return path
+    if start_node not in graph:
+        return []
+    shortest : []Node_T = []
+    for node in graph[start_node]:
+        if node not in path:
+            newpath: []Node_T = find_shortest_path(graph, node, end_node, path)
+            if newpath:
+                if not shortest or len(newpath) < len(shortest):
+                    shortest = newpath
+    return shortest
+print (find_shortest_path(graph, 'A', 'D'))
+assert find_shortest_path(graph, 'A', 'D') == ['A', 'B', 'D']
