@@ -419,7 +419,8 @@ def main(args=None):
         parser = argparse.ArgumentParser()
         parser.add_argument("file", nargs="?")
         parser.add_argument("rest", nargs="*")
-        parser.add_argument("-c", action="store_true")
+        parser.add_argument("-c", action="store_true", help="compile only")
+        parser.add_argument("-r", action="store_true", help="compile and run")
         args = parser.parse_args()
     if args.file:
         with open(args.file) as f:
@@ -427,14 +428,18 @@ def main(args=None):
     else:
         code = sys.stdin.read()
     output = translate(code)
-    if args.c and args.file:
+    if args.file:
         base = os.path.splitext(args.file)[0]
         nim_file = base + ".nim"
         with open(nim_file, "w") as f:
             f.write(output)
         print(f"Wrote {nim_file}")
-        result = subprocess.run(["nim", "c", "-r", nim_file] + (args.rest or []))
-        sys.exit(result.returncode)
+        if args.r:
+            result = subprocess.run(["nim", "c", "-r", nim_file] + (args.rest or []))
+            sys.exit(result.returncode)
+        elif args.c:
+            result = subprocess.run(["nim", "c", nim_file])
+            sys.exit(result.returncode)
     else:
         print(output, end="")
 
@@ -708,7 +713,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Translate HPython (.hpy) to Nim")
     parser.add_argument("file", nargs="?", help="source file to translate (reads stdin if omitted)")
     parser.add_argument("rest", nargs="*", help="arguments passed to the compiled program")
-    parser.add_argument("-c", action="store_true", help="compile and run the generated Nim file")
+    parser.add_argument("-c", action="store_true", help="compile only")
+    parser.add_argument("-r", action="store_true", help="compile and run")
     parser.add_argument("--test", action="store_true", help="run built-in tests")
     args = parser.parse_args()
     if args.test:
