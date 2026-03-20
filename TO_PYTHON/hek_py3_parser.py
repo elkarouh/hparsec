@@ -15,6 +15,7 @@ from hek_tokenize import RichNL
 from hek_parsec import method, ParserState
 from hek_helpers import INDENT_STR, _ind, _richnl_lines, _block_inline_header_comment, _block_last_stmt
 import hek_py3_stmt  # noqa: F401 — registers stmt to_py() methods
+from hek_py3_expr import _bash_to_py  # bash placeholder resolution
 
 ###############################################################################
 # to_py() methods
@@ -430,7 +431,6 @@ def to_py(self, prec=None):
             return str(info[attr])
     # Resolve bashisms: __bash_*__ placeholders -> Python equivalents
     if name.startswith("__bash_") and name.endswith("__"):
-        from hek_py3_expr import _bash_to_py
         return _bash_to_py(name)
     return name
 
