@@ -412,43 +412,6 @@ def translate(code):
     return result
 
 
-def main(args=None):
-    import subprocess
-    if args is None:
-        import argparse
-        parser = argparse.ArgumentParser()
-        parser.add_argument("file", nargs="?")
-        parser.add_argument("rest", nargs="*")
-        parser.add_argument("-c", action="store_true", help="compile only")
-        parser.add_argument("-r", action="store_true", help="compile and run")
-        args = parser.parse_args()
-    if args.file:
-        with open(args.file) as f:
-            code = f.read()
-    else:
-        code = sys.stdin.read()
-    output = translate(code)
-    if args.file:
-        base = os.path.splitext(args.file)[0]
-        nim_file = base + ".nim"
-        with open(nim_file, "w") as f:
-            f.write(output)
-        print(f"Wrote {nim_file}")
-        if args.r:
-            result = subprocess.run(["nim", "c", "-r", nim_file] + (args.rest or []))
-            sys.exit(result.returncode)
-        elif args.c:
-            result = subprocess.run(["nim", "c", nim_file])
-            sys.exit(result.returncode)
-    else:
-        print(output, end="")
-
-
-###############################################################################
-# Tests
-###############################################################################
-
-
 def run_tests():
     print("=" * 60)
     print("Python 3.14 -> Nim Translator Tests")
@@ -708,16 +671,145 @@ def run_tests():
     return failed
 
 
-if __name__ == "__main__":
-    import argparse
-    parser = argparse.ArgumentParser(description="Translate HPython (.hpy) to Nim")
-    parser.add_argument("file", nargs="?", help="source file to translate (reads stdin if omitted)")
-    parser.add_argument("rest", nargs="*", help="arguments passed to the compiled program")
-    parser.add_argument("-c", action="store_true", help="compile only")
-    parser.add_argument("-r", action="store_true", help="compile and run")
-    parser.add_argument("--test", action="store_true", help="run built-in tests")
-    args = parser.parse_args()
-    if args.test:
+def main(argv=None):
+    """Entry point with nim-style argument parsing.
+
+    Mirrors the nim compiler's own CLI so muscle memory transfers directly::
+
+        nim  c        [-r] [nim-flags] file.nim  [-- prog-args]
+        py2nim  c     [-r] [nim-flags] file.hpy  [-- prog-args]
+
+    Subcommands (anything that nim accepts: c, cpp, js, check, doc, …) are
+    passed straight through to the nim compiler.  All unrecognised flags (those
+    starting with ``-``) are also forwarded to nim unchanged.
+
+    Modes
+    -----
+    py2nim                          read stdin, print Nim to stdout
+    py2nim file.hpy                 transpile file → print Nim to stdout
+    py2nim c file.hpy               transpile → write .nim → nim c .nim
+    py2nim c -r file.hpy            transpile → write .nim → nim c -r .nim
+    py2nim c -r file.hpy -- a b     same, pass a b as program arguments
+    py2nim --test                   run built-in self-tests
+
+    Up-to-date check
+    ----------------
+    When a subcommand is given and the target .nim file already exists, py2nim
+    compares modification times.  If the .nim file is newer than (or the same
+    age as) the .hpy source, transpilation is skipped and nim is invoked
+    directly on the existing .nim file.  This is the same logic used by make
+    and the nim compiler's own incremental compilation.
+    """
+    import subprocess
+
+    if argv is None:
+        argv = sys.argv[1:]
+
+    # ------------------------------------------------------------------ #
+    # 1.  Intercept --test before any other parsing                       #
+    # ------------------------------------------------------------------ #
+    if "--test" in argv:
         sys.exit(run_tests())
+
+    # ------------------------------------------------------------------ #
+    # 2.  nim-style manual argument parsing                               #
+    #                                                                     #
+    #   py2nim [subcommand] [flags...] [file.hpy] [-- prog-args...]      #
+    #                                                                     #
+    #   We don't use argparse here because argparse doesn't handle        #
+    #   nim-style --flag:value pairs (the colon is unusual) and we want  #
+    #   to forward unknown flags verbatim without error.                  #
+    # ------------------------------------------------------------------ #
+    NIM_COMMANDS = {
+        "c", "cc", "cpp", "objc", "js", "e",
+        "check", "doc", "doc2", "rst2html", "rst2tex",
+        "jsondoc", "ctags", "buildindex", "genDepend",
+        "dump", "secret", "nop",
+    }
+
+    subcommand = None   # nim subcommand (c, cpp, js, …) if given
+    run = False         # -r / --run
+    hpy_file = None     # the .hpy source file
+    nim_flags = []      # flags forwarded verbatim to nim
+    prog_args = []      # program arguments (after --)
+
+    i = 0
+    after_dashdash = False
+
+    while i < len(argv):
+        arg = argv[i]
+
+        if after_dashdash:
+            prog_args.append(arg)
+
+        elif arg == "--":
+            after_dashdash = True
+
+        elif i == 0 and arg in NIM_COMMANDS:
+            subcommand = arg
+
+        elif arg in ("-r", "--run"):
+            run = True
+
+        elif arg.startswith("-"):
+            # Unknown flag — forward to nim unchanged (handles -d:, -o:,
+            # --verbosity:, --gc:, --opt:, etc.)
+            nim_flags.append(arg)
+
+        elif hpy_file is None:
+            hpy_file = arg
+
+        else:
+            # Extra positional after the file: treat as program args
+            prog_args.append(arg)
+
+        i += 1
+
+    # ------------------------------------------------------------------ #
+    # 3.  Read source                                                     #
+    # ------------------------------------------------------------------ #
+    if hpy_file:
+        with open(hpy_file) as f:
+            code = f.read()
     else:
-        main(args)
+        code = sys.stdin.read()
+
+    # ------------------------------------------------------------------ #
+    # 4.  Transpile (or skip if up to date)                               #
+    # ------------------------------------------------------------------ #
+    if hpy_file and subcommand:
+        base = os.path.splitext(hpy_file)[0]
+        nim_file = base + ".nim"
+
+        # Up-to-date check: skip transpilation when .nim is newer than .hpy
+        hpy_mtime = os.path.getmtime(hpy_file)
+        nim_exists = os.path.exists(nim_file)
+        nim_mtime  = os.path.getmtime(nim_file) if nim_exists else 0
+
+        if nim_exists and nim_mtime >= hpy_mtime:
+            print(f"Up to date: {nim_file}", file=sys.stderr)
+        else:
+            nim_output = translate(code)
+            with open(nim_file, "w") as f:
+                f.write(nim_output)
+            print(f"Wrote {nim_file}", file=sys.stderr)
+
+        # Build nim command: nim <subcommand> [nim-flags] [-r] file.nim [-- prog-args]
+        cmd = ["nim", subcommand] + nim_flags
+        if run:
+            cmd.append("-r")
+        cmd.append(nim_file)
+        if prog_args:
+            cmd += prog_args
+
+        result = subprocess.run(cmd)
+        sys.exit(result.returncode)
+
+    else:
+        # No subcommand → transpile to stdout
+        nim_output = translate(code)
+        print(nim_output, end="")
+
+
+if __name__ == "__main__":
+    main()
