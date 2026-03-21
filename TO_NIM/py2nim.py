@@ -230,6 +230,14 @@ def translate(code):
         deduped.append(line)
     output = deduped
 
+    # Remove blank lines that were left behind by erased import statements
+    # (mapped stdlib imports return None/'' from to_nim() and leave orphan blanks).
+    # Strategy: collapse runs of more than one consecutive blank line at the top
+    # of the output, and remove isolated blank lines that replaced a single statement.
+    # Simpler and safer: strip leading blank lines entirely before inserting imports.
+    while output and output[0] == '':
+        output.pop(0)
+
     # Insert collected Nim imports at the top (after any leading comments)
     if ParserState.nim_imports:
         import_line = "import " + ", ".join(sorted(ParserState.nim_imports))

@@ -908,9 +908,10 @@ def to_nim(self):
     # Check if module has a known Nim equivalent
     nim_module = _PY_MODULE_TO_NIM.get(module)
     if nim_module is not None:
-        if names_str and names_str != "*":
-            return f"from {nim_module} import {names_str}"
-        ParserState.nim_imports.add(nim_module)
+        # Always just add to nim_imports — Nim doesn't have 'from X import Y'
+        # syntax for stdlib modules; everything comes in via 'import X'.
+        if nim_module:
+            ParserState.nim_imports.add(nim_module)
         return None  # handled via nim_imports
     # Split names and generate one let per name
     # names_str may be "X", "X, Y", "(X, Y)", or "X as A"
