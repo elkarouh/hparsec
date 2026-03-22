@@ -29,7 +29,7 @@ IMPLEMENTATION APPROACH
 Region is a first-class class.  Complex regions are composed from simpler
 ones using Python native operators:
 
-    annulus = ~Circle(center, inner) & Circle(center, outer)
+    Annulus = ~Circle(center, inner) & Circle(center, outer)
 
 Membership is tested with the natural `in` keyword.
 """
@@ -172,7 +172,7 @@ def Annulus(center: Point, inner_radius: float, outer_radius: float) -> Region:
 type AircraftKind is enum FRIENDLY, HOSTILE
 
 
-type Ship is tuple:
+type Ship is record:
     name:               str
     position:           Point
     inner_radius:       float   # engageability zone inner edge
@@ -203,19 +203,19 @@ type TimeStep is tuple:
 # Zone Definitions
 # ---------------------------------------------------------------------------
 
-def zones_for_ship(ship: Ship) -> []NamedZone:
+def zones_for_ship(self: Ship) -> []NamedZone:
     """Pre-build all zones associated with a ship."""
     var zones: []NamedZone = [
-        NamedZone(f"{ship.name} engageability zone",
-                  Annulus(ship.position, ship.inner_radius, ship.outer_radius)),
-        NamedZone(f"{ship.name} weapon doctrine",
-                  Sector(ship.position, ship.weapon_heading,
-                         ship.weapon_half_angle, ship.weapon_range)),
+        NamedZone(f"{self.name} engageability zone",
+                  Annulus(self.position, self.inner_radius, self.outer_radius)),
+        NamedZone(f"{self.name} weapon doctrine",
+                  Sector(self.position, self.weapon_heading,
+                         self.weapon_half_angle, self.weapon_range)),
     ]
-    if ship.slave_radius > 0:
+    if self.slave_radius > 0:
         zones.append(NamedZone(
-            f"{ship.name} slave doctrine",
-            Circle(ship.position, ship.slave_radius),
+            f"{self.name} slave doctrine",
+            Circle(self.position, self.slave_radius),
         ))
     return zones
 
@@ -275,7 +275,7 @@ def build_scenario():
 
     # Build all ship zones once — reused across every time step
     let ship_zones: []NamedZone = [zone for ship in ships
-                                       for zone in zones_for_ship(ship)]
+                                       for zone in ship.zones_for_ship()]
 
     # Tight zones: fixed polygonal areas (e.g. commercial flight corridors)
     let tight_zones: []NamedZone = [
@@ -327,7 +327,7 @@ def main() -> None:
     print "  Geometric Region Server  HPython Prototype"
     print "  (Based on Hudak & Jones, Yale, 1994)"
     print "=" * 60
-    print ""
+    print
 
     let (ships, all_zones, time_steps) = build_scenario()
 
@@ -338,15 +338,14 @@ def main() -> None:
     print "Zones:"
     for zone in all_zones:
         print f"  {zone.name}"
-    print ""
+    print
     print "-" * 60
-    print ""
-
+    print
     run_geo_server(all_zones, time_steps)
 
     print "-" * 60
     print "Region composition demo:"
-    print ""
+    print
 
     let aegis: Ship = ships[0]
     let engage: Region = Annulus(aegis.position, aegis.inner_radius, aegis.outer_radius)

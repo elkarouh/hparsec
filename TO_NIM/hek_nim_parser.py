@@ -1624,25 +1624,30 @@ def to_nim(self, indent=0):
         block_node = rhs
     fields = _extract_fields_from_block(block_node, indent + 1)
     nim_kind = "tuple" if keyword == "tuple" else "object"
-    # Register type kind and field order for tuple constructor translation
+    # Register type kind and field order for constructor translation
     ParserState.symbol_table.add(name, nim_kind, "type")
+    import re as _re
+    field_names = []
+    field_types_list = []
+    for fline in fields:
+        fm = _re.match(r'\s*(\w+)\s*:\s*(.+)', fline)
+        if fm:
+            field_names.append(fm.group(1))
+            field_types_list.append(fm.group(2).strip())
+    if name not in ParserState.class_field_types:
+        ParserState.class_field_types[name] = {}
+    for fn, ft in zip(field_names, field_types_list):
+        ParserState.class_field_types[name][fn] = ft
+    if not hasattr(ParserState, 'tuple_field_order'):
+        ParserState.tuple_field_order = {}
     if nim_kind == "tuple":
-        import re as _re
-        field_names = []
-        field_types_list = []
-        for fline in fields:
-            fm = _re.match(r'\s*(\w+)\s*:\s*(.+)', fline)
-            if fm:
-                field_names.append(fm.group(1))
-                field_types_list.append(fm.group(2).strip())
-        if name not in ParserState.class_field_types:
-            ParserState.class_field_types[name] = {}
-        for fn, ft in zip(field_names, field_types_list):
-            ParserState.class_field_types[name][fn] = ft
-        # Store ordered field names for positional constructor translation
-        if not hasattr(ParserState, 'tuple_field_order'):
-            ParserState.tuple_field_order = {}
+        # Tuples: positional constructor -> (field: val, ...)
         ParserState.tuple_field_order[name] = field_names
+    else:
+        # Objects: positional constructor -> TypeName(field: val, ...)
+        if not hasattr(ParserState, 'object_field_order'):
+            ParserState.object_field_order = {}
+        ParserState.object_field_order[name] = field_names
     return f"{_ind(indent)}type {name}{params} = {nim_kind}\n" + "\n".join(fields)
 
 

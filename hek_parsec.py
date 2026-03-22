@@ -129,8 +129,10 @@ class ParserState:
     symbol_table = SymbolTable()
     nim_imports: set = set()
     tick_types: dict = {}  # {TypeName: {First: val, Last: val, members: [...]}}
-    class_field_types: dict = {}  # {ClassName: {field_name: nim_type}}
-    proc_param_types: dict = {}   # {proc_name: [nim_type, ...]} positional param types
+    class_field_types: dict = {}   # {ClassName: {field_name: nim_type}}
+    proc_param_types: dict = {}    # {proc_name: [nim_type, ...]} positional param types
+    tuple_field_order: dict = {}   # {TupleName: [field, ...]} for positional tuple constructors
+    object_field_order: dict = {}  # {ObjectName: [field, ...]} for positional object constructors
 
     @classmethod
     def reset(cls):
@@ -142,6 +144,7 @@ class ParserState:
         cls.class_field_types = {}
         cls.proc_param_types = {}
         cls.tuple_field_order = {}
+        cls.object_field_order = {}
 
 
 G = ParserState  # backward compat alias

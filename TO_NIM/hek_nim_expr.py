@@ -757,17 +757,19 @@ def to_nim(self, prec=None):
                 and self.nodes[1].nodes
                 and type(self.nodes[1].nodes[0]).__name__ == "call_trailer")
     if has_call:
-        # Tuple type constructor: TupleType(a, b) -> (field1: T(a), field2: b)
-        # Use explicit field types to coerce subclass refs to base class
+        # Tuple/object type constructor: TupleType(a, b) -> (field1: a, field2: b)
+        #                                ObjectType(a, b) -> ObjectType(field1: a, field2: b)
         if raw_name not in _PY_IDENT_TO_NIM:
             tuple_fields = getattr(ParserState, 'tuple_field_order', {}).get(raw_name)
-            if tuple_fields:
+            obj_fields = getattr(ParserState, 'object_field_order', {}).get(raw_name)
+            named_fields = tuple_fields or obj_fields
+            if named_fields:
                 call_node = self.nodes[1].nodes[0]
                 args = _extract_call_args(call_node)
-                if len(args) == len(tuple_fields):
+                if len(args) == len(named_fields):
                     ftype_map = ParserState.class_field_types.get(raw_name, {})
                     pairs_parts = []
-                    for fn, av in zip(tuple_fields, args):
+                    for fn, av in zip(named_fields, args):
                         ftype = ftype_map.get(fn, "")
                         # If field type is a ref object class, cast to that type for proper subtype coercion
                         sym = ParserState.symbol_table.lookup(ftype)
@@ -777,7 +779,12 @@ def to_nim(self, prec=None):
                             pairs_parts.append(f"{fn}: {av}")
                     pairs = ", ".join(pairs_parts)
                     rest = "".join(tr.to_nim() for tr in self.nodes[1].nodes[1:])
-                    return f"({pairs}){rest}"
+                    if obj_fields:
+                        # Nim object: TypeName(field: val, ...)
+                        return f"{raw_name}({pairs}){rest}"
+                    else:
+                        # Nim tuple: (field: val, ...)
+                        return f"({pairs}){rest}"
         # PyObject callable: f(args) where f is a PyObject -> callObject(f, args)
         if raw_name not in _PY_IDENT_TO_NIM:  # skip builtins like str, list, etc.
             sym = ParserState.symbol_table.lookup(raw_name)
