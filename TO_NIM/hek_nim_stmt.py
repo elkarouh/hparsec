@@ -989,7 +989,11 @@ def to_nim(self):
                     cname = type(child).__name__
                     if cname == "dotted_name":
                         parts.append(child.to_nim())
-    return "import " + ", ".join(parts)
+    # Add to nim_imports so the consolidated import line at the top handles
+    # deduplication (avoids duplicate imports when `from X import Y` also pulls X).
+    for part in parts:
+        ParserState.nim_imports.add(part)
+    return None
 
 
 @method(type_alias_params)

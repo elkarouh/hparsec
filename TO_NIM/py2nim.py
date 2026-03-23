@@ -925,6 +925,15 @@ def main(argv=None):
         cache_dir, nim_file, exe_file, nimcache_dir = _cache_paths(hpy_file)
         os.makedirs(cache_dir, exist_ok=True)
 
+        # Install stdlib.nim into the cache dir so `import stdlib` works.
+        import shutil as _shutil
+        _stdlib_src = os.path.join(_dir, "stdlib.nim")
+        _stdlib_dst = os.path.join(cache_dir, "stdlib.nim")
+        if os.path.exists(_stdlib_src):
+            if not os.path.exists(_stdlib_dst) or \
+               os.path.getmtime(_stdlib_src) > os.path.getmtime(_stdlib_dst):
+                _shutil.copy2(_stdlib_src, _stdlib_dst)
+
         hpy_mtime = os.path.getmtime(hpy_file)
         nim_mtime = os.path.getmtime(nim_file) if os.path.exists(nim_file) else 0
         exe_mtime = os.path.getmtime(exe_file) if os.path.exists(exe_file) else 0

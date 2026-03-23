@@ -681,6 +681,10 @@ _PY_UNIVERSAL_METHOD_TO_NIM = {
 def _translate_method(obj_name, method_name):
     """Translate a Python method name based on the object's type from the symbol table."""
     sym = ParserState.symbol_table.lookup(obj_name)
+    # For attribute chains like "self.G", try looking up the last field name
+    if sym is None and "." in obj_name:
+        field = obj_name.rsplit(".", 1)[-1]
+        sym = ParserState.symbol_table.lookup(field)
     if sym:
         type_str = sym.get("type", "") or ""
         for prefix, mappings in _PY_METHOD_TO_NIM.items():
@@ -696,16 +700,11 @@ def _translate_method(obj_name, method_name):
         # For PyObject / pyImport module vars, don't apply universal mappings
         if type_str.startswith("_py_module:") or type_str.startswith("_nim_module:"):
             return method_name
-    # Fall back to universal mappings, but skip get->getOrDefault for unknown types
-    # (it would wrongly translate requests.get(), dict.get() on untyped vars, etc.)
+    # Fall back to universal mappings.
+    # .get(key, default) is exclusively a dict/Table pattern in HPython code —
+    # always map it. (nimpy module vars are already handled above via early return.)
     if method_name == "get":
-        # Only map get->getOrDefault if object is known to be a Table
-        if sym:
-            t = sym.get("type", "") or ""
-            if t.startswith("Table[") or t.startswith("{"):
-                nim_method = "getOrDefault"
-                return nim_method
-        return method_name  # leave .get() unchanged for unknown types
+        return "getOrDefault"
     nim_method = _PY_UNIVERSAL_METHOD_TO_NIM.get(method_name, method_name)
     if nim_method in _STRUTILS_METHODS:
         ParserState.nim_imports.add("strutils")
