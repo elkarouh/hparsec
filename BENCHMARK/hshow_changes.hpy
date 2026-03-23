@@ -1,0 +1,218 @@
+#!/usr/bin/env py2nim
+"""
+HPython equivalent of the list_all_changes() python script.
+
+Parses a TACT baseline changes_report file and groups file changes
+(CHANGED / ADDED / DELETED) by committer, printing a formatted summary.
+
+Usage:
+    hshow_changes <BASELINE>
+    hshow_changes          # uses $CONTEXT_CM_BASELINE to locate the file
+"""
+
+import re
+import sys
+
+
+# ---------------------------------------------------------------------------
+# ANSI colour helpers
+# ---------------------------------------------------------------------------
+const RESET: str = "\x1b[0m"
+
+def bold_white(s: str) -> str:
+    f"\x1b[1;37m{s}{RESET}"
+
+def bold_yellow(s: str) -> str:
+    f"\x1b[1;33m{s}{RESET}"
+
+def bold_cyan(s: str) -> str:
+    f"\x1b[1;36m{s}{RESET}"
+
+def bold_red(s: str) -> str:
+    f"\x1b[1;31m{s}{RESET}"
+
+
+# ---------------------------------------------------------------------------
+# Data model
+# ---------------------------------------------------------------------------
+const ADMIN_COMMITTERS: {}str = {"ifpsadm", "eldadm", "tactadm"}
+const TOOL_COMMON: str = "TOOL.COMMON"
+
+type FileChange is record:
+    kind:     str          # CHANGED | ADDED | DELETED
+    filepath: str
+    diff_cmd: str = ""     # only for CHANGED
+    view:     str = ""     # branch the change came from
+
+
+# ---------------------------------------------------------------------------
+# Parsing
+# ---------------------------------------------------------------------------
+const RE_CHANGED: object = re.compile(r"^\s+changed\s+.*#emacs:", re.IGNORECASE)
+const RE_ADDED:   object = re.compile(r"^\s+added\s+(\S+)",        re.IGNORECASE)
+const RE_DELETED: object = re.compile(r"^\s+deleted\s+(\S+)",      re.IGNORECASE)
+const RE_MERGED:  object = re.compile(r"<-\s+Merged from branch:\s+(\S+)")
+
+
+def _extract_filepath_from_ediff(diff_cmd: str) -> str:
+    """Pull the first filename argument (old versioned path) from an ediff-files call."""
+    let parts: []str = re.findall("\"([^\"]+)\"", diff_cmd)
+    parts[0] if parts else ""
+
+
+def parse_changes_report(path: str) -> {str}[]FileChange:
+    var committer_changes: {str}[]FileChange = {:}
+
+    var current_kind:     str  = ""
+    var current_filepath: str  = ""
+    var current_diff_cmd: str  = ""
+    var change_detected:  bool = False
+
+    with open(path, encoding="utf-8", errors="replace") as fh:
+        for raw_line in fh:
+            let line:     str = raw_line.rstrip("\n")
+            let stripped: str = line.lstrip()
+
+            if RE_CHANGED.match(line):
+                let sep:       str = "#emacs:"
+                let diff_part: str = line[line.index(sep) + len(sep):]
+                current_diff_cmd = diff_part.strip()
+                current_filepath = _extract_filepath_from_ediff(current_diff_cmd)
+                current_kind     = "CHANGED"
+                change_detected  = True
+                continue
+
+            var ma: []str = [""]
+            if RE_ADDED.match(line, ma):
+                current_filepath = ma[0]
+                current_diff_cmd = ""
+                current_kind     = "ADDED"
+                change_detected  = True
+                continue
+
+            var md: []str = [""]
+            if RE_DELETED.match(line, md):
+                current_filepath = md[0]
+                current_diff_cmd = ""
+                current_kind     = "DELETED"
+                change_detected  = True
+                continue
+
+            if "<- Merged from branch:" in stripped and change_detected:
+                var mm: []str = [""]
+                if RE_MERGED.search(line, mm) < 0:
+                    continue
+                let view:        str   = mm[0]
+                let after_main:  str   = view.split("/main/", 1)[-1]
+                let branch_part: str   = after_main.split("/")[0]
+                let tokens:      []str = branch_part.split(".")
+                let committer:   str   = tokens[-2] if len(tokens) >= 2 else ""
+
+                let skip: bool = (
+                    committer in ADMIN_COMMITTERS
+                    or TOOL_COMMON in line
+                    or not change_detected
+                )
+                if not skip:
+                    committer_changes.mgetOrPut(committer, []).add(
+                        FileChange(
+                            kind=current_kind,
+                            filepath=current_filepath,
+                            diff_cmd=current_diff_cmd,
+                            view=view,
+                        )
+                    )
+                    change_detected = False
+
+    return committer_changes
+
+
+# ---------------------------------------------------------------------------
+# Display helpers
+# ---------------------------------------------------------------------------
+
+def _display_file(change: FileChange) -> None:
+    let kind_label: str = {
+        "CHANGED": bold_white("CHANGED"),
+        "ADDED":   bold_cyan("ADDED"),
+        "DELETED": bold_red("DELETED"),
+    }.get(change.kind, change.kind)
+    print(f"FILE {kind_label}: {change.filepath}")
+
+
+def print_changes(committer_changes: {str}[]FileChange) -> None:
+    for committer, changes in sorted(committer_changes.items()):
+        let header: str = (
+            f"{'=' * 37} Files committed by user "
+            f"{bold_white(committer)} {'=' * 37}"
+        )
+        print(header)
+        for chg in changes:
+            _display_file(chg)
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
+def locate_report(baseline: str = "") -> str:
+    var bl: str = baseline
+    if not bl:
+        bl = $CONTEXT_CM_BASELINE
+    if not bl:
+        print("ERROR: pass a changes_report file as argument, "
+              "or set $CONTEXT_CM_BASELINE.")
+        sys.exit(1)
+    f"/cm/ot/TACT/baseline_reports/TACT.TACT_CONFIG.{bl}.changes_report"
+
+
+def list_all_changes(report_path: str) -> None:
+    let committer_changes: {str}[]FileChange = parse_changes_report(report_path)
+    print_changes(committer_changes)
+
+
+def _usage() -> None:
+    print("Usage: hshow_changes <BASELINE> [-u USER] [-r]")
+    print("  -u USER  show only changes for this committer")
+    print("  -r       with -u: print only file paths, one per line")
+    sys.exit(1)
+
+
+if __name__ == "__main__":
+    var baseline: str = ""
+    var user_filter: str = ""
+    var raw_mode: bool = False
+
+    var i: int = 1
+    let argv: []str = sys.argv
+    while i < len(argv):
+        let arg: str = argv[i]
+        if arg == "-u" or arg == "--user":
+            i += 1
+            if i < len(argv):
+                user_filter = argv[i]
+        elif arg == "-r" or arg == "--raw":
+            raw_mode = True
+        elif arg == "-h" or arg == "--help":
+            _usage()
+        elif not arg.startswith("-"):
+            baseline = arg
+        i += 1
+
+    let report:            str              = locate_report(baseline)
+    let committer_changes: {str}[]FileChange = parse_changes_report(report)
+
+    if user_filter:
+        let user:     str              = user_filter.lower()
+        let filtered: {str}[]FileChange = {k: v for k, v in committer_changes.items() if k.lower() == user}
+        if not filtered:
+            print(f"No changes found for user '{user_filter}'.")
+            sys.exit(0)
+        if raw_mode:
+            for changes in filtered.values():
+                for chg in changes:
+                    print(chg.filepath)
+        else:
+            print_changes(filtered)
+    else:
+        print_changes(committer_changes)

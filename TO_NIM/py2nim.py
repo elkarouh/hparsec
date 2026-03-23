@@ -303,6 +303,105 @@ def translate(code):
             seen_types.add(tname)
         deduped_lines.append(line)
     result = chr(10).join(deduped_lines)
+    # Post-process: rewrite regex match/search variable pattern.
+    # Python:  var m: Option[auto] = str.match(RE) / if m: / m.group(N) / m.captures[N]
+    # Nim:     var m: RegexMatch    / if str.match(RE, m): / m.captures[N-1]
+    import re as _re_rm
+    def _fix_regex_match_var(text):
+        lines = text.split(chr(10))
+        out = []
+        i = 0
+        _regex_match_vars = {}  # var_name -> n_captures
+        while i < len(lines):
+            line = lines[i]
+            # Detect re-assignment: NAME = STR.(match|find)(REGEX) for known regex match vars
+            _ra = _re_rm.match(
+                r'^(\s*)(\w+)\s*=\s*(\S.*)\.(match|find)\((\w+)\)\s*$',
+                line
+            )
+            if _ra:
+                ra_indent, ra_var, ra_str, ra_method, ra_regex = (
+                    _ra.group(1), _ra.group(2), _ra.group(3),
+                    _ra.group(4), _ra.group(5)
+                )
+                if ra_var in _regex_match_vars:
+                    nim_method = "match" if ra_method == "match" else "find"
+                    # Rewrite next `if VAR:` or `if not VAR:` line
+                    if i + 1 < len(lines):
+                        next_line = lines[i + 1]
+                        _if_m = _re_rm.match(r'^(\s*)if\s+(not\s+)?' + ra_var + r':\s*$', next_line)
+                        if _if_m:
+                            negated = bool(_if_m.group(2))
+                            call = f"{ra_str}.{nim_method}({ra_regex}, {ra_var})"
+                            if nim_method == "find":
+                                cond = f"{call} < 0" if negated else f"{call} >= 0"
+                            else:
+                                cond = f"not {call}" if negated else call
+                            out.append(f"{_if_m.group(1)}if {cond}:")
+                            i += 2
+                            while i < len(lines) and (lines[i].startswith(_if_m.group(1) + "    ") or lines[i].strip() == ""):
+                                bl = lines[i]
+                                bl = _re_rm.sub(
+                                    ra_var + r'\.group\((\d+)\)',
+                                    lambda g: f"{ra_var}[{int(g.group(1)) - 1}]",
+                                    bl
+                                )
+                                out.append(bl)
+                                i += 1
+                            continue
+            # Detect: (indent)var NAME: Option[auto] = STR.(match|find)(REGEX)
+            _m = _re_rm.match(
+                r'^(\s*)(var\s+(\w+):\s*Option\[auto\]\s*=\s*(\S.*)\.(match|find)\((\w+)\))(\s*)$',
+                line
+            )
+            if _m:
+                indent, _, var_name, str_expr, method, regex_var = (
+                    _m.group(1), _m.group(2), _m.group(3),
+                    _m.group(4), _m.group(5), _m.group(6)
+                )
+                nim_method = "match" if method == "match" else "find"
+                # Determine how many capture groups are used (scan ahead)
+                max_group = 0
+                for _scan_line in lines[i:i+50]:
+                    for _g in _re_rm.findall(var_name + r'\.group\((\d+)\)', _scan_line):
+                        max_group = max(max_group, int(_g))
+                n_captures = max(max_group, 1)
+                # Track var_name -> n_captures so re-assignments can be rewritten too
+                _regex_match_vars[var_name] = n_captures
+                out.append(f"{indent}var {var_name}: array[{n_captures}, string]")
+                # Rewrite next `if VAR_NAME:` line
+                if i + 1 < len(lines):
+                    next_line = lines[i + 1]
+                    _if_m = _re_rm.match(r'^(\s*)if\s+' + var_name + r':\s*$', next_line)
+                    if _if_m:
+                        out.append(f"{_if_m.group(1)}if {str_expr}.{nim_method}({regex_var}, {var_name}):")
+                        i += 2
+                        # Rewrite m.group(N) -> m[N-1] in the block
+                        while i < len(lines) and (lines[i].startswith(_if_m.group(1) + "    ") or lines[i].strip() == ""):
+                            bl = lines[i]
+                            bl = _re_rm.sub(
+                                var_name + r'\.group\((\d+)\)',
+                                lambda g: f"{var_name}[{int(g.group(1)) - 1}]",
+                                bl
+                            )
+                            out.append(bl)
+                            i += 1
+                        continue
+                i += 1
+                continue
+            out.append(line)
+            i += 1
+        return chr(10).join(out), _regex_match_vars
+    result, _regex_match_vars = _fix_regex_match_var(result)
+    # Second pass: rewrite any remaining VAR.group(N) for known regex match vars
+    for _rmv in _regex_match_vars:
+        import re as _re_rmv
+        result = _re_rmv.sub(
+            _rmv + r'\.group\((\d+)\)',
+            lambda g, v=_rmv: f"{v}[{int(g.group(1)) - 1}]",
+            result
+        )
+
     # Post-process: fix initHashSet() to include type param from annotation
     import re as _re
     result = _re.sub(

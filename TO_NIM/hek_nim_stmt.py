@@ -247,7 +247,10 @@ def to_nim(self):
     name = self.nodes[0].to_nim() if hasattr(self.nodes[0], "to_nim") else None
     if name and rhs_node:
         inferred = _infer_literal_nim_type(rhs_node)
-        if inferred is not None:
+        # Only update type if symbol is not already typed (preserve annotation types)
+        _existing_sym = ParserState.symbol_table.lookup(name)
+        _existing_type = (_existing_sym.get("type") or "") if _existing_sym else ""
+        if inferred is not None and not _existing_type:
             ParserState.symbol_table.add(name, inferred, "var")
         else:
             # If RHS is a call/subscript on a PyObject variable, the result
@@ -282,6 +285,24 @@ def to_nim(self):
             m = _re_tb.match(r"Table\[([^,]+),\s*([^\]]+)\]", stype)
             if m:
                 parts[1] = f"initTable[{m.group(1)}, {m.group(2)}]()"
+    # Option[T] assignment: if LHS is known Option[T] and RHS is not some()/none()/nil,
+    # wrap RHS in some(...)
+    if len(parts) == 2 and prefix == "":
+        sym = ParserState.symbol_table.lookup(lhs)
+        if sym:
+            stype = sym.get("type") or ""
+            if stype.startswith("Option["):
+                rhs = parts[1]
+                # Don't wrap regex match/find calls — post-process handles those
+                _is_regex_call = bool(
+                    __import__("re").search(r'\.(match|find)\(\w+\)', rhs)
+                )
+                if not _is_regex_call and rhs not in ("nil",) and not rhs.startswith("some(") and not rhs.startswith("none("):
+                    import re as _re_opt2
+                    _m = _re_opt2.search(r"Option\[(.+)\]", stype)
+                    if _m:
+                        parts[1] = f"some({rhs})"
+                        ParserState.nim_imports.add("options")
     return prefix + " = ".join(parts)
 
 
@@ -378,6 +399,13 @@ def to_nim(self):
                     )
                     if looks_py:
                         value = f"{value}.to({annotation})"
+                # Option[T] = None -> none(T)
+                if value == "nil" and annotation.startswith("Option["):
+                    import re as _re_opt
+                    _m = _re_opt.search(r"Option\[(.+)\]", annotation)
+                    if _m:
+                        value = f"none({_m.group(1)})"
+                        ParserState.nim_imports.add("options")
                 if value:
                     result += f" = {value}"
     return result
@@ -450,8 +478,23 @@ def to_nim(self):
                     )
                     if looks_py:
                         value = f"{value}.to({annotation})"
+                # Option[T] = None -> none(T)
+                if value == "nil" and annotation.startswith("Option["):
+                    import re as _re_opt
+                    _m = _re_opt.search(r"Option\[(.+)\]", annotation)
+                    if _m:
+                        value = f"none({_m.group(1)})"
+                        ParserState.nim_imports.add("options")
                 if value:
                     result += f" = {value}"
+    # Downgrade `const` to `let` when the value is a runtime expression
+    # (e.g. re(...) calls PCRE at runtime and cannot be a compile-time const).
+    if keyword == "const" and result.startswith("const "):
+        import re as _re_rt
+        _val_part = result[result.find("=") + 1:].strip() if "=" in result else ""
+        _RUNTIME_PREFIXES = ("re(", "re.compile(")
+        if any(_val_part.startswith(p) for p in _RUNTIME_PREFIXES):
+            result = "let" + result[5:]
     return result
 
 # --- return ---

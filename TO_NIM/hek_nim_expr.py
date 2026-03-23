@@ -279,16 +279,26 @@ def binop_to_nim(self, prec=None, my_prec=None):
                 if left_is_seq or right_is_seq:
                     nim_op = "&"
             # string repetition: "x" * n -> repeat("x", n)
+            # Single-char strings: "x" -> 'x' so repeat works as char repeat
             if nim_op == "*":
                 left_is_str  = result.startswith('"') or result.startswith("'")
                 right_is_str = right.startswith('"') or right.startswith("'")
                 if left_is_str:
                     ParserState.nim_imports.add("strutils")
-                    result = f"repeat({result}, {right})"
+                    # Use char literal if possible (avoids nested quote issues in fmt strings)
+                    _rs = result
+                    if (_rs.startswith('"') and _rs.endswith('"') and len(_rs) == 3) or \
+                       (_rs.startswith("'") and _rs.endswith("'") and len(_rs) == 3):
+                        _rs = f"'{_rs[1]}'"
+                    result = f"repeat({_rs}, {right})"
                     continue
                 if right_is_str:
                     ParserState.nim_imports.add("strutils")
-                    result = f"repeat({right}, {result})"
+                    _rs = right
+                    if (_rs.startswith('"') and _rs.endswith('"') and len(_rs) == 3) or \
+                       (_rs.startswith("'") and _rs.endswith("'") and len(_rs) == 3):
+                        _rs = f"'{_rs[1]}'"
+                    result = f"repeat({_rs}, {result})"
                     continue
             result = f"{result} {nim_op} {right}"
 
@@ -328,7 +338,11 @@ def to_nim(self, prec=None):
     if s.startswith(chr(39)) and s.endswith(chr(39)) and len(s) > 2:
         inner = s[1:-1]
         inner = inner.replace(chr(34), chr(92) + chr(34))
-        return chr(34) + inner + chr(34)
+        s = chr(34) + inner + chr(34)
+    # Replace embedded __bash_env_NAME__ placeholders with literal $NAME text
+    import re as _re_str
+    if "__bash_env_" in s:
+        s = _re_str.sub(r'__bash_env_(\w+)__', r'$\1', s)
     return s
 
 
@@ -600,7 +614,7 @@ def to_nim(self, prec=None):
     elem_type = _infer_literal_nim_type(first_elem)
     if elem_type and _is_nim_ordinal(elem_type):
         return "{" + inner_node.to_nim() + "}"
-    return "{" + inner_node.to_nim() + "}.toHashSet"
+    return "[" + inner_node.to_nim() + "].toHashSet"
 
 
 @method(atom)
@@ -641,7 +655,7 @@ _PY_METHOD_TO_NIM = {
     "string": {"lower": "toLowerAscii", "upper": "toUpperAscii",
                "strip": "strip", "split": "split", "join": "join",
                "startswith": "startsWith", "endswith": "endsWith",
-               "replace": "replace", "find": "find"},
+               "replace": "replace", "find": "find", "index": "find"},
 }
 
 @method(attr_trailer)
@@ -676,11 +690,29 @@ _PY_UNIVERSAL_METHOD_TO_NIM = {
     "startswith": "startsWith",
     "endswith": "endsWith",
     "get": "getOrDefault",
+    "index": "find",
 }
 
 def _translate_method(obj_name, method_name):
     """Translate a Python method name based on the object's type from the symbol table."""
     sym = ParserState.symbol_table.lookup(obj_name)
+    # For subscript expressions like "tbl[key]", look up the base variable
+    if sym is None and "[" in obj_name:
+        base_var = obj_name[:obj_name.index("[")]
+        base_sym = ParserState.symbol_table.lookup(base_var)
+        if base_sym:
+            base_type = base_sym.get("type", "") or ""
+            # Table[K, V][key] -> V; seq[T][i] -> T
+            import re as _re_tm
+            _seq_m = _re_tm.match(r'^seq\[(.+)\]$', base_type)
+            _tbl_m = _re_tm.match(r'^Table\[.+,\s*(.+)\]$', base_type)
+            if _seq_m:
+                elem_type = _seq_m.group(1)
+                # Treat as seq for method dispatch
+                sym = {"type": f"seq[{elem_type}]"}
+            elif _tbl_m:
+                val_type = _tbl_m.group(1)
+                sym = {"type": val_type}
     # For attribute chains like "self.G", try looking up the last field name
     if sym is None and "." in obj_name:
         field = obj_name.rsplit(".", 1)[-1]
@@ -765,6 +797,16 @@ def to_nim(self, prec=None):
             if named_fields:
                 call_node = self.nodes[1].nodes[0]
                 args = _extract_call_args(call_node)
+                import re as _re_ctor
+                # If args are keyword-style (name = value), convert to colon style directly
+                if args and all(_re_ctor.match(r'^\w+ = ', a) for a in args):
+                    pairs_parts = [_re_ctor.sub(r'^(\w+) = ', r'\1: ', a, count=1) for a in args]
+                    pairs = ", ".join(pairs_parts)
+                    rest = "".join(tr.to_nim() for tr in self.nodes[1].nodes[1:])
+                    if obj_fields:
+                        return f"{raw_name}({pairs}){rest}"
+                    else:
+                        return f"({pairs}){rest}"
                 if len(args) == len(named_fields):
                     ftype_map = ParserState.class_field_types.get(raw_name, {})
                     pairs_parts = []
@@ -874,7 +916,11 @@ def to_nim(self, prec=None):
     base_name = result  # save for type-aware method lookup
     if len(self.nodes) > 1 and hasattr(self.nodes[1], "nodes") and self.nodes[1].nodes:
         trailer_list = list(self.nodes[1].nodes)
+        skip_next = False
         for i, tr in enumerate(trailer_list):
+            if skip_next:
+                skip_next = False
+                continue
             if type(tr).__name__ == "attr_trailer":
                 method_name = tr.nodes[0].to_nim()
                 # Handle Ada tick attributes: field'Next -> field.succ, field'Prev -> field.pred
@@ -887,8 +933,20 @@ def to_nim(self, prec=None):
                         result += "." + base_attr + ".pred"
                         continue
                 method_name = _translate_method(base_name, method_name)
-                # Option-typed field called as proc: insert .get() before call trailer
                 next_tr = trailer_list[i + 1] if i + 1 < len(trailer_list) else None
+                # rstrip/lstrip -> strip(chars={...}, leading/trailing=false)
+                if method_name in ("rstrip", "lstrip") and next_tr is not None and type(next_tr).__name__ == "call_trailer":
+                    raw_arg = _extract_call_arg(next_tr)
+                    side = "leading=false" if method_name == "rstrip" else "trailing=false"
+                    if raw_arg:
+                        char_arg = raw_arg.strip('"').strip("'")
+                        result += f".strip(chars={{'{char_arg}'}}, {side})"
+                    else:
+                        result += f".strip({side})"
+                    ParserState.nim_imports.add("strutils")
+                    skip_next = True  # consume the call_trailer
+                    continue
+                # Option-typed field called as proc: insert .get() before call trailer
                 if (next_tr is not None
                         and type(next_tr).__name__ == "call_trailer"
                         and _expr_is_option(result + "." + method_name)):
@@ -900,6 +958,39 @@ def to_nim(self, prec=None):
                 result += tr.to_nim()
     # Post-process: translate known Python stdlib patterns to Nim
     result = _translate_stdlib_patterns(result)
+    # Regex method calls: regex.match(s) -> s.match(regex), regex.search(s) -> s.find(regex)
+    # Only flip single-argument calls; multi-arg calls are already in Nim style.
+    import re as _re_rgx
+    for _py_m, _nim_m in (("match", "match"), ("search", "find"), ("findall", "findAll")):
+        _pat = _re_rgx.compile(r'^(\w+)\.(' + _py_m + r')\((.+)\)$')
+        _hit = _pat.match(result)
+        if _hit:
+            _rgx_var, _, _str_arg = _hit.group(1), _hit.group(2), _hit.group(3)
+            _sym = ParserState.symbol_table.lookup(_rgx_var)
+            _typ = (_sym.get("type") or "") if _sym else ""
+            if _typ == "auto" or _typ == "Regex" or _rgx_var.startswith("RE_") or _rgx_var.startswith("re_"):
+                # Only flip if single argument (no top-level comma)
+                _depth = 0
+                _has_comma = False
+                for _ch in _str_arg:
+                    if _ch in "([{": _depth += 1
+                    elif _ch in ")]}": _depth -= 1
+                    elif _ch == "," and _depth == 0: _has_comma = True; break
+                if not _has_comma:
+                    result = f"{_str_arg}.{_nim_m}({_rgx_var})"
+                else:
+                    # Two-arg call: RE.match(str, captures) -> str.match(RE, captures)
+                    _comma_pos = next(
+                        j for j, c in enumerate(_str_arg)
+                        if c == "," and sum(
+                            1 if x in "([{" else -1 if x in ")]}" else 0
+                            for x in _str_arg[:j]
+                        ) == 0
+                    )
+                    _first_arg = _str_arg[:_comma_pos].strip()
+                    _rest_args = _str_arg[_comma_pos+1:].strip()
+                    result = f"{_first_arg}.{_nim_m}({_rgx_var}, {_rest_args})"
+                break
     # Option[T] call-site coercion: wrap non-Option args in some() where param expects Option
     result = _wrap_option_args(result)
     return result
@@ -928,6 +1019,7 @@ _STDLIB_PATTERNS = [
     ("os.rmdir",          "removeDir",       "os"),
     ("os.rename",         "moveFile",        "os"),
     ("os.getenv",         "getEnv",          "os"),
+    ("os.environ.get",    "getEnv",          "os"),
     ("time.perf_counter", "cpuTime",         "times"),
     ("time.monotonic",    "cpuTime",         "times"),
     ("time.time",         "epochTime",       "times"),
@@ -1125,6 +1217,19 @@ def _translate_stdlib_patterns(expr):
         obj = expr[:-len(".readlines()")]
         ParserState.nim_imports.add("strutils")
         return f"{obj}.readAll().splitLines()"
+
+    # --- 6. sorted(X.items()) / sorted(X.pairs()) -> toSeq(X.pairs).sortedByIt(it[0]) ---
+    _sorted_m = _re.match(r'^sorted\((.+)\.(items|pairs)\(\)\)$', expr)
+    if _sorted_m:
+        ParserState.nim_imports.add("algorithm")
+        ParserState.nim_imports.add("sequtils")
+        return f"toSeq({_sorted_m.group(1)}.pairs).sortedByIt(it[0])"
+
+    # --- 7. sorted(X) -> X.sorted ---
+    _sorted_plain = _re.match(r'^sorted\((.+)\)$', expr)
+    if _sorted_plain:
+        ParserState.nim_imports.add("algorithm")
+        return f"{_sorted_plain.group(1)}.sorted"
 
     return expr
 
@@ -1498,7 +1603,7 @@ def to_nim(self, prec=None):
     """conditional: disjunction 'if' disjunction 'else' expression -> Nim: 'if cond: a else: b'"""
     # Python: value if cond else alt -> Nim: (if cond: value else: alt)
     value = self.nodes[0].to_nim()
-    cond = self.nodes[1].to_nim()
+    cond = _nim_truthiness(self.nodes[1].to_nim())
     alt = self.nodes[2].to_nim()
     result = f"(if {cond}: {value} else: {alt})"
     return result
@@ -1988,10 +2093,10 @@ if __name__ == "__main__":
         # --- Containers ---
         ("[]", "@[]"),
         ("[1, 2, 3]", "@[1, 2, 3]"),
-        ("{}", "initTable()"),
+        ("{}", "initHashSet()"),
         ("{1: 2, 3: 4}", "{1: 2, 3: 4}.toTable"),
-        ("{1, 2, 3}", "{1, 2, 3}"),
-        ('{"a", "b"}', '{"a", "b"}.toHashSet'),
+        ("{1, 2, 3}", "[1, 2, 3].toHashSet"),
+        ('{"a", "b"}', '["a", "b"].toHashSet'),
         ("()", "()"),
         # --- Calls, subscripts, attributes (same syntax) ---
         ("f(x)", "f(x)"),

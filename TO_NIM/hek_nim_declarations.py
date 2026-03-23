@@ -32,6 +32,7 @@ _PY_TO_NIM = {
     "bytes": "seq[byte]",
     "None": "void",
     "list": "seq",
+    "object": "auto",
 }
 
 # Nim ordinal types — eligible for built-in set[T]
@@ -240,7 +241,7 @@ if __name__ == "__main__":
         ("{str}int", "Table[string, int]"),
         ("{int}str", "Table[int, string]"),
         # --- Set ---
-        ("{}int", "set[int]"),
+        ("{}int", "HashSet[int]"),
         ("{}str", "HashSet[string]"),
         # --- Optional ---
         ("?int", "Option[int]"),
