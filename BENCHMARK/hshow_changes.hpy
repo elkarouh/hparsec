@@ -211,9 +211,6 @@ if __name__ == "__main__":
             baseline = arg
         i += 1
 
-    if not baseline:
-        _usage()
-
     let report:            str              = locate_report(baseline)
     let committer_changes: {str}[]FileChange = parse_changes_report(report)
 
