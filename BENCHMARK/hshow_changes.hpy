@@ -182,14 +182,15 @@ if __name__ == "__main__":
     var baseline: str = ""
     var user_filter: str = ""
     var raw_mode: bool = False
-    var next_is_user: bool = False
 
-    for arg in $@:
-        if next_is_user:
-            user_filter = arg
-            next_is_user = False
-        elif arg == "-u" or arg == "--user":
-            next_is_user = True
+    var args: []str = $@
+    var i: int = 0
+    while i < len(args):
+        let arg: str = args[i]
+        if arg == "-u" or arg == "--user":
+            i += 1
+            if i < len(args):
+                user_filter = args[i]
         elif arg.startswith("--user="):
             user_filter = arg[len("--user="):]
         elif arg == "-r" or arg == "--raw":
@@ -198,6 +199,7 @@ if __name__ == "__main__":
             _usage()
         elif not arg.startswith("-"):
             baseline = arg
+        i += 1
 
     let report:            str              = locate_report(baseline)
     let committer_changes: {str}[]FileChange = parse_changes_report(report)
