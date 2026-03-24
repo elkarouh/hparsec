@@ -1,0 +1,157 @@
+#! /usr/bin/env py2nim
+nimport algorithm, sequtils
+type State = enum ACTIVE, OPS_BUG, BUSY, DONE, BLOCKED, ON_HOLD, IDLE, BACKGROUND, INTEGRATED, MERGED, REJECTED
+
+const prefix: str = "\x1b["
+const suffix: str = "m"
+
+class Style:
+    var on: str
+    var off: str
+    def __init__(self, code: int):
+        self.on = f"{prefix}{code}{suffix}"
+        self.off = f"{prefix}0{suffix}"
+    def __call__(self, *args: str) -> str:
+        return "".join([f"{self.on}{arg}" for arg in args]) + self.off
+    def __ror__(self, other: str) -> str:
+        return self(other)
+
+let reset: Style = Style(0)
+let bold: Style = Style(1)
+let dim: Style = Style(2)
+let underscore: Style = Style(4)
+let blink: Style = Style(5)
+let inverted: Style = Style(7)
+let black: Style = Style(30)
+let red: Style = Style(31)
+let blue: Style = Style(34)
+let green: Style = Style(32)
+let yellow: Style = Style(33)
+let magenta: Style = Style(35)
+let cyan: Style = Style(36)
+let white: Style = Style(37)
+let bg_black: Style = Style(40)
+let bg_red: Style = Style(41)
+let bg_blue: Style = Style(44)
+let bg_green: Style = Style(42)
+let bg_yellow: Style = Style(43)
+let bg_magenta: Style = Style(45)
+let bg_cyan: Style = Style(46)
+let bg_white: Style = Style(47)
+let bg_default: Style = Style(49)
+
+def align(length: int, s: str) -> str:
+    return s.alignLeft(length)
+
+def colored_viewname(view_name: str) -> str:
+    let parts: []str = view_name.split('.')
+    let login_name: str = parts[0]
+    let view: str = parts[1]
+    if view.startswith("I2_"):
+        return align(64, f"{login_name}.{view | inverted | bold | blue | bg_white}")
+    else:
+        return align(64, f"{login_name}.{view | dim | bold | black | bg_white}")
+
+def colored_baseline(baseline: str) -> str:
+    let parts: []str = baseline.split('.')
+    if len(parts) > 5:
+        return align(98, f"{parts[0] | bold | yellow | bg_black}.{parts[1]}.{parts[2]}.{parts[3] | bold | yellow}.{parts[4]}.{parts[5] | bold | bg_blue | white}")
+    else:
+        return align(98, f"{parts[0] | bold | yellow | bg_black}.{parts[1]}.{parts[2]}.{parts[3] | bold | yellow}.{parts[4] | bold | bg_blue | white}")
+
+def colored_env_id(env_id: str) -> str:
+    let parts: []str = env_id.split('.')
+    if parts[1] == "OP":
+        return align(40, f"{parts[0]}.{parts[1] | bold | yellow | bg_black}.{parts[2]}")
+    else:
+        return align(40, f"{parts[0]}.{parts[1] | bold | blue | bg_white}.{parts[2]}")
+
+def colored_status(state: State) -> str:
+    case state:
+        when OPS_BUG:
+            return align(36, str(state) | bold | blink | black | bg_white)
+        when BUSY:
+            return align(36, str(state) | bold | black | bg_yellow)
+        when others:
+            return align(36, str(state) | bold | yellow | bg_green)
+
+def colored_comment(comment: str) -> str:
+    return align(35, comment | bold | black | bg_white)
+
+class Cls_View_Line:
+    var view: str
+    var baseline: str
+    var env_id: str
+    var state: State
+    var comment: str
+    def __init__(self, view: str, baseline: str, env_id: str, state: State, comment: str):
+        self.view = view
+        self.baseline = baseline
+        self.env_id = env_id
+        self.state = state
+        self.comment = comment
+
+def get_lines() -> []str:
+    shellLines: Clsview -u $USER
+
+def parse_state(s: str) -> State:
+    try:
+        State(s.replace("-", "_"))
+    except:
+        ACTIVE
+
+if __name__ == "__main__":
+    let lines: []str = get_lines()
+    print("-" * 100)
+    print("View".alignLeft(31) + "Based On".alignLeft(30) + "ENV_ID".alignLeft(15) + "State".alignLeft(11) + "COMMENT")
+    print("-" * 100)
+
+    var view_lines: []Cls_View_Line = []
+
+    for line in lines[min(3, len(lines)):]:
+        let fields: []str = line.split()
+        if len(fields) < 5:
+            if len(line) > 0:
+                print(f"unable to parse: {line}")
+            continue
+        let view_name: str = fields[0]
+        let baseline: str = fields[1]
+        let env_id: str = fields[2]
+        let status: str = fields[4]
+
+        var state: State = ACTIVE
+        var comment: str = ""
+
+        var comment_path: str = f"{getHomeDir()}/cm/{view_name}/README.txt"
+        if not -e comment_path:
+            if view_name.endswith("_t") or view_name.endswith("_i"):
+                comment_path = comment_path.replace("_t/README", "_e/README").replace("_i/README", "_e/README")
+            else:
+                comment_path = comment_path.replace("_e/README", "_t/README")
+        if -f comment_path:
+            let (comment_line, _) = shell: head -1 {comment_path}
+            let cparts: []str = comment_line.strip().split(" ", 1)
+            state = parse_state(cparts[0])
+            if len(cparts) > 1:
+                comment = cparts[1]
+
+        if status != "---":
+            state = parse_state(status)
+        if view_name.endswith("build_eld_only_t"):
+            continue
+
+        view_lines.append(Cls_View_Line(view=view_name, baseline=baseline, env_id=env_id, state=state, comment=comment))
+
+    view_lines = view_lines.sortedByIt((ord(it.state), it.view))
+
+    var previous_state: State = ACTIVE
+    var first: bool = True
+    for R in view_lines:
+        if not first and R.state != previous_state:
+            print("-" * 120)
+        var colored_line: str = f"{colored_viewname(R.view)} {colored_baseline(R.baseline)} {colored_env_id(R.env_id)} {colored_status(R.state)}"
+        if R.state != MERGED:
+            colored_line += f" {colored_comment(R.comment)}"
+        print(colored_line)
+        previous_state = R.state
+        first = False

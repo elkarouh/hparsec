@@ -1799,7 +1799,8 @@ def to_nim(self, indent=0):
     _SLOT_TYPES = ["string", "int", "string"]
 
     if target_tuple:
-        # let (out, err, code) = shell: cmd
+        # let (out, code) = shell: cmd        — 2-element
+        # let (out, code, _) = shell: cmd     — 3-element (3rd slot is "" for compat)
         slots = ["execResult[0]", "execResult[1]", '""']
         lhs = ", ".join(target_tuple)
         rhs = ", ".join(slots[:len(target_tuple)])

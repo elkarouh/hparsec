@@ -818,10 +818,11 @@ shell: rm -rf /tmp/build
 
 | HPython              | Python 3                                            | Nim                                        |
 |----------------------|-----------------------------------------------------|--------------------------------------------|
-| `let r = shell: cmd` | `subprocess.run(…, capture_output=True, text=True)` | `execCmdEx("cmd")`                         |
-| `let ls = shellLines: cmd` | `…stdout.splitlines()`                    | `execCmdEx("cmd")[0].splitLines()`         |
-| `shell: cmd`         | `subprocess.run("cmd", shell=True)`                 | `discard execCmd("cmd")`                   |
-| `shellLines: cmd`    | (implicit return of split lines)                    | `return execCmdEx("cmd")[0].splitLines()`  |
+| `let r = shell: cmd`        | `subprocess.run(…, capture_output=True, text=True)` | `execCmdEx("cmd")`                        |
+| `let (out, code) = shell: cmd` | `…stdout, …returncode`                       | `(execResult[0], execResult[1])`          |
+| `let ls = shellLines: cmd`  | `…stdout.splitlines()`                          | `execCmdEx("cmd")[0].splitLines()`        |
+| `shell: cmd`                | `subprocess.run("cmd", shell=True)`             | `discard execCmd("cmd")`                  |
+| `shellLines: cmd`           | (implicit return of split lines)                | `return execCmdEx("cmd")[0].splitLines()` |
 | `{var}` in body      | `f"""…{var}…"""`                                    | `fmt"""…{var}…"""` (imports `strformat`)   |
 
 Required imports (`subprocess`, `types`, `osproc`, `strformat`) are inserted
