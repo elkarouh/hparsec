@@ -169,6 +169,41 @@ class Tokenizer:
     _BASH_ARG_RE  = _re.compile(r'\$([0-9])')
     _BASH_ENV_RE  = _re.compile(r'\$([A-Z_][A-Z0-9_]*)')
 
+    # Bash file-test operators: '-e FILE', '-f FILE', etc.
+    # Must be preceded by whitespace or start-of-line, and followed by a space,
+    # so we never confuse with subtraction or negative numbers.
+    _BASH_FILE_TEST_RE = _re.compile(r'(?<![.\w])-([efdLrwxscbpS])(?=\s)')
+    # Bash file-comparison operators: FILE1 -nt FILE2 / FILE1 -ot FILE2
+    # Only match '-nt' and '-ot' surrounded by whitespace.
+    _BASH_FILE_NT_RE = _re.compile(r'(?<=\s)-nt(?=\s)')
+    _BASH_FILE_OT_RE = _re.compile(r'(?<=\s)-ot(?=\s)')
+
+    @staticmethod
+    def _preprocess_file_tests(s):
+        """Replace bash file-test operators with safe identifier placeholders.
+
+        Mapping::
+
+            -e FILE  -> __bash_test_e__ FILE
+            -f FILE  -> __bash_test_f__ FILE
+            -d FILE  -> __bash_test_d__ FILE
+            -L FILE  -> __bash_test_L__ FILE
+            -r FILE  -> __bash_test_r__ FILE
+            -w FILE  -> __bash_test_w__ FILE
+            -x FILE  -> __bash_test_x__ FILE
+            -s FILE  -> __bash_test_s__ FILE
+            -c FILE  -> __bash_test_c__ FILE
+            -b FILE  -> __bash_test_b__ FILE
+            -p FILE  -> __bash_test_p__ FILE
+            -S FILE  -> __bash_test_S__ FILE
+            -nt      -> __bash_nt__
+            -ot      -> __bash_ot__
+        """
+        s = Tokenizer._BASH_FILE_TEST_RE.sub(r'__bash_test_\1__', s)
+        s = Tokenizer._BASH_FILE_NT_RE.sub('__bash_nt__', s)
+        s = Tokenizer._BASH_FILE_OT_RE.sub('__bash_ot__', s)
+        return s
+
     @staticmethod
     def _preprocess_bashisms(s):
         """Replace bash-style special variables with safe identifier placeholders.
@@ -221,6 +256,7 @@ class Tokenizer:
     def __init__(self, s):
         s = self._preprocess_tick_attributes(s)
         s = self._preprocess_range_operators(s)
+        s = self._preprocess_file_tests(s)
         s = self._preprocess_bashisms(s)
         self.tokengen = tokenize_string(s)
         self.source_lines = s.splitlines(True)  # keep line endings for span extraction

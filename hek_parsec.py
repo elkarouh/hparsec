@@ -128,6 +128,7 @@ class ParserState:
     memos: dict = {}
     symbol_table = SymbolTable()
     nim_imports: set = set()
+    nim_pragmas: set = set()       # top-level {.experimental: ...} pragmas
     tick_types: dict = {}  # {TypeName: {First: val, Last: val, members: [...]}}
     class_field_types: dict = {}   # {ClassName: {field_name: nim_type}}
     proc_param_types: dict = {}    # {proc_name: [nim_type, ...]} positional param types
@@ -140,6 +141,7 @@ class ParserState:
         cls.memos.clear()
         cls.symbol_table = SymbolTable()
         cls.nim_imports = set()
+        cls.nim_pragmas = set()
         cls.tick_types = {}
         cls.class_field_types = {}
         cls.proc_param_types = {}

@@ -64,6 +64,19 @@ _DUNDER_TO_NIM = {
     "__getitem__":   "`[]`",
     "__setitem__":   "`[]=`",
     "__contains__":  "contains",
+    # Callable object
+    "__call__":      "`()`",
+    # Reflected binary operators (param order is flipped vs normal)
+    "__radd__":      "`+`",
+    "__rsub__":      "`-`",
+    "__rmul__":      "`*`",
+    "__rtruediv__":  "`/`",
+    "__rfloordiv__": "`div`",
+    "__rmod__":      "`mod`",
+    "__rpow__":      "`^`",
+    "__ror__":       "`|`",
+    "__rand__":      "`&`",
+    "__rxor__":      "`xor`",
     # String / repr
     "__str__":       "`$`",
     "__repr__":      "`$`",
@@ -84,6 +97,12 @@ _DUNDER_TO_NIM = {
 }
 
 _SKIP_DUNDERS = {k for k, v in _DUNDER_TO_NIM.items() if v is None}
+
+# Reflected operators: Python's (self, other) maps to Nim's (other, self)
+_REVERSED_DUNDERS = {
+    "__radd__", "__rsub__", "__rmul__", "__rtruediv__", "__rfloordiv__",
+    "__rmod__", "__rpow__", "__ror__", "__rand__", "__rxor__",
+}
 
 
 def _nim_proc_name(py_name):
@@ -339,7 +358,8 @@ def to_nim(self, indent=0, is_virtual=False, class_name=None, parent_name=None, 
             new_name = f"new{class_name}"
             export = "*" if base_indent == 0 else ""
             result_lines.append(f"{_ind(base_indent)}proc {new_name}{export}{type_params}(): {class_type} =")
-            result_lines.append(f"{_ind(base_indent + 1)}new(result)")
+            new_body = "new(result)" if is_virtual_class else f"result = {class_type}()"
+            result_lines.append(f"{_ind(base_indent + 1)}{new_body}")
             # Initialize fields with default values
             for fname, fdefault in field_defaults:
                 result_lines.append(f"{_ind(base_indent + 1)}result.{fname} = {fdefault}")
@@ -724,12 +744,25 @@ def to_nim(self, prec=None):
         info = ParserState.tick_types.get(type_name)
         if info and attr in info:
             return str(info[attr])
+        # Ada tick attributes for enum operations
+        if attr == "Next":
+            return type_name + ".succ"
+        elif attr == "Prev":
+            return type_name + ".pred"
+        # General value tick attributes
+        elif attr == "len" or attr == "Length":
+            return type_name + ".len"
+        elif attr == "Size":
+            return type_name + ".sizeof"
+        # Unknown tick attribute — emit as method call
+        return type_name + "." + attr
     # Resolve bashisms: __bash_*__ placeholders -> Nim equivalents
     if name.startswith("__bash_") and name.endswith("__"):
         return _bash_to_nim(name)
-    # Nim disallows a single leading underscore — strip it.
+    # '_' alone is the discard identifier in Nim — keep it.
+    # Other single-leading-underscore names: strip the underscore.
     # But leave double-underscore names (dunder) intact.
-    if name.startswith("_") and not name.startswith("__"):
+    if name != "_" and name.startswith("_") and not name.startswith("__"):
         name = name[1:]
     return name
 
@@ -1307,16 +1340,7 @@ def to_nim(self, indent=0):
         if hoisted:
             hoisted_block = "\n".join(hoisted) + "\n"
             body = "\n".join(kept)
-            # If no return annotation but body has return stmts, infer auto
-            if not ret_ann and body:
-                if _re_h.search(r'\breturn\b\s+\S', body):
-                    ret_ann = ": auto"
             return f"{hoisted_block}{decos}{_ind(indent)}proc {name}({params}){ret_ann} ={hc}\n{body}"
-    # If no return annotation but body has return statements, infer ': auto'
-    if not ret_ann and body:
-        import re as _re
-        if _re.search(r'\breturn\b\s+\S', body):
-            ret_ann = ": auto"
     # Translate dunder method names to Nim operator procs
     nim_name, nim_keyword = _nim_proc_name(name)
     if nim_name is None:
@@ -1757,6 +1781,14 @@ def to_nim(self, indent=0):
         cmd_str = f"fmt{q}{cmd}{q}"
     else:
         cmd_str = f'"{cmd}"'
+    # Replace __bash_env_NAME__ placeholders with getEnv("NAME") concatenation
+    import re as _re_env
+    def _subst_env(s):
+        ParserState.nim_imports.add("os")
+        return '" & getEnv("' + s.group(1) + '") & "'
+    cmd_str = _re_env.sub(r'__bash_env_(\w+)__', _subst_env, cmd_str)
+    # Clean up empty string fragments: "" & ... -> ... and ... & "" -> ...
+    cmd_str = cmd_str.replace('"" & ', '').replace(' & ""', '')
 
     lines = []
 
@@ -1791,6 +1823,8 @@ def to_nim(self, indent=0):
             # Register as shell_result so _nim_truthiness can resolve
             # field access like result.output -> result.output.len > 0
             ParserState.symbol_table.add(target_name, "shell_result", nim_kw)
+    elif kw == "shellLines":
+        lines.append(f"{ind}return execCmdEx({cmd_str}){timeout_comment}[0].splitLines()")
     else:
         lines.append(f"{ind}discard execCmd({cmd_str}){timeout_comment}")
 
@@ -1869,168 +1903,6 @@ def to_nim(self, indent=0):
 ###############################################################################
 # Tests
 ###############################################################################
-
-if __name__ == "__main__":
-    print("=" * 60)
-    print("Python -> Nim Compound Statement Translation Tests")
-    print("=" * 60)
-
-    tests = [
-        # --- if / elif / else ---
-        (
-            "if x:\n    pass\n",
-            "if x:\n    discard",
-        ),
-        (
-            "if x:\n    y = 1\n",
-            "if x:\n    var y = 1",
-        ),
-        (
-            "if x:\n    a = 1\nelif y:\n    b = 2\n",
-            "if x:\n    var a = 1\nelif y:\n    var b = 2",
-        ),
-        (
-            "if x:\n    a = 1\nelif y:\n    b = 2\nelse:\n    c = 3\n",
-            "if x:\n    var a = 1\nelif y:\n    var b = 2\nelse:\n    var c = 3",
-        ),
-        # --- while ---
-        (
-            "while x:\n    pass\n",
-            "while x:\n    discard",
-        ),
-        # --- for ---
-        (
-            "for x in xs:\n    pass\n",
-            "for x in xs:\n    discard",
-        ),
-        (
-            "for i in range:\n    x = i\n",
-            "for i in range:\n    var x = i",
-        ),
-        # --- try / except / finally ---
-        (
-            "try:\n    pass\nexcept:\n    pass\n",
-            "try:\n    discard\nexcept:\n    discard",
-        ),
-        (
-            "try:\n    x = 1\nexcept ValueError:\n    pass\n",
-            "try:\n    var x = 1\nexcept ValueError:\n    discard",
-        ),
-        (
-            "try:\n    x = 1\nexcept ValueError as e:\n    pass\n",
-            "try:\n    var x = 1\nexcept ValueError as e:\n    discard",
-        ),
-        (
-            "try:\n    x = 1\nfinally:\n    y = 2\n",
-            "try:\n    var x = 1\nfinally:\n    var y = 2",
-        ),
-        # --- with (kept as-is) ---
-        (
-            "with f():\n    pass\n",
-            "with f():\n    discard",
-        ),
-        (
-            "with f() as x:\n    pass\n",
-            "with f() as x:\n    discard",
-        ),
-        # --- def -> proc ---
-        (
-            "def f():\n    pass\n",
-            "proc f() =\n    discard",
-        ),
-        (
-            "def f(a, b):\n    return a\n",
-            "proc f(a: auto, b: auto) =\n    return a",
-        ),
-        (
-            "def f(a: int) -> str:\n    pass\n",
-            "proc f(a: int): string =\n    discard",
-        ),
-        (
-            "def f(*args):\n    pass\n",
-            "proc f(args: varargs[auto]) =\n    discard",
-        ),
-        # --- class -> type object ---
-        (
-            "class Foo:\n    pass\n",
-            "type Foo = object of RootObj\nproc newFoo*(): Foo =\n    new(result)",
-        ),
-        (
-            "class Foo(Bar):\n    pass\n",
-            "type Foo = object of Bar\nproc newFoo*(): Foo =\n    new(result)",
-        ),
-        # --- async def -> proc {.async.} ---
-        (
-            "async def f():\n    pass\n",
-            "proc f() {.async.} =\n    discard",
-        ),
-        # --- match -> case ---
-        (
-            "case x:\n    when 1:\n        pass\n",
-            "case x:\n    of 1:\n        discard",
-        ),
-        (
-            "case x:\n    when _:\n        pass\n",
-            "case x:\n    of _:\n        discard",
-        ),
-        (
-            "case x:\n    when 1 | 2:\n        pass\n",
-            "case x:\n    of 1, 2:\n        discard",
-        ),
-        (
-            "case x:\n    when others:\n        pass\n",
-            "case x:\n    else:\n        discard",
-        ),
-        (
-            "case x:\n    when 1 .. 5:\n        pass\n",
-            "case x:\n    of 1 .. 5:\n        discard",
-        ),
-        # --- discriminated records ---
-        (
-            "type Shape (Kind : Shape_Kind) is record:\n    case Kind is\n        when Circle:\n            Radius : float\n        when Rectangle:\n            Width : float\n            Height : float\n",
-            "type Shape = object\n    case Kind: Shape_Kind\n    of Circle:\n        Radius: float\n    of Rectangle:\n        Width: float\n        Height: float",
-        ),
-        # --- nested ---
-        (
-            "if x:\n    if y:\n        pass\n",
-            "if x:\n    if y:\n        discard",
-        ),
-        (
-            "def f():\n    for x in xs:\n        if x:\n            return x\n",
-            "proc f() =\n    for x in xs:\n        if x:\n            return x",
-        ),
-        # --- decorator ---
-        (
-            "@dec\ndef f():\n    pass\n",
-            "@dec\nproc f() =\n    discard",
-        ),
-    ]
-
-    passed = failed = 0
-    for code, expected in tests:
-        try:
-            result = parse_compound(code)
-            if result:
-                output = result.to_nim()
-                if output == expected:
-                    print(f"  PASS: {code.splitlines()[0]!r}...")
-                    passed += 1
-                else:
-                    print(f"  MISMATCH: {code.splitlines()[0]!r}...")
-                    print(f"    expected: {expected!r}")
-                    print(f"    got:      {output!r}")
-                    failed += 1
-            else:
-                print(f"  FAIL: {code.splitlines()[0]!r}... -> parse returned None")
-                failed += 1
-        except Exception as e:
-            print(f"  ERROR: {code.splitlines()[0]!r}... -> {e}")
-            import traceback
-            traceback.print_exc()
-            failed += 1
-
-    print("=" * 60)
-    print(f"Results: {passed} passed, {failed} failed")
 
 
 def _generate_init_new(func_node, indent, class_name, parent_name, is_virtual=True, type_params="", field_defaults=None):
@@ -2161,14 +2033,23 @@ def _generate_method_decl(func_node, indent, class_name, parent_name, is_virtual
                         ptype_name = type(p).__name__
                         param_nodes = []
                         if ptype_name == "param_plain":
-                            param_nodes.append(p)
+                            param_nodes.append(("plain", p))
+                        elif ptype_name == "param_star":
+                            param_nodes.append(("star", p))
                         elif ptype_name == "Several_Times":
                             for st_child in p.nodes:
                                 if type(st_child).__name__ == "Sequence_Parser":
                                     for sp_child in st_child.nodes:
                                         if type(sp_child).__name__ == "param_plain":
-                                            param_nodes.append(sp_child)
-                        for param_node in param_nodes:
+                                            param_nodes.append(("plain", sp_child))
+                                        elif type(sp_child).__name__ == "param_star":
+                                            param_nodes.append(("star", sp_child))
+                        for param_kind, param_node in param_nodes:
+                            if param_kind == "star":
+                                star_str = param_node.to_nim()
+                                if star_str:
+                                    params.append(star_str)
+                                continue
                             pname = str(param_node.nodes[0].nodes[0])
                             ptype = "auto"
                             pdefault = ""
@@ -2258,6 +2139,12 @@ def _generate_method_decl(func_node, indent, class_name, parent_name, is_virtual
     if nim_kw == "iterator":
         keyword = "iterator"
         pragma = ""
+    # Reflected operators: Python (self, other) -> Nim (other, self)
+    if name in _REVERSED_DUNDERS and len(params) == 2:
+        params_str = f"{params[1]}, {params[0]}"
+    # __call__ requires the callOperator experimental feature
+    if name == "__call__":
+        ParserState.nim_pragmas.add('experimental: "callOperator"')
     method_sig = f"{_ind(indent)}{keyword} {nim_name}{generic_params}({params_str}){ret_ann}{pragma} ="
     lines.append(method_sig)
     lines.extend(body_lines)
@@ -2309,3 +2196,170 @@ def _extract_block_body(block_node, indent, is_init_body=False):
     if is_init_body and all(not l.strip() for l in result_lines):
         result_lines = [_ind(indent) + "discard"]
     return result_lines
+if __name__ == "__main__":
+    print("=" * 60)
+    print("Python -> Nim Compound Statement Translation Tests")
+    print("=" * 60)
+
+    tests = [
+        # --- if / elif / else ---
+        (
+            "if x:\n    pass\n",
+            "if x:\n    discard",
+        ),
+        (
+            "if x:\n    y = 1\n",
+            "if x:\n    var y = 1",
+        ),
+        (
+            "if x:\n    a = 1\nelif y:\n    b = 2\n",
+            "if x:\n    var a = 1\nelif y:\n    var b = 2",
+        ),
+        (
+            "if x:\n    a = 1\nelif y:\n    b = 2\nelse:\n    c = 3\n",
+            "if x:\n    var a = 1\nelif y:\n    var b = 2\nelse:\n    var c = 3",
+        ),
+        # --- while ---
+        (
+            "while x:\n    pass\n",
+            "while x:\n    discard",
+        ),
+        # --- for ---
+        (
+            "for x in xs:\n    pass\n",
+            "for x in xs:\n    discard",
+        ),
+        (
+            "for i in range:\n    x = i\n",
+            "for i in range:\n    var x = i",
+        ),
+        # --- try / except / finally ---
+        (
+            "try:\n    pass\nexcept:\n    pass\n",
+            "try:\n    discard\nexcept:\n    discard",
+        ),
+        (
+            "try:\n    x = 1\nexcept ValueError:\n    pass\n",
+            "try:\n    var x = 1\nexcept ValueError:\n    discard",
+        ),
+        (
+            "try:\n    x = 1\nexcept ValueError as e:\n    pass\n",
+            "try:\n    var x = 1\nexcept ValueError as e:\n    discard",
+        ),
+        (
+            "try:\n    x = 1\nfinally:\n    y = 2\n",
+            "try:\n    var x = 1\nfinally:\n    var y = 2",
+        ),
+        # --- with (kept as-is) ---
+        (
+            "with f():\n    pass\n",
+            "with f():\n    discard",
+        ),
+        (
+            "with f() as x:\n    pass\n",
+            "with f() as x:\n    discard",
+        ),
+        # --- def -> proc ---
+        (
+            "def f():\n    pass\n",
+            "proc f() =\n    discard",
+        ),
+        (
+            "def f(a, b):\n    return a\n",
+            "proc f(a: auto, b: auto) =\n    return a",
+        ),
+        (
+            "def f(a: int) -> str:\n    pass\n",
+            "proc f(a: int): string =\n    discard",
+        ),
+        (
+            "def f(*args):\n    pass\n",
+            "proc f(args: varargs[auto]) =\n    discard",
+        ),
+        # --- class -> type object ---
+        (
+            "class Foo:\n    pass\n",
+            "type Foo = object of RootObj\nproc newFoo*(): Foo =\n    result = Foo()",
+        ),
+        (
+            "class Foo(Bar):\n    pass\n",
+            "type Foo = object of Bar\nproc newFoo*(): Foo =\n    result = Foo()",
+        ),
+        # --- __call__ and __ror__ (pipe operator) ---
+        (
+            "class Style:\n    var on: str\n    def __call__(self, *args: str) -> str:\n        return self.on\n    def __ror__(self, other: str) -> str:\n        return self(other)\n",
+            'type Style = object of RootObj\n    on: string\n\nproc newStyle*(): Style =\n    result = Style()\nproc `()`(self: Style, args: varargs[string]): string =\n    return self.on\nproc `|`(other: string, self: Style): string =\n    return self(other)',
+        ),
+        # --- async def -> proc {.async.} ---
+        (
+            "async def f():\n    pass\n",
+            "proc f() {.async.} =\n    discard",
+        ),
+        # --- match -> case ---
+        (
+            "case x:\n    when 1:\n        pass\n",
+            "case x:\n    of 1:\n        discard",
+        ),
+        (
+            "case x:\n    when _:\n        pass\n",
+            "case x:\n    of _:\n        discard",
+        ),
+        (
+            "case x:\n    when 1 | 2:\n        pass\n",
+            "case x:\n    of 1, 2:\n        discard",
+        ),
+        (
+            "case x:\n    when others:\n        pass\n",
+            "case x:\n    else:\n        discard",
+        ),
+        (
+            "case x:\n    when 1 .. 5:\n        pass\n",
+            "case x:\n    of 1 .. 5:\n        discard",
+        ),
+        # --- discriminated records ---
+        (
+            "type Shape (Kind : Shape_Kind) is record:\n    case Kind is\n        when Circle:\n            Radius : float\n        when Rectangle:\n            Width : float\n            Height : float\n",
+            "type Shape = object\n    case Kind: Shape_Kind\n    of Circle:\n        Radius: float\n    of Rectangle:\n        Width: float\n        Height: float",
+        ),
+        # --- nested ---
+        (
+            "if x:\n    if y:\n        pass\n",
+            "if x:\n    if y:\n        discard",
+        ),
+        (
+            "def f():\n    for x in xs:\n        if x:\n            return x\n",
+            "proc f() =\n    for x in xs:\n        if x:\n            return x",
+        ),
+        # --- decorator ---
+        (
+            "@dec\ndef f():\n    pass\n",
+            "@dec\nproc f() =\n    discard",
+        ),
+    ]
+
+    passed = failed = 0
+    for code, expected in tests:
+        try:
+            result = parse_compound(code)
+            if result:
+                output = result.to_nim()
+                if output == expected:
+                    print(f"  PASS: {code.splitlines()[0]!r}...")
+                    passed += 1
+                else:
+                    print(f"  MISMATCH: {code.splitlines()[0]!r}...")
+                    print(f"    expected: {expected!r}")
+                    print(f"    got:      {output!r}")
+                    failed += 1
+            else:
+                print(f"  FAIL: {code.splitlines()[0]!r}... -> parse returned None")
+                failed += 1
+        except Exception as e:
+            print(f"  ERROR: {code.splitlines()[0]!r}... -> {e}")
+            import traceback
+            traceback.print_exc()
+            failed += 1
+
+    print("=" * 60)
+    print(f"Results: {passed} passed, {failed} failed")
+

@@ -323,6 +323,12 @@ def to_nim(self):
     nim_op, expand = _AUGOP_TO_NIM.get(py_op, (py_op, False))
     if expand:
         return f"{target} = {target} {nim_op} {value}"
+    # String += -> &= in Nim
+    if nim_op == "+=" and not expand:
+        sym = ParserState.symbol_table.lookup(target)
+        ttype = (sym.get("type") or "") if sym else ""
+        if ttype in ("string", "str") or value.startswith('"') or value.startswith('fmt"'):
+            nim_op = "&="
     return f"{target} {nim_op} {value}"
 
 

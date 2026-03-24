@@ -172,6 +172,7 @@ walrus = fw("walrus")
 disjunction = fw("disjunction")
 conjunction = fw("conjunction")
 inversion = fw("inversion")
+file_test = fw("file_test")
 comparison = fw("comparison")
 bitor_expr = fw("bitor_expr")
 range_expr = fw("range_expr")
@@ -304,10 +305,24 @@ range_excl_op = V_DOT + V_DOT + V_LT   # ..<
 range_incl_op = V_DOT + V_DOT           # ..
 range_expr = bitor_expr + ((range_excl_op | range_incl_op) + bitor_expr)[:]
 
+# --- bash file-test unary operators: -e FILE, -f FILE, etc. ---
+# The tokenizer rewrites '-e FILE' -> '__bash_test_e__ FILE' so the parser
+# sees a plain IDENTIFIER followed by a primary expression.
+# IDENTIFIER returns a plain string, so filt tests the string directly.
+_bash_test_op = filt(
+    lambda name: name.startswith("__bash_test_") and name.endswith("__"),
+    IDENTIFIER
+)
+file_test = _bash_test_op + primary
+
 # --- comparison operators ---
 not_in_op = K_NOT + K_IN
 is_not_op = K_IS + K_NOT
-comp_op = V_EQ | V_NE | V_LE | V_LT | V_GE | V_GT | not_in_op | is_not_op | K_IN | K_IS
+# Bash file-comparison operators: FILE1 -nt FILE2 / FILE1 -ot FILE2
+# The tokenizer rewrites '-nt' -> '__bash_nt__' and '-ot' -> '__bash_ot__'.
+bash_nt_op = filt(lambda name: name == "__bash_nt__", IDENTIFIER)
+bash_ot_op = filt(lambda name: name == "__bash_ot__", IDENTIFIER)
+comp_op = V_EQ | V_NE | V_LE | V_LT | V_GE | V_GT | not_in_op | is_not_op | K_IN | K_IS | bash_nt_op | bash_ot_op
 
 # --- 'in' with range: x in 1 .. n  or  x in 1 ..< n ---
 # Must be tried before plain comp_op so 'in' eagerly grabs the range bounds.
@@ -319,9 +334,9 @@ in_range_incl = K_IN + bitor_expr + range_incl_op + bitor_expr   # in lo .. hi
 # --- comparison ---
 comparison = range_expr + (in_range_excl | in_range_incl | comp_op + range_expr)[:]
 
-# --- inversion: 'not' inversion | comparison ---
+# --- inversion: 'not' inversion | file_test | comparison ---
 not_prefix = ikw("not") + inversion
-inversion = not_prefix | comparison
+inversion = not_prefix | file_test | comparison
 
 # --- conjunction / disjunction ---
 conjunction = inversion + (K_AND + inversion)[:]

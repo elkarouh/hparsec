@@ -29,7 +29,8 @@ from py3expr import (
     parse_expr,
 )
 
-_COMP_OPS = {"==", "!=", "<", ">", "<=", ">=", "in", "is", "not in", "is not", "isnot", "notin"}
+_COMP_OPS = {"==", "!=", "<", ">", "<=", ">=", "in", "is", "not in", "is not", "isnot", "notin",
+             "__bash_nt__", "__bash_ot__"}
 
 def _nim_expr_type(expr):
     """Infer the Nim type of an already-emitted expression string.
@@ -230,6 +231,27 @@ def _op_string(node):
     return node.to_nim()
 
 
+_INT_TYPES = {"int", "int8", "int16", "int32", "int64", "uint", "uint8",
+              "uint16", "uint32", "uint64", "bool"}
+
+def _nim_type_of(expr_str):
+    """Best-effort type lookup for a Nim expression string."""
+    sym = ParserState.symbol_table.lookup(expr_str)
+    if sym:
+        return sym.get("type") or ""
+    return ""
+
+def _is_pipe_not_bitor(operands):
+    """Return True if any operand is clearly non-integer (string, custom type)."""
+    for op in operands:
+        if op.startswith('"') or op.startswith('fmt"'):
+            return True
+        t = _nim_type_of(op)
+        if t and t not in _INT_TYPES:
+            return True
+    return False
+
+
 def binop_to_nim(self, prec=None, my_prec=None):
     """Generic to_nim for left-associative binary operators.
     Parallel to binop_to_py but calls to_nim() recursively and translates operators."""
@@ -266,17 +288,36 @@ def binop_to_nim(self, prec=None, my_prec=None):
             py_op = _op_string(seq.nodes[0])
             nim_op = _PY_OP_TO_NIM.get(py_op, py_op)
             right = seq.nodes[1].to_nim(right_prec)
-            # seq concatenation: + -> & when operand is a seq literal or seq-typed var
+            # seq/string concatenation: + -> & when operand is seq or string
             if nim_op == "+":
                 left_is_seq = result.startswith("@[")
                 right_is_seq = right.startswith("@[")
-                if not (left_is_seq or right_is_seq):
-                    # Check symbol table for seq-typed variables
+                left_is_str = (result.startswith('"') or result.startswith('fmt"')
+                               or result.endswith('.join("")') or result.endswith(".join(\"\")"))
+                right_is_str = (right.startswith('"') or right.startswith('fmt"')
+                                or right.endswith('.join("")') or right.endswith(".join(\"\")"))
+                # field access on typed object (e.g. self.off where off: string)
+                if not left_is_str and "." in result:
+                    _field = result.rsplit(".", 1)[-1]
+                    _fsym = ParserState.symbol_table.lookup(_field)
+                    if _fsym and (_fsym.get("type") or "") in ("string", "str"):
+                        left_is_str = True
+                if not right_is_str and "." in right:
+                    _field = right.rsplit(".", 1)[-1]
+                    _fsym = ParserState.symbol_table.lookup(_field)
+                    if _fsym and (_fsym.get("type") or "") in ("string", "str"):
+                        right_is_str = True
+                if not (left_is_seq or right_is_seq or left_is_str or right_is_str):
+                    # Check symbol table for seq/string-typed variables
                     lsym = ParserState.symbol_table.lookup(result)
                     rsym = ParserState.symbol_table.lookup(right)
-                    left_is_seq = lsym and (lsym.get("type") or "").startswith("seq[")
-                    right_is_seq = rsym and (rsym.get("type") or "").startswith("seq[")
-                if left_is_seq or right_is_seq:
+                    ltype = (lsym.get("type") or "") if lsym else ""
+                    rtype = (rsym.get("type") or "") if rsym else ""
+                    left_is_seq = ltype.startswith("seq[")
+                    right_is_seq = rtype.startswith("seq[")
+                    left_is_str = ltype in ("string", "str")
+                    right_is_str = rtype in ("string", "str")
+                if left_is_seq or right_is_seq or left_is_str or right_is_str:
                     nim_op = "&"
             # string repetition: "x" * n -> repeat("x", n)
             # Single-char strings: "x" -> 'x' so repeat works as char repeat
@@ -300,6 +341,9 @@ def binop_to_nim(self, prec=None, my_prec=None):
                         _rs = f"'{_rs[1]}'"
                     result = f"repeat({_rs}, {result})"
                     continue
+            # | stays as | when operands are non-integer (e.g. string | Style pipe)
+            if nim_op == "or" and py_op == "|" and _is_pipe_not_bitor([result, right]):
+                nim_op = "|"
             result = f"{result} {nim_op} {right}"
 
     if prec is not None and my_prec is not None and my_prec < prec:
@@ -378,6 +422,13 @@ def to_nim(self, prec=None):
             return type_name + ".succ"
         elif attr == "Prev":
             return type_name + ".pred"
+        # General value tick attributes
+        elif attr == "len" or attr == "Length":
+            return type_name + ".len"
+        elif attr == "Size":
+            return type_name + ".sizeof"
+        # Unknown tick attribute — emit as method call
+        return type_name + "." + attr
     return _PY_IDENT_TO_NIM.get(name, name)
 
 
@@ -820,6 +871,16 @@ def to_nim(self, prec=None):
                 and self.nodes[1].nodes
                 and type(self.nodes[1].nodes[0]).__name__ == "call_trailer")
     if has_call:
+        # Enum constructor: State(s) -> parseEnum[State](s)
+        if raw_name not in _PY_IDENT_TO_NIM:
+            _sym = ParserState.symbol_table.lookup(raw_name)
+            if _sym and _sym.get("type") == "enum":
+                call_node = self.nodes[1].nodes[0]
+                args = _extract_call_args(call_node)
+                rest = "".join(tr.to_nim() for tr in self.nodes[1].nodes[1:])
+                ParserState.nim_imports.add("strutils")
+                return f"parseEnum[{raw_name}]({', '.join(args)}){rest}"
+
         # Tuple/object type constructor: TupleType(a, b) -> (field1: a, field2: b)
         #                                ObjectType(a, b) -> ObjectType(field1: a, field2: b)
         if raw_name not in _PY_IDENT_TO_NIM:
@@ -1250,6 +1311,13 @@ def _translate_stdlib_patterns(expr):
         ParserState.nim_imports.add("strutils")
         return f"{obj}.readAll().splitLines()"
 
+    # --- 5b. x.split() (no args) -> x.splitWhitespace() ---
+    # Python split() with no args splits on any whitespace run; Nim split() splits on each char
+    if expr.endswith(".split()"):
+        obj = expr[:-len(".split()")]
+        ParserState.nim_imports.add("strutils")
+        return f"{obj}.splitWhitespace()"
+
     # --- 6. sorted(X.items()) / sorted(X.pairs()) -> toSeq(X.pairs).sortedByIt(it[0]) ---
     _sorted_m = _re.match(r'^sorted\((.+)\.(items|pairs)\(\)\)$', expr)
     if _sorted_m:
@@ -1277,6 +1345,69 @@ def to_nim(self, prec=None):
 def to_nim(self, prec=None):
     """await_primary: await_expr | primary"""
     return self.nodes[0].to_nim(prec)
+
+
+# --- bash file-test operators ---
+# Mapping from bash flag letter to (nim_func, nim_import)
+_BASH_FILE_TEST_NIM = {
+    "e": ("fileExists",        "os"),   # -e: exists (file or dir)
+    "f": ("fileExists",        "os"),   # -f: regular file
+    "d": ("dirExists",         "os"),   # -d: directory
+    "L": ("symlinkExists",     "os"),   # -L: symbolic link
+    "r": ("(fpUserRead  in getFilePermissions", "os"),   # -r: readable
+    "w": ("(fpUserWrite in getFilePermissions", "os"),   # -w: writable
+    "x": ("(fpUserExec  in getFilePermissions", "os"),   # -x: executable
+    "s": ("(getFileSize(",     "os"),   # -s: non-empty
+    "c": ("(pcDevice  == getFileInfo(",  "os"),  # -c: char device
+    "b": ("(pcDir     == getFileInfo(",  "os"),  # -b: block device (approx)
+    "p": ("(pcLinkToDir == getFileInfo(", "os"), # -p: named pipe (approx)
+    "S": ("(pcFile    == getFileInfo(",  "os"),  # -S: socket (approx)
+}
+
+@method(file_test)
+def to_nim(self, prec=None):
+    """file_test: __bash_test_X__ primary -> Nim os file-test call.
+
+    -e/-f  -> fileExists(path)
+    -d     -> dirExists(path)
+    -L     -> symlinkExists(path)
+    -r/-w/-x -> fpUserRead/Write/Exec in getFilePermissions(path)
+    -s     -> getFileSize(path) > 0
+    -nt/-ot handled in comparison via bash_nt_op / bash_ot_op
+    """
+    op_name = self.nodes[0].node   # e.g. '__bash_test_e__'
+    flag = op_name[len("__bash_test_"):-2]  # e.g. 'e'
+    path = self.nodes[1].to_nim()
+    ParserState.nim_imports.add("os")
+    if flag in ("e", "f"):
+        return f"fileExists({path})"
+    elif flag == "d":
+        return f"dirExists({path})"
+    elif flag == "L":
+        return f"symlinkExists({path})"
+    elif flag == "r":
+        return f"(fpUserRead in getFilePermissions({path}))"
+    elif flag == "w":
+        return f"(fpUserWrite in getFilePermissions({path}))"
+    elif flag == "x":
+        return f"(fpUserExec in getFilePermissions({path}))"
+    elif flag == "s":
+        return f"(getFileSize({path}) > 0)"
+    else:
+        # -c, -b, -p, -S: no clean Nim equivalent — emit a comment
+        return f"(true) # TODO: -{flag} {path} not supported in Nim"
+
+
+@method(bash_nt_op)
+def to_nim(self, prec=None):
+    """bash_nt_op: __bash_nt__ -> emitted as part of comparison to_nim"""
+    return "__bash_nt__"
+
+
+@method(bash_ot_op)
+def to_nim(self, prec=None):
+    """bash_ot_op: __bash_ot__ -> emitted as part of comparison to_nim"""
+    return "__bash_ot__"
 
 
 # --- range expression (.., ..<) ---
@@ -1467,8 +1598,18 @@ def to_nim(self, prec=None):
 
 @method(bitor_expr)
 def to_nim(self, prec=None):
-    """bitor_expr: bitxor_expr ('|' bitxor_expr)* -> Nim: '|' -> 'or'"""
-    return binop_to_nim(self, prec, PREC_BOR)
+    """bitor_expr: bitxor_expr ('|' bitxor_expr)* -> Nim: '|' -> 'or' (or '|' for custom types)"""
+    # Collect operand strings before translation to check types
+    operands = []
+    if hasattr(self.nodes[0], "to_nim"):
+        operands.append(self.nodes[0].to_nim())
+    for seq in self.nodes[1:]:
+        if hasattr(seq, "nodes") and len(seq.nodes) >= 2 and hasattr(seq.nodes[1], "to_nim"):
+            operands.append(seq.nodes[1].to_nim())
+    result = binop_to_nim(self, prec, PREC_BOR)
+    if " or " in result and _is_pipe_not_bitor(operands):
+        result = result.replace(" or ", " | ")
+    return result
 
 
 def _expr_is_option(expr_str):
@@ -1554,8 +1695,22 @@ def to_nim(self, prec=None):
                 op = "..<" if is_exclusive else ".."
                 chain += f" in {lo}{op}{hi}"
                 continue
+            # Bash file-comparison: f1 -nt f2 / f1 -ot f2
+            if py_op in ("__bash_nt__", "__bash_ot__"):
+                right = seq.nodes[1].to_nim(operand_prec)
+                ParserState.nim_imports.add("times")
+                cmp_op = ">" if py_op == "__bash_nt__" else "<"
+                chain = (f"(getLastModificationTime({chain})"
+                         f" {cmp_op} getLastModificationTime({right}))")
+                continue
             nim_op = _PY_OP_TO_NIM.get(py_op, py_op)
             right = seq.nodes[1].to_nim(operand_prec)
+            # | stays as | when operands are non-integer (e.g. string | Style pipe)
+            if nim_op == "or" and py_op == "|" and _is_pipe_not_bitor([chain, right]):
+                nim_op = "|"
+            # x in (a, b, ...) — Python tuple literal → Nim array literal [a, b, ...]
+            if nim_op in ("in", "notin") and right.startswith("(") and right.endswith(")"):
+                right = "[" + right[1:-1] + "]"
             # Option-aware: x is/== None -> x.isNone, x is not/!= None -> x.isSome
             if right == "nil" and nim_op in ("isnot", "is", "==", "!="):
                 is_option = _expr_is_option(chain)

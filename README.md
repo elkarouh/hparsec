@@ -152,9 +152,11 @@ python3 TO_NIM/py2nim.py --test               # run built-in self-tests
 ```
 
 **Incremental builds** — `py2nim` performs a three-tier up-to-date check:
-skip transpilation if `.nim` is newer than `.hpy`; skip compilation if the
-binary is newer than `.nim`; execute the existing binary directly if
-everything is current.
+skip transpilation if `.nim` is newer than both `.hpy` and the transpiler
+source files; skip compilation if the binary is newer than `.nim`; execute
+the existing binary directly if everything is current. Changing any
+transpiler `.py` file automatically triggers retranspilation of all cached
+`.hpy` files on their next run.
 
 **Clean source directories** — all generated artifacts (`.nim` file,
 compiled binary, nimcache) are stored in `~/.cache/hparsec/cache-<HASH>/`,
@@ -819,6 +821,7 @@ shell: rm -rf /tmp/build
 | `let r = shell: cmd` | `subprocess.run(…, capture_output=True, text=True)` | `execCmdEx("cmd")`                         |
 | `let ls = shellLines: cmd` | `…stdout.splitlines()`                    | `execCmdEx("cmd")[0].splitLines()`         |
 | `shell: cmd`         | `subprocess.run("cmd", shell=True)`                 | `discard execCmd("cmd")`                   |
+| `shellLines: cmd`    | (implicit return of split lines)                    | `return execCmdEx("cmd")[0].splitLines()`  |
 | `{var}` in body      | `f"""…{var}…"""`                                    | `fmt"""…{var}…"""` (imports `strformat`)   |
 
 Required imports (`subprocess`, `types`, `osproc`, `strformat`) are inserted
@@ -874,6 +877,108 @@ outdir = $HOME + "/output"
 | `$NAME`   | `os.environ.get('NAME', '')` | `getEnv("NAME")`      |
 
 Required imports are inserted automatically.
+
+### File-test operators
+
+Bash-style file-test operators work as boolean expressions:
+
+```python
+if -e path:          # path exists
+if -f path:          # path is a regular file
+if -d path:          # path is a directory
+if -L path:          # path is a symlink
+if -r path:          # path is readable
+if -w path:          # path is writable
+if -x path:          # path is executable
+if -s path:          # path exists and is non-empty
+
+if file1 -nt file2:  # file1 is newer than file2
+if file1 -ot file2:  # file1 is older than file2
+```
+
+They can be negated and combined with `and`/`or`:
+
+```python
+if not -e comment_path:
+    comment_path = comment_path.replace("_t/", "_e/")
+if -f comment_path:
+    text = readFile(comment_path)
+```
+
+### Translation reference
+
+| HPython      | Python 3                        | Nim                          |
+|--------------|---------------------------------|------------------------------|
+| `-e path`    | `os.path.exists(path)`          | `fileExists(path) or dirExists(path)` |
+| `-f path`    | `os.path.isfile(path)`          | `fileExists(path)`           |
+| `-d path`    | `os.path.isdir(path)`           | `dirExists(path)`            |
+| `-L path`    | `os.path.islink(path)`          | `symlinkExists(path)`        |
+| `-r path`    | `os.access(path, os.R_OK)`      | `fileExists(path)`           |
+| `-w path`    | `os.access(path, os.W_OK)`      | `fileExists(path)`           |
+| `-x path`    | `os.access(path, os.X_OK)`      | `fileExists(path)`           |
+| `-s path`    | `os.path.getsize(path) > 0`     | `fileExists(path) and getFileSize(path) > 0` |
+| `a -nt b`    | `os.path.getmtime(a) > os.path.getmtime(b)` | `getLastModificationTime(a) > getLastModificationTime(b)` |
+| `a -ot b`    | `os.path.getmtime(a) < os.path.getmtime(b)` | `getLastModificationTime(a) < getLastModificationTime(b)` |
+
+---
+
+## Callable objects and pipe operator
+
+### `__call__` and `__ror__`
+
+Classes that define `__call__` become callable objects. In Nim this uses
+the `{.experimental: "callOperator".}` pragma (inserted automatically).
+
+`__ror__` (and other reflected operators like `__radd__`, `__rsub__`) flip
+the argument order in Nim so `"text" | style` works naturally:
+
+```python
+class Style:
+    var on: str
+    var off: str
+    def __init__(self, code: int):
+        self.on = f"\x1b[{code}m"
+        self.off = "\x1b[0m"
+    def __call__(self, *args: str) -> str:
+        return "".join([f"{self.on}{arg}" for arg in args]) + self.off
+    def __ror__(self, other: str) -> str:
+        return self(other)
+
+let bold: Style = Style(1)
+let red:  Style = Style(31)
+
+print("hello" | bold | red)   # chains via __ror__
+print(bold("hello", "world")) # direct __call__
+```
+
+The `|` operator is context-sensitive: when both operands involve custom
+types (not plain integers), it emits Nim `|`; otherwise it emits `or`.
+
+---
+
+## Enum constructors
+
+Calling an enum type with a string argument emits `parseEnum`:
+
+```python
+type State = enum ACTIVE, ON_HOLD, DONE
+
+def parse_state(s: str) -> State:
+    try:
+        State(s.replace("-", "_"))
+    except:
+        ACTIVE
+```
+
+Transpiles to:
+
+```nim
+proc parse_state(s: string): State =
+    try:
+        parseEnum[State](s.replace("-", "_"))
+    except:
+        ACTIVE
+```
 
 ---
 

@@ -486,6 +486,55 @@ def to_py(self, prec=None):
     return self.nodes[0].to_py(prec)
 
 
+# --- bash file-test operators ---
+@method(file_test)
+def to_py(self, prec=None):
+    """file_test: __bash_test_X__ primary -> Python os.path.* / os.access call."""
+    from hek_parsec import ParserState
+    flag = self.nodes[0].node[len("__bash_test_"):-2]
+    path = self.nodes[1].to_py()
+    ParserState.nim_imports.add("import os")
+    if flag == "e":
+        return f"os.path.exists({path})"
+    elif flag == "f":
+        return f"os.path.isfile({path})"
+    elif flag == "d":
+        return f"os.path.isdir({path})"
+    elif flag == "L":
+        return f"os.path.islink({path})"
+    elif flag == "r":
+        return f"os.access({path}, os.R_OK)"
+    elif flag == "w":
+        return f"os.access({path}, os.W_OK)"
+    elif flag == "x":
+        return f"os.access({path}, os.X_OK)"
+    elif flag == "s":
+        return f"(os.path.getsize({path}) > 0)"
+    elif flag == "c":
+        ParserState.nim_imports.add("import stat")
+        return f"stat.S_ISCHR(os.stat({path}).st_mode)"
+    elif flag == "b":
+        ParserState.nim_imports.add("import stat")
+        return f"stat.S_ISBLK(os.stat({path}).st_mode)"
+    elif flag == "p":
+        ParserState.nim_imports.add("import stat")
+        return f"stat.S_ISFIFO(os.stat({path}).st_mode)"
+    elif flag == "S":
+        ParserState.nim_imports.add("import stat")
+        return f"stat.S_ISSOCK(os.stat({path}).st_mode)"
+    return f"os.path.exists({path})"  # fallback
+
+
+@method(bash_nt_op)
+def to_py(self, prec=None):
+    return "__bash_nt__"
+
+
+@method(bash_ot_op)
+def to_py(self, prec=None):
+    return "__bash_ot__"
+
+
 # --- range expression (.., ..<) ---
 @method(range_incl_op)
 def to_py(self, prec=None):
@@ -670,7 +719,8 @@ def to_py(self, prec=None):
     return self.nodes[0].to_py()
 
 
-_COMP_OPS = {"==", "!=", "<", ">", "<=", ">=", "in", "is", "not in", "is not"}
+_COMP_OPS = {"==", "!=", "<", ">", "<=", ">=", "in", "is", "not in", "is not",
+             "__bash_nt__", "__bash_ot__"}
 
 
 @method(comparison)
@@ -745,6 +795,14 @@ def to_py(self, prec=None):
                             for n in range_op_node.nodes))
                 hi_op = "<" if is_exclusive else "<="
                 chain = f"{lo} <= {chain} {hi_op} {hi}"
+                continue
+            # Bash file-comparison: f1 -nt f2 / f1 -ot f2
+            if op in ("__bash_nt__", "__bash_ot__"):
+                right = seq.nodes[1].to_py(operand_prec)
+                from hek_parsec import ParserState
+                ParserState.nim_imports.add("import os")
+                cmp_op = ">" if op == "__bash_nt__" else "<"
+                chain = f"(os.path.getmtime({chain}) {cmp_op} os.path.getmtime({right}))"
                 continue
             right = seq.nodes[1].to_py(operand_prec)
             chain += f" {op} {right}"

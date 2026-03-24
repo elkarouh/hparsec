@@ -54,14 +54,10 @@ const RE_DELETED: object = re.compile(r"^\s+deleted\s+(\S+)",      re.IGNORECASE
 const RE_MERGED:  object = re.compile(r"<-\s+Merged from branch:\s+(\S+)")
 
 
-const RE_QUOTED: object = re.compile("\"([^\"]+)\"")
-
 def _extract_filepath_from_ediff(diff_cmd: str) -> str:
     """Pull the first filename argument (old versioned path) from an ediff-files call."""
-    var m: []str = [""]
-    if RE_QUOTED.search(diff_cmd, m) >= 0:
-        return m[0]
-    return ""
+    let parts: []str = re.findall("\"([^\"]+)\"", diff_cmd)
+    parts[0] if parts else ""
 
 
 def parse_changes_report(path: str) -> {str}[]FileChange:
@@ -159,9 +155,6 @@ def print_changes(committer_changes: {str}[]FileChange) -> None:
 # Entry point
 # ---------------------------------------------------------------------------
 
-const _REPORT_DIR: str = "/cm/ot/TACT/baseline_reports"
-const _REPORT_PREFIX: str = "TACT.TACT_CONFIG."
-
 def locate_report(baseline: str = "") -> str:
     var bl: str = baseline
     if not bl:
@@ -170,10 +163,10 @@ def locate_report(baseline: str = "") -> str:
         print("ERROR: pass a changes_report file as argument, "
               "or set $CONTEXT_CM_BASELINE.")
         sys.exit(1)
-    # Strip prefix if already included (e.g. CONTEXT_CM_BASELINE contains full stem)
-    if bl.startswith(_REPORT_PREFIX):
-        bl = bl[len(_REPORT_PREFIX):]
-    f"{_REPORT_DIR}/{_REPORT_PREFIX}{bl}.changes_report"
+    let prefix: str = "TACT.TACT_CONFIG."
+    if bl.startswith(prefix):
+        bl = bl[len(prefix):]
+    f"/cm/ot/TACT/baseline_reports/TACT.TACT_CONFIG.{bl}.changes_report"
 
 
 def list_all_changes(report_path: str) -> None:
@@ -195,17 +188,15 @@ if __name__ == "__main__":
 
     var args: []str = $@
     var i: int = 0
-    while i < len(args):
+    while i < args'len:
         let arg: str = args[i]
-        if arg == "-u" or arg == "--user":
+        if arg in ("-u", "--user"):
             i += 1
             if i < len(args):
                 user_filter = args[i]
-        elif arg.startswith("--user="):
-            user_filter = arg[len("--user="):]
-        elif arg == "-r" or arg == "--raw":
+        elif arg in ("-r", "--raw"):
             raw_mode = True
-        elif arg == "-h" or arg == "--help":
+        elif arg in ("-h", "--help"):
             _usage()
         elif not arg.startswith("-"):
             baseline = arg

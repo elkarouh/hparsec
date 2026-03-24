@@ -249,6 +249,10 @@ def translate(code):
                 insert_pos = i
                 break
         output.insert(insert_pos, import_line)
+        if ParserState.nim_pragmas:
+            pragma_lines = [f"{{.{p}.}}" for p in sorted(ParserState.nim_pragmas)]
+            for j, pl in enumerate(pragma_lines):
+                output.insert(insert_pos + 1 + j, pl)
         # When nimpy is used, emit a len() helper for PyObject — but only
         # if the output actually calls len() somewhere (as a function, not method)
         # and has pyImport'd modules that could return PyObject values.
@@ -1038,8 +1042,18 @@ def main(argv=None):
         nim_mtime = os.path.getmtime(nim_file) if os.path.exists(nim_file) else 0
         exe_mtime = os.path.getmtime(exe_file) if os.path.exists(exe_file) else 0
 
+        # Transpiler source files: if any are newer than the .nim, retranspile.
+        transpiler_mtime = max(
+            os.path.getmtime(p)
+            for p in [
+                os.path.join(_dir, f)
+                for f in os.listdir(_dir)
+                if f.endswith(".py")
+            ]
+        )
+
         # --- tier 1: transpile? ---
-        need_transpile = nim_mtime < hpy_mtime
+        need_transpile = nim_mtime < max(hpy_mtime, transpiler_mtime)
         if need_transpile:
             nim_output = translate(code)
             with open(nim_file, "w") as f:
@@ -1056,16 +1070,15 @@ def main(argv=None):
         BINARY_COMMANDS = {"c", "cc", "cpp", "objc"}
         produces_binary = subcommand in BINARY_COMMANDS
 
+        # If we re-transpiled, always recompile regardless of exe mtime.
+        need_compile = need_transpile or (exe_mtime < nim_mtime)
+
         if produces_binary and not run:
-            # compile-only mode: skip if exe is newer than .nim
-            need_compile = exe_mtime < nim_mtime
             if not need_compile:
                 print(f"# up to date: {exe_file}", file=sys.stderr)
                 sys.exit(0)
 
         if produces_binary and run:
-            # run mode: skip compilation entirely if exe is newer than .nim
-            need_compile = exe_mtime < nim_mtime
             if not need_compile:
                 print(f"# up to date: {exe_file}", file=sys.stderr)
                 cmd = [exe_file] + prog_args

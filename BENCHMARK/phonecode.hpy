@@ -147,10 +147,10 @@ def main():
     let dict_file: str = $1
     let phone_file: str = $2
 
-    if not os.path.exists(dict_file):
+    if not -f dict_file:
         print(f"Error: Dictionary file not found: {dict_file}")
         quit(1)
-    if not os.path.exists(phone_file):
+    if not -f phone_file:
         print(f"Error: Phone numbers file not found: {phone_file}")
         quit(1)
 
