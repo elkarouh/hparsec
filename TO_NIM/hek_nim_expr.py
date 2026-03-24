@@ -871,6 +871,15 @@ def to_nim(self, prec=None):
                 and self.nodes[1].nodes
                 and type(self.nodes[1].nodes[0]).__name__ == "call_trailer")
     if has_call:
+        # Auto-import for known Nim stdlib functions used as calls
+        _NIM_CALL_IMPORTS = {
+            "toSeq": "sequtils", "collect": "sugar", "reversed": "algorithm",
+            "sorted": "algorithm", "toHashSet": "sets", "initHashSet": "sets",
+            "initTable": "tables", "newTable": "tables",
+        }
+        if raw_name in _NIM_CALL_IMPORTS:
+            ParserState.nim_imports.add(_NIM_CALL_IMPORTS[raw_name])
+
         # Enum constructor: State(s) -> parseEnum[State](s)
         if raw_name not in _PY_IDENT_TO_NIM:
             _sym = ParserState.symbol_table.lookup(raw_name)

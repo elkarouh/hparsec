@@ -1,5 +1,4 @@
 #! /usr/bin/env py2nim
-nimport sequtils, algorithm
 
 const DIFFTOOL: str = "kompare"
 
