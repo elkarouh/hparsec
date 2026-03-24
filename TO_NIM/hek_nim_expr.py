@@ -979,10 +979,9 @@ def to_nim(self, prec=None):
             if len(arg) == 3 and arg[0] == chr(34) and arg[2] == chr(34):
                 arg = chr(39) + arg[1] + chr(39)
             return f"ord({arg})"
-        if raw_name == "int":
+        if raw_name in ("int", "float", "bool"):
             call_node = self.nodes[1].nodes[0]
             arg = _extract_call_arg(call_node)
-            # int(x) -> x.parseInt() when x is a string (bash arg, known string var, or str())
             _sym = ParserState.symbol_table.lookup(arg)
             _is_str = (
                 "__bash_arg" in arg          # $1, $2, etc. (pre-substitution)
@@ -992,8 +991,9 @@ def to_nim(self, prec=None):
             )
             if _is_str:
                 ParserState.nim_imports.add("strutils")
-                return f"{arg}.parseInt()"
-            return f"int({arg})"
+                _parse_fn = {"int": "parseInt", "float": "parseFloat", "bool": "parseBool"}[raw_name]
+                return f"{arg}.{_parse_fn}()"
+            return f"{raw_name}({arg})"
         if raw_name == "log":
             call_node = self.nodes[1].nodes[0]
             args = _extract_call_args(call_node)
