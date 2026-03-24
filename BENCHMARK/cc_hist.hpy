@@ -42,8 +42,8 @@ if __name__ == "__main__":
         if $# >= 2:
             search_term = $2
 
-    let context_lines = shellLines: command -v tactdev
-    if len(context_lines) == 0:
+    let (_, context_code) = shell: command -v tactdev
+    if context_code != 0:
         print("YOU NEED TO BE IN A CONTEXT to run this script. I'll do it for you ...")
         shell: source $(which Ccontext) -b TACT.TACT_CONFIG.LATEST -e G!31.OP.L7
 
