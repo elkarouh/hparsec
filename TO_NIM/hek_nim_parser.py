@@ -471,6 +471,14 @@ def to_nim(self, indent=0):
     sym = ParserState.symbol_table.lookup(iterable)
     if sym and sym.get("type") == "File":
         iterable = f"{iterable}.lines"
+    # Table iteration: for k in table -> for k in table.keys
+    from hek_nim_expr import _nim_expr_type
+    _iter_type = _nim_expr_type(iterable) or ""
+    if _iter_type.startswith("Table["):
+        if "," in target and target.startswith("("):
+            iterable = f"{iterable}.pairs"
+        else:
+            iterable = f"{iterable}.keys"
     # Nim tuple unpacking in for: for x, y in seq -> for (x, y) in seq
     if "," in target and not target.startswith("("):
         target = f"({target})"

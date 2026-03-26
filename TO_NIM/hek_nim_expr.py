@@ -66,6 +66,10 @@ def _nim_expr_type(expr):
             return m.group(1)
         if t == "string":
             return "string"
+        # Table[K, V][k] -> V  (value type of table subscript)
+        tm = _re.match(r"Table\[[^,]+,\s*(.+)\]$", t)
+        if tm:
+            return tm.group(1).strip()
         return None
 
     def _resolve(s):
@@ -111,7 +115,13 @@ def _nim_expr_type(expr):
         if _re.match(r"^[A-Za-z_]\w*$", s):
             sym = ParserState.symbol_table.lookup(s)
             if sym:
-                return sym.get("type")
+                t = sym.get("type")
+                # Resolve type aliases one level (e.g. Graph_T -> Table[...])
+                if t and _re.match(r"^[A-Za-z_]\w*$", t):
+                    alias = ParserState.symbol_table.lookup(t)
+                    if alias and alias.get("kind") == "type":
+                        t = alias.get("type", t)
+                return t
             return None
 
         return None
@@ -1063,6 +1073,21 @@ def to_nim(self, prec=None):
                         continue
                 method_name = _translate_method(base_name, method_name)
                 next_tr = trailer_list[i + 1] if i + 1 < len(trailer_list) else None
+                # sorted(key=lambda v: v.field) -> sortedByIt(it.field)
+                if method_name == "sorted" and next_tr is not None and type(next_tr).__name__ == "call_trailer":
+                    import re as _re_s
+                    _raw_args = _extract_call_args(next_tr)
+                    _key_arg = next((_a for _a in _raw_args if _a.startswith("key")), None)
+                    if _key_arg:
+                        # Matches already-translated: key = proc(v: auto): auto = v.field
+                        _lm = _re_s.match(r'^key\s*=\s*proc\s*\((\w+)[^)]*\)\s*:\s*\w+\s*=\s*(.+)$', _key_arg)
+                        if _lm:
+                            _param, _body = _lm.group(1), _lm.group(2).strip()
+                            _it_expr = _re_s.sub(r'\b' + _re_s.escape(_param) + r'\b', 'it', _body)
+                            ParserState.nim_imports.add("algorithm")
+                            result += f".sortedByIt({_it_expr})"
+                            skip_next = True
+                            continue
                 # rstrip/lstrip -> strip(chars={...}, leading/trailing=false)
                 if method_name in ("rstrip", "lstrip") and next_tr is not None and type(next_tr).__name__ == "call_trailer":
                     raw_arg = _extract_call_arg(next_tr)
@@ -1369,6 +1394,15 @@ def _translate_stdlib_patterns(expr):
         if not args.startswith(")"):
             ParserState.nim_imports.add("tables")
             return f"{obj}.getOrDefault({args})"
+
+    # --- 5e. x.sorted(key=lambda v: v.field) -> x.sortedByIt(it.field) ---
+    _sorted_key_m = _re.match(r'^(.+)\.sorted\(key\s*=\s*lambda\s+(\w+)\s*:\s*(.+)\)$', expr)
+    if _sorted_key_m:
+        obj, param, key_expr = _sorted_key_m.group(1), _sorted_key_m.group(2), _sorted_key_m.group(3).strip()
+        # Replace lambda param with Nim's 'it' template variable
+        it_expr = _re.sub(r'\b' + _re.escape(param) + r'\b', 'it', key_expr)
+        ParserState.nim_imports.add("algorithm")
+        return f"{obj}.sortedByIt({it_expr})"
 
     # --- 6. sorted(X.items()) / sorted(X.pairs()) -> toSeq(X.pairs).sortedByIt(it[0]) ---
     _sorted_m = _re.match(r'^sorted\((.+)\.(items|pairs)\(\)\)$', expr)
@@ -2140,6 +2174,19 @@ def to_nim(self, prec=None):
     if "," in tgt and not tgt.startswith("("):
         tgt = f"({tgt})"
     iterable = self.nodes[1].to_nim()
+    
+    # Table iteration fix: Nim Tables need .keys or .pairs for iteration
+    # If target is a single variable and iterable is a Table, use .keys
+    # If target is a tuple (k, v) and iterable is a Table, use .pairs
+    iterable_type = _nim_expr_type(iterable)
+    if iterable_type and iterable_type.startswith("Table["):
+        if "," in tgt and tgt.startswith("("):
+            # Tuple target (k, v) -> use .pairs
+            iterable = iterable + ".pairs"
+        else:
+            # Single variable target -> use .keys
+            iterable = iterable + ".keys"
+    
     result = f"for {tgt} in {iterable}"
     if len(self.nodes) > 2:
         st = self.nodes[2]

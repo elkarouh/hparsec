@@ -1,0 +1,35 @@
+#!/usr/bin/env py2nim
+
+type Node_T is enum A, B, C, D
+type Distance_T is float
+type Graph_T is {Node_T}{Node_T}Distance_T
+const MAX_DIST : float = 1e6
+type Neighbour_T is tuple:
+    distance: Distance_T
+    neighbor: Node_T
+
+def dijkstra(graph : Graph_T, start: Node_T) -> {Node_T}Distance_T:
+    distances: {Node_T}Distance_T = {node: MAX_DIST for node in graph}
+    distances[start] = 0
+
+    visited : {}Node_T= {}
+    queue :[]Neighbour_T= [(0.0, start)]
+
+    while queue:
+        queue = queue.sorted(key=lambda x: x.distance)
+        let (current_dist, node) = queue[0]
+        queue.delete(0)
+        if node in visited:
+            continue
+        visited.add(node)
+        for neighbor in graph[node]:
+            let new_dist: Distance_T = current_dist + graph[node][neighbor]
+            if new_dist < distances[neighbor]:
+                distances[neighbor] = new_dist
+                queue.append((new_dist, neighbor))
+    return distances
+
+
+var d_neighbors : {Node_T}Distance_T = {:}
+graph : Graph_T = {A:{B:1.0, C:4.0}, B: {C:2.0, D:5.0}, C: {D:1.0}, D: d_neighbors}
+print dijkstra(graph, A)
