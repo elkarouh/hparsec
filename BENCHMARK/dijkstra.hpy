@@ -30,6 +30,5 @@ def dijkstra(graph : Graph_T, start: Node_T) -> {Node_T}Distance_T:
     return distances
 
 
-var d_neighbors : {Node_T}Distance_T = {:}
-graph : Graph_T = {A:{B:1.0, C:4.0}, B: {C:2.0, D:5.0}, C: {D:1.0}, D: d_neighbors}
+graph : Graph_T = {A:{B:1.0, C:4.0}, B: {C:2.0, D:5.0}, C: {D:1.0}, D: {:}}
 print dijkstra(graph, A)

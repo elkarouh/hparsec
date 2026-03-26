@@ -332,6 +332,36 @@ def to_nim(self):
     return f"{target} {nim_op} {value}"
 
 
+def _specialize_init_table(value, annotation):
+    """Replace bare initTable() in value with typed initTable[K,V]() using annotation context.
+
+    Resolves type aliases. Handles both top-level and nested occurrences.
+    """
+    import re as _re_it
+    # Resolve annotation through one level of type alias
+    _ann = annotation
+    _ann_sym = ParserState.symbol_table.lookup(_ann)
+    if _ann_sym and _ann_sym.get("kind") == "type":
+        _ann = _ann_sym.get("type", _ann) or _ann
+    if "initTable()" not in value or "Table[" not in _ann:
+        return value
+    # Top-level: value IS initTable() and annotation is Table[K, V]
+    if value == "initTable()":
+        _m = _re_it.search(r"Table\[(.+)\]", _ann)
+        if _m:
+            return f"initTable[{_m.group(1)}]()"
+    # Nested: bare initTable() inside a table literal — use value type of outer Table[K, V]
+    # e.g. annotation=Table[Node_T, Table[X, Y]] -> replace initTable() with initTable[X, Y]()
+    _m2 = _re_it.match(r"Table\[[^,]+,\s*(Table\[[^\]]+\])", _ann)
+    if _m2:
+        _inner_type = _m2.group(1)
+        # Extract K, V from inner Table[K, V]
+        _im = _re_it.match(r"Table\[(.+)\]", _inner_type)
+        if _im:
+            value = value.replace("initTable()", f"initTable[{_im.group(1)}]()")
+    return value
+
+
 # --- annotated assignment ---
 @method(ann_assign_stmt)
 def to_nim(self):
@@ -358,12 +388,8 @@ def to_nim(self):
                 # For array types, strip @ prefix from list literals
                 if annotation.startswith("array[") and value.startswith("@["):
                     value = value[1:]
-                # initTable() needs explicit type params
-                if value == "initTable()" and "Table[" in annotation:
-                    import re as _re2
-                    _m = _re2.search(r"Table\[(.+)\]", annotation)
-                    if _m:
-                        value = f"initTable[{_m.group(1)}]()"
+                # initTable() needs explicit type params (handles nested too)
+                value = _specialize_init_table(value, annotation)
                 # array types: {} is unnecessary — arrays are zero-initialized
                 if value == "initTable()" and annotation.startswith("array["):
                     value = ""
@@ -441,12 +467,8 @@ def to_nim(self):
                 # For array types, strip @ prefix from list literals
                 if annotation.startswith("array[") and value.startswith("@["):
                     value = value[1:]
-                # initTable() needs explicit type params
-                if value == "initTable()" and "Table[" in annotation:
-                    import re as _re2
-                    _m = _re2.search(r"Table\[(.+)\]", annotation)
-                    if _m:
-                        value = f"initTable[{_m.group(1)}]()"
+                # initTable() needs explicit type params (handles nested too)
+                value = _specialize_init_table(value, annotation)
                 # array types: {} is unnecessary — arrays are zero-initialized
                 if value == "initTable()" and annotation.startswith("array["):
                     value = ""
