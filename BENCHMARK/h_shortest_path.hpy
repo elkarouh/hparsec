@@ -78,11 +78,7 @@ class Optimizer[S, D, C]:
         visited: {}S = set()
 
         while fringe:
-            item = fringe.pop()
-            cost: float = item[1]
-            path: []D = item[2]
-            current_state: S = item[3]
-
+            let (_, cost, path, current_state) = fringe.pop()
             if not allsolutions and current_state in visited:
                 continue
 
@@ -121,12 +117,8 @@ class Optimizer[S, D, C]:
         solution: (float,[]D) = (0.0, [])
 
         while fringe:
-            item = fringe.pop()
-            cost: float = item[0]
-            path: []D = item[1]
-            current_state: S = item[2]
+            let (cost, path, current_state) = fringe.pop()
             real_revenue: float = float(len(path)) * offset - cost
-
             if current_state in visited and real_revenue <= visited[current_state]:
                 continue
             visited[current_state] = real_revenue
