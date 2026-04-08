@@ -259,11 +259,21 @@ class Tokenizer:
         Type__tick__First so that Python's tokenizer can handle them.
         Only applies outside string literals."""
         import re as _re2
-        # Split on string literals AND line comments — only substitute in code segments
-        _STR_RE = _re2.compile(r'("""[\s\S]*?"""|\'\'\'[\s\S]*?\'\'\'|"(?:[^"\\]|\\.)*"|\'(?:[^\'\\]|\\.)*\'|#[^\n]*)')
-        parts = _STR_RE.split(s)
+        # Split on double-quoted strings and comments only (single-quoted strings
+        # are NOT split here because word'word tick attributes look like string starts).
+        # Apply tick substitution only in code segments.
+        # String prefixes (b, f, r, u, rb, etc.) are handled by excluding them in _tick_sub.
+        _DQ_CMT_RE = _re2.compile(r'("""[\s\S]*?"""|"(?:[^"\\]|\\.)*"|#[^\n]*)')
+        _STRING_PREFIXES = frozenset(['b','B','f','F','r','R','u','U',
+                                      'rb','rB','Rb','RB','br','bR','Br','BR',
+                                      'fr','fR','Fr','FR','rf','rF','Rf','RF'])
+        def _tick_sub(m):
+            if m.group(1) in _STRING_PREFIXES:
+                return m.group(0)
+            return m.group(1) + '__tick__' + m.group(2)
+        parts = _DQ_CMT_RE.split(s)
         for i in range(0, len(parts), 2):
-            parts[i] = Tokenizer._TICK_RE.sub(r'\1__tick__\2', parts[i])
+            parts[i] = Tokenizer._TICK_RE.sub(_tick_sub, parts[i])
         return ''.join(parts)
 
     def __init__(self, s):

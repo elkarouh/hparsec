@@ -16,20 +16,18 @@ var switchWins : int = 0
 for _ in 1..trials:
   let carLocation : Door = randomDoor()
   let candidateFirstChoice : Door = randomDoor()
+  let availableDoors : {}Door = Door'Range - {candidateFirstChoice, carLocation}
   var hostChoice : Door
-  for door in Door:
-    if door in {candidateFirstChoice, carLocation}:
-      continue
+  for door in availableDoors:
     hostChoice = door
+  #
   if candidateFirstChoice == carLocation: # we don't switch
     stayWins += 1
   else: # we switch
-    for door in Door:
-      if door in {candidateFirstChoice, hostChoice}:
-        continue
+    let switchOptions : {}Door = Door'Range - {candidateFirstChoice, hostChoice}
+    for door in switchOptions:
       if door == carLocation:
         switchWins += 1
-      break
 
 print "Trials: ", trials
 print ""
