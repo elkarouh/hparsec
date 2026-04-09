@@ -1,0 +1,50 @@
+#!/usr/bin/env py2nim
+import os
+
+let editor: str = os.getenv("EDITOR", "nano")
+
+if $# > 0:
+    os.chdir($1)
+
+while True:
+    let listing = shellLines: find . -maxdepth 1 -mindepth 1 -printf '%P\n' | sort
+    var entries: str = "\033[1;35m/\033[0m\t/\n\033[1;35m..\033[0m\t..\n"
+    for item in listing:
+        if -d item:
+            entries += f"\033[1;34m{item}/\033[0m\t{item}\n"
+        else:
+            entries += f"{item}\t{item}\n"
+
+    let prompt: str = os.getcwd() + " > "
+    let (selection, sel_code) = shell: printf {entries} | fzf --ansi --delimiter=$'\t' --with-nth=1 --height 40% --reverse --prompt={prompt} --expect=enter,right,left
+    if sel_code != 0 or len(selection) == 0:
+        quit(0)
+
+    let lines: []str = selection.split("\n", 1)
+    var key: str = lines[0]
+    var row: str = lines[0] if len(lines) < 2 else lines[1]
+    if len(lines) < 2:
+        key = "enter"
+
+    let fields: []str = row.split("\t", 1)
+    let sel: str = fields[len(fields) - 1]
+
+    if key == "left":
+        os.chdir("..")
+        continue
+
+    if sel == "/":
+        os.chdir("/")
+    elif sel == "..":
+        os.chdir("..")
+    elif -d sel:
+        os.chdir(sel)
+    elif key == "right" and -x sel:
+        if "/" in sel:
+            shell: {sel}
+        else:
+            shell: ./{sel}
+        quit(0)
+    else:
+        shell: {editor} {sel}
+        quit(0)

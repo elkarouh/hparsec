@@ -1839,6 +1839,7 @@ def to_nim(self, indent=0):
     elif target_name:
         if kw == "shellLines":
             # Inline directly — no temp needed
+            ParserState.nim_imports.add("strutils")
             lines.append(f"{ind}{nim_kw} {target_name} = execCmdEx({cmd_str}){timeout_comment}[0].splitLines()")
             ParserState.symbol_table.add(target_name, "seq[string]", nim_kw)
         else:
@@ -1850,6 +1851,7 @@ def to_nim(self, indent=0):
             # field access like result.output -> result.output.len > 0
             ParserState.symbol_table.add(target_name, "shell_result", nim_kw)
     elif kw == "shellLines":
+        ParserState.nim_imports.add("strutils")
         lines.append(f"{ind}return execCmdEx({cmd_str}){timeout_comment}[0].splitLines()")
     else:
         lines.append(f"{ind}discard execCmd({cmd_str}){timeout_comment}")
