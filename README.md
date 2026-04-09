@@ -1,20 +1,20 @@
-# HPython
+# Adascript
 
-HPython is a statically-typed superset of Python 3 inspired by Ada and Nim.
+Adascript is a statically-typed superset of Python 3 inspired by Ada and Nim.
 It transpiles to both **Python 3** and **Nim**, letting you write concise,
 type-safe code in a familiar syntax and target either ecosystem without
 changing the source.
 
-Every valid Python 3 file is also valid HPython. The extra features are purely
+Every valid Python 3 file is also valid Adascript. The extra features are purely
 additive: left-to-right type annotations, Ada-style enums and variant records,
 tick attributes, range expressions, `case/when` pattern matching, and
 first-class shell command integration.
 
 ```
-source.hpy
+source.ady
     │
-    ├── python3 TO_PYTHON/py2py.py source.hpy  ──▶  Python 3
-    └── python3 TO_NIM/py2nim.py   source.hpy  ──▶  Nim
+    ├── python3 TO_PYTHON/py2py.py source.ady  ──▶  Python 3
+    └── python3 TO_NIM/py2nim.py   source.ady  ──▶  Nim
 ```
 
 ---
@@ -136,36 +136,36 @@ Dependencies: none beyond the Python standard library.
 ### Transpile to Python 3
 
 ```bash
-python3 TO_PYTHON/py2py.py source.hpy         # print to stdout
-python3 TO_PYTHON/py2py.py -c source.hpy      # transpile and run
+python3 TO_PYTHON/py2py.py source.ady         # print to stdout
+python3 TO_PYTHON/py2py.py -c source.ady      # transpile and run
 echo "var x: int = 42" | python3 TO_PYTHON/py2py.py  # from stdin
 ```
 
 ### Transpile to Nim
 
 ```bash
-python3 TO_NIM/py2nim.py source.hpy           # transpile and compile+run (default)
-python3 TO_NIM/py2nim.py -t source.hpy        # transpile only, write source.nim
-python3 TO_NIM/py2nim.py c source.hpy         # compile (nim c)
-python3 TO_NIM/py2nim.py c -r source.hpy      # compile and run (nim c -r)
+python3 TO_NIM/py2nim.py source.ady           # transpile and compile+run (default)
+python3 TO_NIM/py2nim.py -t source.ady        # transpile only, write source.nim
+python3 TO_NIM/py2nim.py c source.ady         # compile (nim c)
+python3 TO_NIM/py2nim.py c -r source.ady      # compile and run (nim c -r)
 python3 TO_NIM/py2nim.py --test               # run built-in self-tests
 ```
 
 **Incremental builds** — `py2nim` performs a three-tier up-to-date check:
-skip transpilation if `.nim` is newer than both `.hpy` and the transpiler
+skip transpilation if `.nim` is newer than both `.ady` and the transpiler
 source files; skip compilation if the binary is newer than `.nim`; execute
 the existing binary directly if everything is current. Changing any
 transpiler `.py` file automatically triggers retranspilation of all cached
-`.hpy` files on their next run.
+`.ady` files on their next run.
 
 **Clean source directories** — all generated artifacts (`.nim` file,
 compiled binary, nimcache) are stored in `~/.cache/hparsec/cache-<HASH>/`,
-keyed by the absolute path of the `.hpy` file. Source directories stay
+keyed by the absolute path of the `.ady` file. Source directories stay
 uncluttered and the cache survives reboots (inspired by
 [nimbang](https://github.com/jabbalaci/nimbang)).
 
 **Shebang support** — add `#!/usr/bin/env py2nim` as the first line of an
-`.hpy` file and make it executable. The file compiles and runs directly
+`.ady` file and make it executable. The file compiles and runs directly
 without arguments to the transpiler.
 
 **Per-file compiler options** — add a `#py2nim-args` directive as the
@@ -183,18 +183,18 @@ directive.
 `-d:release`, `--opt:speed`) is passed straight to `nim`.
 
 ```bash
-python3 TO_NIM/py2nim.py c -d:release source.hpy   # optimised build
+python3 TO_NIM/py2nim.py c -d:release source.ady   # optimised build
 ```
 
 ---
 
 ## Type Annotations
 
-HPython uses a concise **left-to-right** annotation syntax rather than
+Adascript uses a concise **left-to-right** annotation syntax rather than
 Python's `typing` module. Container kinds are expressed as prefixes:
 `[]int` reads naturally as "list of int".
 
-| HPython        | Python                    | Nim                            |
+| Adascript        | Python                    | Nim                            |
 |----------------|---------------------------|--------------------------------|
 | `[]T`          | `list[T]`                 | `seq[T]`                       |
 | `[N]T`         | `tuple[T, ...]`           | `array[N, T]`                  |
@@ -218,7 +218,7 @@ var callback: [(int,)]bool = my_predicate
 
 ### Empty collection literals
 
-HPython uses distinct syntax for empty dicts and empty sets, resolving
+Adascript uses distinct syntax for empty dicts and empty sets, resolving
 Python's ambiguity where `{}` means an empty dict:
 
 | Literal | Meaning      | Python output | Nim output                  |
@@ -489,7 +489,7 @@ fringe.push((stage: STAGE1, budget: float(CAPITAL)))
 
 ## Functions
 
-Standard Python `def` syntax with HPython type annotations:
+Standard Python `def` syntax with Adascript type annotations:
 
 ```python
 def add(a: int, b: int) -> int:
@@ -499,7 +499,7 @@ def add(a: int, b: int) -> int:
 ### Implicit return
 
 When a function has a return-type annotation and its last statement is a
-bare expression (not an explicit `return`), HPython automatically promotes
+bare expression (not an explicit `return`), Adascript automatically promotes
 it to a return value:
 
 ```python
@@ -580,7 +580,7 @@ generated procs.
 
 ### Class-level variable declarations
 
-HPython uses `var`, `let`, or `const` inside a class body to declare fields,
+Adascript uses `var`, `let`, or `const` inside a class body to declare fields,
 keeping declarations visually distinct from assignments:
 
 ```python
@@ -605,7 +605,7 @@ nimport strutils, sequtils, algorithm, stdlib
 
 ## Python Interoperability
 
-HPython knows whether each Python `import` has a direct Nim equivalent or
+Adascript knows whether each Python `import` has a direct Nim equivalent or
 needs the [nimpy](https://github.com/yglukhov/nimpy) bridge. You write
 ordinary Python imports; the transpiler decides how to map them.
 
@@ -752,7 +752,7 @@ proc len(o: PyObject): int = pyBuiltinsModule().len(o).to(int)
 
 ## Print Statement
 
-HPython supports Python-2-style `print` without parentheses. The
+Adascript supports Python-2-style `print` without parentheses. The
 transpiler rewrites it to `print(...)` in Python 3 and `echo(...)` in Nim:
 
 ```python
@@ -768,7 +768,7 @@ intercepts `print` when it is *not* immediately followed by `(`.
 
 ## Shell Statements
 
-HPython has first-class syntax for running shell commands. The `shell` and
+Adascript has first-class syntax for running shell commands. The `shell` and
 `shellLines` keywords integrate subprocess execution directly, with variable
 interpolation, output capture, and options for working directory and timeout.
 
@@ -783,7 +783,7 @@ print(result.code)     # exit code as int
 
 ### Variable interpolation
 
-Use `{name}` anywhere in the command body to interpolate an HPython variable:
+Use `{name}` anywhere in the command body to interpolate an Adascript variable:
 
 ```python
 let name = "world"
@@ -816,7 +816,7 @@ shell: rm -rf /tmp/build
 
 ### Translation reference
 
-| HPython              | Python 3                                            | Nim                                        |
+| Adascript              | Python 3                                            | Nim                                        |
 |----------------------|-----------------------------------------------------|--------------------------------------------|
 | `let r = shell: cmd`        | `subprocess.run(…, capture_output=True, text=True)` | `execCmdEx("cmd")`                        |
 | `let (out, code) = shell: cmd` | `…stdout, …returncode`                       | `(execResult[0], execResult[1])`          |
@@ -832,7 +832,7 @@ automatically.
 
 ## Bash Variables
 
-HPython supports bash-style special variables for scripts that handle
+Adascript supports bash-style special variables for scripts that handle
 command-line arguments and environment variables:
 
 ### Argument variables
@@ -869,7 +869,7 @@ outdir = $HOME + "/output"
 
 ### Translation reference
 
-| HPython   | Python 3                    | Nim                    |
+| Adascript   | Python 3                    | Nim                    |
 |-----------|-----------------------------|------------------------|
 | `$0`      | `sys.argv[0]`               | `getAppFilename()`     |
 | `$1` … `$9` | `sys.argv[1]` … `sys.argv[9]` | `paramStr(1)` … `paramStr(9)` |
@@ -908,7 +908,7 @@ if -f comment_path:
 
 ### Translation reference
 
-| HPython      | Python 3                        | Nim                          |
+| Adascript      | Python 3                        | Nim                          |
 |--------------|---------------------------------|------------------------------|
 | `-e path`    | `os.path.exists(path)`          | `fileExists(path) or dirExists(path)` |
 | `-f path`    | `os.path.isfile(path)`          | `fileExists(path)`           |
@@ -986,10 +986,10 @@ proc parse_state(s: string): State =
 ## Benchmark Programs
 
 The `BENCHMARK/` directory contains real programs that exercise the full
-language and serve as end-to-end tests. Each has a `.hpy` source, a
+language and serve as end-to-end tests. Each has a `.ady` source, a
 transpiled `.nim` output, and in most cases a reference Python `.py` file.
 
-### `primes.hpy` — Prime sieve
+### `primes.ady` — Prime sieve
 
 Counts primes up to 1,000,000 and measures wall time. Demonstrates the
 `..` and `..<` range operators and `time.perf_counter()`.
@@ -1005,7 +1005,7 @@ for k in 2 ..< N:
     if is_prime(k): count += 1
 ```
 
-### `graph.hpy` — Graph path search
+### `graph.ady` — Graph path search
 
 Three path-finding functions (find_path, find_all_paths, find_shortest_path)
 on a dict-of-lists graph. Exercises recursive functions, `[]str` default
@@ -1020,7 +1020,7 @@ def find_path(graph: Graph_T, start: Node_T, end: Node_T,
     ...
 ```
 
-### `phonecode.hpy` — Phone code benchmark
+### `phonecode.ady` — Phone code benchmark
 
 Implements Prechelt's classic benchmark: find all word encodings of phone
 numbers using a trie. Exercises enums, dict types, optional types, nested
@@ -1035,7 +1035,7 @@ class TrieNode:
     ...
 ```
 
-### `h_shortest_path.hpy` — Generic optimiser framework
+### `h_shortest_path.ady` — Generic optimiser framework
 
 A 450-line framework demonstrating: generic classes `[S, D, C]`, nested
 type declarations, `yield` (generator methods), discriminated tuples,
@@ -1052,7 +1052,7 @@ class Optimizer[S, D, C]:
             yield self.real_cost(cost), path
 ```
 
-### `show_status.hpy` — Shell integration demo
+### `show_status.ady` — Shell integration demo
 
 A test-monitoring daemon that polls a shell command every minute, parses
 its output, and prints timing summaries. Exercises `shellLines:`, `{}str`
@@ -1086,11 +1086,11 @@ hparsec/
 │
 ├── hek_helpers.py              Shared indentation and RichNL utilities
 │
-├── HPYTHON_GRAMMAR/            Language-neutral grammar definitions
+├── ADASCRIPT_GRAMMAR/            Language-neutral grammar definitions
 │   ├── py3expr.py              Expression grammar (precedence, all operators)
 │   ├── py3stmt.py              Simple statements (assignment, import, raise, …)
 │   ├── py3compound_stmt.py     Compound statements (if/while/for/def/class/shell/…)
-│   └── py_declarations.py      HPython type annotations and type declarations
+│   └── py_declarations.py      Adascript type annotations and type declarations
 │
 ├── TO_PYTHON/                  Python 3 backend
 │   ├── hek_py3_expr.py         to_py() for all expression nodes
@@ -1107,7 +1107,7 @@ hparsec/
 │   └── py2nim.py               Entry point: parse + emit Nim
 │
 └── BENCHMARK/                  End-to-end example programs
-    ├── *.hpy                   HPython source
+    ├── *.ady                   Adascript source
     ├── *.nim                   Transpiled Nim output
     └── stdlib.nim              Nim shim for Python builtins (PriorityQueue, etc.)
 ```
@@ -1117,7 +1117,7 @@ hparsec/
 1. `hek_tokenize.Tokenizer` scans the source, preprocesses tick attributes
    (`Type'Attr` → `Type__tick__Attr`), and bundles inline comments into
    `RichNL` objects so they travel with the parse tree.
-2. The grammar combinators in `HPYTHON_GRAMMAR/` define the language using
+2. The grammar combinators in `ADASCRIPT_GRAMMAR/` define the language using
    `hek_parsec` operators. Parsers are plain classes composed with `+`, `|`,
    and `[:]`; forward references use `fw("name")`.
 3. Each grammar rule class gets `to_py()` and `to_nim()` methods attached
@@ -1149,9 +1149,9 @@ infrastructure for fixing this (`RichNL` carrying comments through the parse
 tree) is already in place; the remaining work is threading those tokens
 through all compound-statement `to_py()` methods.
 
-**Native `match/case` syntax** — HPython's `case/when` currently replaces
+**Native `match/case` syntax** — Adascript's `case/when` currently replaces
 Python 3.10+ `match/case`. Restoring support for standard `match/case` as
-an alternative syntax (so HPython remains a true superset) is on the
+an alternative syntax (so Adascript remains a true superset) is on the
 [TODO list](TODO.md).
 
 **Nim stdlib coverage** — generated Nim code relies on a local `stdlib.nim`

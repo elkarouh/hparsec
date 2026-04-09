@@ -28,6 +28,7 @@ for _ in 1..trials:
     for door in switchOptions:
       if door == carLocation:
         switchWins += 1
+      break # we choose the first possible
 
 print "Trials: ", trials
 print ""

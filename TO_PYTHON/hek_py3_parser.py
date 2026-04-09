@@ -8,7 +8,7 @@ methods to the grammar node classes.
 import sys, os
 _dir = os.path.dirname(__file__)
 sys.path.insert(0, os.path.join(_dir, ".."))
-sys.path.insert(0, os.path.join(_dir, "..", "HPYTHON_GRAMMAR"))
+sys.path.insert(0, os.path.join(_dir, "..", "ADASCRIPT_GRAMMAR"))
 
 from py3compound_stmt import *  # noqa: F403 — grammar definitions
 from hek_tokenize import RichNL

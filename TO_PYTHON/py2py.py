@@ -96,7 +96,7 @@ import sys, os
 
 _dir = os.path.dirname(os.path.realpath(__file__))
 sys.path.insert(0, os.path.join(_dir, ".."))
-sys.path.insert(0, os.path.join(_dir, "..", "HPYTHON_GRAMMAR"))
+sys.path.insert(0, os.path.join(_dir, "..", "ADASCRIPT_GRAMMAR"))
 
 import sys
 import token as token_mod
@@ -511,7 +511,7 @@ def run_tests():
 
 if __name__ == "__main__":
     import argparse
-    parser = argparse.ArgumentParser(description="Translate HPython (.hpy) to Python")
+    parser = argparse.ArgumentParser(description="Translate Adascript (.ady) to Python")
     parser.add_argument("file", nargs="?", help="source file to translate (reads stdin if omitted)")
     parser.add_argument("rest", nargs="*", help="arguments passed to the compiled program")
     parser.add_argument("-c", action="store_true", help="compile and run the generated Python file")

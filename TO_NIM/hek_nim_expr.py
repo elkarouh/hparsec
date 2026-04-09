@@ -16,7 +16,7 @@ Usage:
 import sys, os
 _dir = os.path.dirname(__file__)
 sys.path.insert(0, os.path.join(_dir, ".."))
-sys.path.insert(0, os.path.join(_dir, "..", "HPYTHON_GRAMMAR"))
+sys.path.insert(0, os.path.join(_dir, "..", "ADASCRIPT_GRAMMAR"))
 # (no TO_PYTHON dependency needed)
 
 from hek_parsec import method, ParserState
@@ -630,7 +630,7 @@ def to_nim(self, prec=None):
 def to_nim(self, prec=None):
     """empty_dict: '{' ':' '}' -> Nim: initTable() (requires tables import)
 
-    HPython uses {:} as the empty dict literal.  Returns the sentinel string
+    Adascript uses {:} as the empty dict literal.  Returns the sentinel string
     "initTable()" so that the enclosing assignment statement can substitute
     the correct type-parameterised form (initTable[K, V]()) from the annotation.
     """
@@ -834,7 +834,7 @@ def _translate_method(obj_name, method_name):
         if type_str.startswith("_py_module:") or type_str.startswith("_nim_module:"):
             return method_name
     # Fall back to universal mappings.
-    # .get(key, default) is exclusively a dict/Table pattern in HPython code —
+    # .get(key, default) is exclusively a dict/Table pattern in Adascript code —
     # always map it. (nimpy module vars are already handled above via early return.)
     if method_name == "get":
         return "getOrDefault"

@@ -225,7 +225,7 @@ from_stmt = from_rel_name | from_rel_bare | from_abs
 # nimport: Nim-only import (stripped in Python output, becomes "import" in Nim)
 nimport_stmt = ikw("nimport") + dotted_name + (COMMA + dotted_name)[:]
 
-# --- print statement (Python 2 / HPython style) ---
+# --- print statement (Python 2 / Adascript style) ---
 # print expr [, expr ...]  with no parentheses.
 # ~LPAREN ensures print(...) is NOT captured here — it falls through to the
 # expressions fallback and is treated as a normal print() function call.

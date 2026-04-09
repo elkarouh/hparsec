@@ -139,7 +139,7 @@ Usage
 import sys, os
 _dir = os.path.dirname(__file__)
 sys.path.insert(0, os.path.join(_dir, ".."))
-sys.path.insert(0, os.path.join(_dir, "..", "HPYTHON_GRAMMAR"))
+sys.path.insert(0, os.path.join(_dir, "..", "ADASCRIPT_GRAMMAR"))
 
 from py_declarations import *
 import hek_py3_expr  # noqa: F401 — registers expr to_py() methods

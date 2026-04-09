@@ -32,7 +32,7 @@ Usage:
 import sys, os
 _dir = os.path.dirname(__file__)
 sys.path.insert(0, os.path.join(_dir, ".."))
-sys.path.insert(0, os.path.join(_dir, "..", "HPYTHON_GRAMMAR"))
+sys.path.insert(0, os.path.join(_dir, "..", "ADASCRIPT_GRAMMAR"))
 
 from py3expr import *
 from hek_parsec import method, ParserState
@@ -360,7 +360,7 @@ def to_py(self, prec=None):
 def to_py(self, prec=None):
     """empty_set: '{' '}' -> Python: set()
 
-    HPython treats {} as an empty set literal.  Python's {} creates an empty
+    Adascript treats {} as an empty set literal.  Python's {} creates an empty
     dict, so we always emit set() here.  Use type annotations on the variable
     to convey the element type; the Nim backend reads those to pick the right
     Nim initialiser.
@@ -372,7 +372,7 @@ def to_py(self, prec=None):
 def to_py(self, prec=None):
     """empty_dict: '{' ':' '}' -> Python: {}
 
-    HPython uses {:} as the empty dict literal to free up {} for empty sets.
+    Adascript uses {:} as the empty dict literal to free up {} for empty sets.
     """
     return "{}"
 
@@ -1362,7 +1362,7 @@ if __name__ == "__main__":
 
 @method(named_tuple_field)
 def to_py(self, prec=None):
-    """named_tuple_field: IDENTIFIER ':' expression (HPython named-tuple field literal) -> Python: just the value (positional)"""
+    """named_tuple_field: IDENTIFIER ':' expression (Adascript named-tuple field literal) -> Python: just the value (positional)"""
     # In Python, named tuple fields become positional: just emit the value
     val = self.nodes[2].to_py()
     return val

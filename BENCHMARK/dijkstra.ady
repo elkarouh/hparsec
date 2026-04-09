@@ -9,7 +9,7 @@ type Neighbour_T is tuple:
     neighbor: Node_T
 
 def dijkstra(graph : Graph_T, start: Node_T) -> {Node_T}Distance_T:
-    distances: {Node_T}Distance_T = {node: MAX_DIST for node in graph}
+    distances: {Node_T}Distance_T = {node: MAX_DIST for node in graph if node != start}
     distances[start] = 0
 
     visited : {}Node_T= {}

@@ -1,4 +1,4 @@
-"""stdlib.py -- Python support types for HPython transpiled code.
+"""stdlib.py -- Python support types for Adascript transpiled code.
 Mirrors stdlib.nim for Nim targets.
 Provides: ANY sentinel, PriorityQueue, FifoQueue, LifoQueue.
 """

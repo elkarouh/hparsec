@@ -784,7 +784,7 @@ __all__ = [
 ########################################################################################################################
 ##########################################
 if __name__ == "__main__":
-    # THE HPYTHON_GRAMMAR
+    # THE ADASCRIPT_GRAMMAR
     keyvalue = IDENTIFIER + EQUAL + NUMBER + SEMICOLON
     keyvalues = keyvalue[1:]
 

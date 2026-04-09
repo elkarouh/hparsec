@@ -5,7 +5,7 @@ build-backend = "setuptools.backends.legacy:build"
 [project]
 name = "hparsec"
 version = "0.1.0"
-description = "HPython – a statically-typed superset of Python 3 that transpiles to Python 3 and Nim"
+description = "Adascript – a statically-typed superset of Python 3 that transpiles to Python 3 and Nim"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
@@ -24,8 +24,8 @@ include = ["hparsec*"]
 # Until the package is restructured with __init__.py files, the scripts above
 # won't work as installed entry points.  Run the transpilers directly instead:
 #
-#   python3 TO_PYTHON/py2py.py  source.hpy
-#   python3 TO_NIM/py2nim.py    source.hpy
+#   python3 TO_PYTHON/py2py.py  source.ady
+#   python3 TO_NIM/py2nim.py    source.ady
 #
 # The sys.path.insert() calls in each module handle sibling imports in the
 # meantime.  A future refactor would:

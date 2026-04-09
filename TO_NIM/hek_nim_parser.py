@@ -14,7 +14,7 @@ Usage:
 import sys, os
 _dir = os.path.dirname(__file__)
 sys.path.insert(0, os.path.join(_dir, ".."))
-sys.path.insert(0, os.path.join(_dir, "..", "HPYTHON_GRAMMAR"))
+sys.path.insert(0, os.path.join(_dir, "..", "ADASCRIPT_GRAMMAR"))
 
 
 from hek_parsec import method, ParserState
@@ -1197,7 +1197,7 @@ def to_nim(self, indent=0):
             _sv_lines = "\n".join(f"{_sv_indent}var {sv} = {sv}" for sv in _shadow_vars)
             body = _sv_lines + "\n" + body
     # -- Method hoisting ------------------------------------------------
-    # Nim forbids `method` declarations inside procs.  When an HPython
+    # Nim forbids `method` declarations inside procs.  When an Adascript
     # function body contains class definitions (which emit Nim methods),
     # we hoist types, methods, procs, consts, and ALL_CAPS vars to the
     # module's top level, leaving only executable code inside the proc.

@@ -67,18 +67,18 @@ class Region:
 
     def __and__(self, other: Region) -> Region:
         def both(p: Point) -> bool:
-            return p in self and p in other
-        return Region(both)
+            p in self and p in other
+        Region(both)
 
     def __or__(self, other: Region) -> Region:
         def either(p: Point) -> bool:
-            return p in self or p in other
-        return Region(either)
+            p in self or p in other
+        Region(either)
 
     def __invert__(self) -> Region:
         def outside(p: Point) -> bool:
-            return p not in self
-        return Region(outside)
+            p not in self
+        Region(outside)
 
 
 # ---------------------------------------------------------------------------
@@ -94,9 +94,8 @@ class Circle(Region):
         self.center = center
         self.r_sq   = radius ** 2
 
-    def __contains__(self, point: Point) -> bool:
-        return (point.x - self.center.x) ** 2 + \
-               (point.y - self.center.y) ** 2 <= self.r_sq
+    def __contains__(self, pt: Point) -> bool:
+        (pt.x - self.center.x) ** 2 + (pt.y - self.center.y) ** 2 <= self.r_sq
 
 
 class Sector(Region):
@@ -118,9 +117,9 @@ class Sector(Region):
         self.half_angle_deg = half_angle_deg
         self.r_sq           = radius ** 2
 
-    def __contains__(self, point: Point) -> bool:
-        let dx: float = point.x - self.center.x
-        let dy: float = point.y - self.center.y
+    def __contains__(self, pt: Point) -> bool:
+        let dx: float = pt.x - self.center.x
+        let dy: float = pt.y - self.center.y
         if dx * dx + dy * dy > self.r_sq:
             return False
         let angle: float = math.degrees(math.atan2(dx, dy)) % 360
@@ -138,19 +137,15 @@ class Polygon(Region):
         self.vertices = vertices
 
     def __contains__(self, point: Point) -> bool:
-        let x: float = point.x
-        let y: float = point.y
+        let (x, y) = point
         let verts: []Point = self.vertices
         let n: int = len(verts)
         var inside: bool = False
         var j: int = n - 1
         for i in 0..<n:
-            let xi: float = verts[i].x
-            let yi: float = verts[i].y
-            let xj: float = verts[j].x
-            let yj: float = verts[j].y
-            if ((yi > y) != (yj > y)) and \
-               (x < (xj - xi) * (y - yi) / (yj - yi) + xi):
+            xi, yi = verts[i]
+            xj, yj = verts[j]
+            if ((yi > y) != (yj > y)) and (x < (xj - xi) * (y - yi) / (yj - yi) + xi):
                 inside = not inside
             j = i
         return inside
@@ -162,7 +157,7 @@ class Polygon(Region):
 
 def Annulus(center: Point, inner_radius: float, outer_radius: float) -> Region:
     """Ring region: outside inner circle AND inside outer circle."""
-    return ~Circle(center, inner_radius) & Circle(center, outer_radius)
+    ~Circle(center, inner_radius) & Circle(center, outer_radius)
 
 
 # ---------------------------------------------------------------------------
@@ -210,12 +205,6 @@ type Aircraft is tuple:
 type TimeStep is tuple:
     time:     float
     aircraft: []Aircraft
-
-
-# ---------------------------------------------------------------------------
-# Zone Definitions
-# ---------------------------------------------------------------------------
-
 
 
 # ---------------------------------------------------------------------------

@@ -13,7 +13,7 @@ Usage:
 import sys, os
 _dir = os.path.dirname(__file__)
 sys.path.insert(0, os.path.join(_dir, ".."))
-sys.path.insert(0, os.path.join(_dir, "..", "HPYTHON_GRAMMAR"))
+sys.path.insert(0, os.path.join(_dir, "..", "ADASCRIPT_GRAMMAR"))
 # (no TO_PYTHON dependency needed)
 
 from hek_parsec import method, ParserState
@@ -1147,7 +1147,7 @@ def to_nim(self):
 def to_nim(self):
     """print_stmt: 'print' star_expressions -> Nim: echo star_expressions
 
-    HPython bare print statement. In Nim output, 'print x' becomes 'echo x'.
+    Adascript bare print statement. In Nim output, 'print x' becomes 'echo x'.
     Multiple comma-separated arguments are passed directly to echo.
     """
     return f"echo({self.nodes[0].to_nim()})"

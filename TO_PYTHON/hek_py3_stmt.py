@@ -24,7 +24,7 @@ Usage:
 import sys, os
 _dir = os.path.dirname(__file__)
 sys.path.insert(0, os.path.join(_dir, ".."))
-sys.path.insert(0, os.path.join(_dir, "..", "HPYTHON_GRAMMAR"))
+sys.path.insert(0, os.path.join(_dir, "..", "ADASCRIPT_GRAMMAR"))
 
 from py3stmt import *
 from hek_py3_expr import _get_bracket_start
@@ -691,7 +691,7 @@ def to_py(self):
 def to_py(self):
     """print_stmt: 'print' star_expressions -> Python: print(star_expressions)
 
-    HPython allows Python-2-style bare print statements without parentheses.
+    Adascript allows Python-2-style bare print statements without parentheses.
     The transpiler rewrites them as print() calls so the output is valid
     Python 3.
     """

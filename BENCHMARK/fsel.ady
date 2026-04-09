@@ -1,10 +1,14 @@
 #!/usr/bin/env py2nim
+# https://github.com/vroby65/fsel/tree/main ported to adascript
 import os
 
 let editor: str = os.getenv("EDITOR", "nano")
 let tmpfile: str = "/tmp/fsel_entries"
 const TAB: str = "\t"
 const NL: str = "\n"
+const BOLD_MAGENTA: str = "\x1b[1;35m"
+const BOLD_BLUE: str = "\x1b[1;34m"
+const RESET: str = "\x1b[0m"
 
 if $# > 0:
     os.chdir($1)
@@ -12,18 +16,18 @@ if $# > 0:
 while True:
     let cwd: str = os.getcwd()
     let listing = shellLines: find {cwd} -maxdepth 1 -mindepth 1 -printf '%P\n' | sort
-    var entries: str = "\x1b[1;35m/" + "\x1b[0m" + TAB + "/" + NL + "\x1b[1;35m.." + "\x1b[0m" + TAB + ".." + NL
+    var entries: str = BOLD_MAGENTA + "/" + RESET + TAB + "/" + NL + BOLD_MAGENTA + ".." + RESET + TAB + ".." + NL
     for item in listing:
         if len(item) == 0:
             continue
         if -d (f"{cwd}/{item}"):
-            entries += "\x1b[1;34m" + item + "/" + "\x1b[0m" + TAB + item + NL
+            entries += BOLD_BLUE + item + "/" + RESET + TAB + item + NL
         else:
             entries += item + TAB + item + NL
 
     writeFile(tmpfile, entries)
     let prompt: str = cwd + " > "
-    let (selection, sel_code) = shell: fzf --ansi --delimiter=$'\t' --with-nth=1 --height 40% --reverse --prompt={prompt} --expect=enter,right,left < {tmpfile}
+    let (selection, sel_code) = shell: fzf --ansi --delimiter=$'\t' --with-nth=1 --height 40% --reverse --prompt="{prompt}" --expect=enter,right,left < {tmpfile}
 
     if sel_code != 0 or len(selection) == 0:
         quit(0)

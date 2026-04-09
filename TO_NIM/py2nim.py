@@ -13,7 +13,7 @@ import sys, os
 
 _dir = os.path.dirname(os.path.realpath(__file__))
 sys.path.insert(0, os.path.join(_dir, ".."))
-sys.path.insert(0, os.path.join(_dir, "..", "HPYTHON_GRAMMAR"))
+sys.path.insert(0, os.path.join(_dir, "..", "ADASCRIPT_GRAMMAR"))
 
 
 import token as token_mod
@@ -801,7 +801,7 @@ def main(argv=None):
     Mirrors the nim compiler's own CLI so muscle memory transfers directly::
 
         nim  c        [-r] [nim-flags] file.nim  [-- prog-args]
-        py2nim  c     [-r] [nim-flags] file.hpy  [-- prog-args]
+        py2nim  c     [-r] [nim-flags] file.ady  [-- prog-args]
 
     Subcommands (anything that nim accepts: c, cpp, js, check, doc, …) are
     passed straight through to the nim compiler.  All unrecognised flags (those
@@ -810,11 +810,11 @@ def main(argv=None):
     Modes
     -----
     py2nim                          read stdin, print Nim to stdout
-    py2nim -t file.hpy              transpile → write .nim to cache, stop
-    py2nim file.hpy                 shebang default: compile + run (= c -r)
-    py2nim c file.hpy               transpile → compile (artifacts in cache)
-    py2nim c -r file.hpy            transpile → compile → run
-    py2nim c -r file.hpy -- a b     same, pass a b as program arguments
+    py2nim -t file.ady              transpile → write .nim to cache, stop
+    py2nim file.ady                 shebang default: compile + run (= c -r)
+    py2nim c file.ady               transpile → compile (artifacts in cache)
+    py2nim c -r file.ady            transpile → compile → run
+    py2nim c -r file.ady -- a b     same, pass a b as program arguments
     py2nim --test                   run built-in self-tests
 
     Cache layout
@@ -838,17 +838,17 @@ def main(argv=None):
 
         #!/usr/bin/env py2nim
 
-    When py2nim is invoked with a ``.hpy`` file and no subcommand it defaults
+    When py2nim is invoked with a ``.ady`` file and no subcommand it defaults
     to ``c -r``, so the three-tier up-to-date check and direct binary execution
     all work transparently.
 
-    Per-file compiler options (#py2nim-args)
+    Per-file compiler options (#ady2nim-args)
     ----------------------------------------
-    Add a ``#py2nim-args`` directive as the **second line** of the file to set
+    Add a ``#ady2nim-args`` directive as the **second line** of the file to set
     per-file nim compiler options (inspired by nimbang)::
 
         #!/usr/bin/env py2nim
-        #py2nim-args c -d:release
+        #ady2nim-args c -d:release
 
     The directive is split on whitespace.  If the first token is a nim
     subcommand (``c``, ``cpp``, …) it sets the default subcommand for that
@@ -860,7 +860,7 @@ def main(argv=None):
     When a binary-producing subcommand (c, cpp, …) is given, py2nim runs
     three mtime comparisons before doing any work:
 
-    1. **.nim older than .hpy** → re-transpile, then continue to tier 2.
+    1. **.nim older than .ady** → re-transpile, then continue to tier 2.
     2. **executable older than .nim** → skip transpilation, re-compile.
     3. **both up to date** → skip everything; with ``-r`` just exec the
        existing binary directly without invoking nim at all.
@@ -882,7 +882,7 @@ def main(argv=None):
     # ------------------------------------------------------------------ #
     # 2.  nim-style manual argument parsing                               #
     #                                                                     #
-    #   py2nim [subcommand] [flags...] [file.hpy] [-- prog-args...]      #
+    #   py2nim [subcommand] [flags...] [file.ady] [-- prog-args...]      #
     #                                                                     #
     #   We don't use argparse here because argparse doesn't handle        #
     #   nim-style --flag:value pairs (the colon is unusual) and we want  #
@@ -898,7 +898,7 @@ def main(argv=None):
     subcommand = None   # nim subcommand (c, cpp, js, …) if given
     run = False         # -r / --run
     transpile_only = False  # -t / --transpile: write/print .nim, stop there
-    hpy_file = None     # the .hpy source file
+    ady_file = None     # the .ady source file
     nim_flags = []      # flags forwarded verbatim to nim
     prog_args = []      # program arguments (after --)
 
@@ -923,62 +923,62 @@ def main(argv=None):
         elif arg in ("-t", "--transpile"):
             transpile_only = True
 
-        elif hpy_file is None and arg.startswith("-"):
-            # Unknown flag before the .hpy file — forward to nim unchanged
+        elif ady_file is None and arg.startswith("-"):
+            # Unknown flag before the .ady file — forward to nim unchanged
             # (handles -d:, -o:, --verbosity:, --gc:, --opt:, etc.)
             nim_flags.append(arg)
 
-        elif hpy_file is None:
-            hpy_file = arg
+        elif ady_file is None:
+            ady_file = arg
 
         else:
-            # Any arg (flag or positional) after the .hpy file goes to the program
+            # Any arg (flag or positional) after the .ady file goes to the program
             prog_args.append(arg)
 
         i += 1
 
     # ------------------------------------------------------------------ #
-    # 2b. Shebang default: no subcommand + .hpy file → c -r              #
+    # 2b. Shebang default: no subcommand + .ady file → c -r              #
     #                                                                     #
     #   The Linux kernel only passes a single token after /usr/bin/env   #
     #   in a shebang line, so '#!/usr/bin/env py2nim c -r' is illegal.  #
     #   Instead, write '#!/usr/bin/env py2nim' and rely on this default: #
-    #   when py2nim is called with a .hpy file but no subcommand (and    #
+    #   when py2nim is called with a .ady file but no subcommand (and    #
     #   -t was not given), it behaves exactly as if 'c -r' had been      #
     #   specified.                                                        #
     #                                                                     #
     #   To transpile only (print .nim to stdout), use -t / --transpile.  #
     # ------------------------------------------------------------------ #
-    if hpy_file and subcommand is None and not transpile_only and hpy_file.endswith(".hpy"):
+    if ady_file and subcommand is None and not transpile_only and ady_file.endswith(".ady"):
         subcommand = "c"
         run = True
 
     # ------------------------------------------------------------------ #
     # 3.  Read source                                                     #
     # ------------------------------------------------------------------ #
-    if hpy_file:
-        with open(hpy_file) as f:
+    if ady_file:
+        with open(ady_file) as f:
             code = f.read()
     else:
         code = sys.stdin.read()
 
     # ------------------------------------------------------------------ #
-    # 3b. Parse optional #py2nim-args directive (nimbang-style)          #
+    # 3b. Parse optional #ady2nim-args directive (nimbang-style)          #
     #                                                                     #
-    #   If the second non-empty line of the .hpy file starts with        #
-    #   "#py2nim-args", the rest of that line is split into tokens and   #
+    #   If the second non-empty line of the .ady file starts with        #
+    #   "#ady2nim-args", the rest of that line is split into tokens and   #
     #   prepended to nim_flags (explicit CLI flags still take priority). #
     #                                                                     #
     #   Example:                                                          #
     #     #!/usr/bin/env py2nim                                           #
-    #     #py2nim-args c -d:release                                       #
+    #     #ady2nim-args c -d:release                                       #
     # ------------------------------------------------------------------ #
-    _PY2NIM_ARGS_PREFIX = "#py2nim-args "
-    if hpy_file:
+    _ADY2NIM_ARGS_PREFIX = "#ady2nim-args "
+    if ady_file:
         lines = code.splitlines()
         # Skip the shebang (line 0), look at line 1
-        if len(lines) > 1 and lines[1].startswith(_PY2NIM_ARGS_PREFIX):
-            directive_tokens = lines[1][len(_PY2NIM_ARGS_PREFIX):].split()
+        if len(lines) > 1 and lines[1].startswith(_ADY2NIM_ARGS_PREFIX):
+            directive_tokens = lines[1][len(_ADY2NIM_ARGS_PREFIX):].split()
             # First token may be a subcommand (c, cpp, …); remaining are flags
             if directive_tokens:
                 first = directive_tokens[0]
@@ -993,7 +993,7 @@ def main(argv=None):
     # 4.  Resolve cache paths (nimbang-style)                            #
     #                                                                     #
     #   All generated artifacts go to ~/.cache/hparsec/ so the source   #
-    #   directory stays clean.  A hash of the absolute .hpy path gives  #
+    #   directory stays clean.  A hash of the absolute .ady path gives  #
     #   each script its own isolated subdirectory, just like nimbang.   #
     #                                                                     #
     #   Layout inside the cache:                                          #
@@ -1001,14 +1001,14 @@ def main(argv=None):
     #     ~/.cache/hparsec/<HASH>/.script       ← compiled binary       #
     #     ~/.cache/hparsec/<HASH>/nimcache/     ← nim object cache      #
     # ------------------------------------------------------------------ #
-    def _cache_paths(hpy_path):
-        """Return (cache_dir, nim_file, exe_file, nimcache_dir) for *hpy_path*."""
+    def _cache_paths(ady_path):
+        """Return (cache_dir, nim_file, exe_file, nimcache_dir) for *ady_path*."""
         import hashlib
-        abs_path = os.path.realpath(hpy_path)
+        abs_path = os.path.realpath(ady_path)
         digest   = hashlib.sha1(abs_path.encode()).hexdigest()[:16].upper()
         base_dir = os.path.join(os.path.expanduser("~"), ".cache", "hparsec")
         cache_dir = os.path.join(base_dir, "cache-" + digest)
-        stem     = os.path.splitext(os.path.basename(hpy_path))[0]
+        stem     = os.path.splitext(os.path.basename(ady_path))[0]
         ext      = ".exe" if sys.platform == "win32" else ""
         nim_file  = os.path.join(cache_dir, stem + ".nim")
         exe_file  = os.path.join(cache_dir, "." + stem + ext)
@@ -1018,15 +1018,15 @@ def main(argv=None):
     # ------------------------------------------------------------------ #
     # 5.  Three-tier up-to-date check then build/run                     #
     #                                                                     #
-    #   tier 1 — transpile:  .nim older than .hpy  (or .nim missing)    #
+    #   tier 1 — transpile:  .nim older than .ady  (or .nim missing)    #
     #   tier 2 — compile:    exe  older than .nim  (or exe  missing)     #
     #   tier 3 — run:        nothing to do, just exec the existing exe   #
     #                                                                     #
     #   Compilation-only subcommands (check, doc, …) have no executable, #
     #   so the exe check is skipped for them.                             #
     # ------------------------------------------------------------------ #
-    if hpy_file and subcommand:
-        cache_dir, nim_file, exe_file, nimcache_dir = _cache_paths(hpy_file)
+    if ady_file and subcommand:
+        cache_dir, nim_file, exe_file, nimcache_dir = _cache_paths(ady_file)
         os.makedirs(cache_dir, exist_ok=True)
 
         # Install stdlib.nim into the cache dir so `import stdlib` works.
@@ -1038,7 +1038,7 @@ def main(argv=None):
                os.path.getmtime(_stdlib_src) > os.path.getmtime(_stdlib_dst):
                 _shutil.copy2(_stdlib_src, _stdlib_dst)
 
-        hpy_mtime = os.path.getmtime(hpy_file)
+        ady_mtime = os.path.getmtime(ady_file)
         nim_mtime = os.path.getmtime(nim_file) if os.path.exists(nim_file) else 0
         exe_mtime = os.path.getmtime(exe_file) if os.path.exists(exe_file) else 0
 
@@ -1053,7 +1053,7 @@ def main(argv=None):
         )
 
         # --- tier 1: transpile? ---
-        need_transpile = nim_mtime < max(hpy_mtime, transpiler_mtime)
+        need_transpile = nim_mtime < max(ady_mtime, transpiler_mtime)
         if need_transpile:
             nim_output = translate(code)
             with open(nim_file, "w") as f:
@@ -1109,9 +1109,9 @@ def main(argv=None):
         # No subcommand (or -t/--transpile explicitly given):
         # transpile and either write .nim or print to stdout.
         nim_output = translate(code)
-        if hpy_file and transpile_only:
+        if ady_file and transpile_only:
             # -t with a file: write the .nim into the cache directory
-            cache_dir, nim_file, _exe, _nc = _cache_paths(hpy_file)
+            cache_dir, nim_file, _exe, _nc = _cache_paths(ady_file)
             os.makedirs(cache_dir, exist_ok=True)
             with open(nim_file, "w") as f:
                 f.write(nim_output)

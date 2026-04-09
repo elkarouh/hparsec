@@ -1,12 +1,12 @@
-# phonecode.hpy -- HPython version of the Phone Code benchmark
+# phonecode.ady -- Adascript version of the Phone Code benchmark
 # ============================================================
 #
 # Solves the "Phone Code" challenge from:
 #   Prechelt, Lutz. "An Empirical Comparison of Seven Programming Languages."
 #   IEEE Computer, Vol. 33, No. 10, October 2000, pp. 23-29.
 #
-# Transpile to Python:  python3 TO_PYTHON/py2py.py BENCHMARK/phonecode.hpy
-# Transpile to Nim:     python3 TO_NIM/py2nim.py BENCHMARK/phonecode.hpy
+# Transpile to Python:  python3 TO_PYTHON/py2py.py BENCHMARK/phonecode.ady
+# Transpile to Nim:     python3 TO_NIM/py2nim.py BENCHMARK/phonecode.ady
 
 from enum import Enum
 import sys
