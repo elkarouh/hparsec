@@ -1075,14 +1075,25 @@ def main(argv=None):
         # If we re-transpiled, always recompile regardless of exe mtime.
         need_compile = need_transpile or (exe_mtime < nim_mtime)
 
+        def _make_symlink():
+            if produces_binary and ady_file:
+                stem = os.path.splitext(os.path.basename(ady_file))[0]
+                ext  = ".exe" if sys.platform == "win32" else ""
+                link = os.path.join(os.path.dirname(os.path.abspath(ady_file)), stem + ext)
+                if os.path.islink(link) or os.path.exists(link):
+                    os.remove(link)
+                os.symlink(exe_file, link)
+
         if produces_binary and not run:
             if not need_compile:
                 print(f"# up to date: {exe_file}", file=sys.stderr)
+                _make_symlink()
                 sys.exit(0)
 
         if produces_binary and run:
             if not need_compile:
                 print(f"# up to date: {exe_file}", file=sys.stderr)
+                _make_symlink()
                 cmd = [exe_file] + prog_args
                 result = subprocess.run(cmd)
                 sys.exit(result.returncode)
@@ -1101,13 +1112,7 @@ def main(argv=None):
             sys.exit(result.returncode)
 
         # Create/update symlink next to the .ady source pointing at the binary.
-        if produces_binary:
-            stem = os.path.splitext(os.path.basename(ady_file))[0]
-            ext  = ".exe" if sys.platform == "win32" else ""
-            link = os.path.join(os.path.dirname(os.path.abspath(ady_file)), stem + ext)
-            if os.path.islink(link) or os.path.exists(link):
-                os.remove(link)
-            os.symlink(exe_file, link)
+        _make_symlink()
 
         # After successful compile, exec the binary with prog_args (or if -r
         # was requested with prog_args, which nim can't forward via --out).
