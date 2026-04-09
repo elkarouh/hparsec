@@ -303,9 +303,11 @@ def binop_to_nim(self, prec=None, my_prec=None):
                 left_is_seq = result.startswith("@[")
                 right_is_seq = right.startswith("@[")
                 left_is_str = (result.startswith('"') or result.startswith('fmt"')
-                               or result.endswith('.join("")') or result.endswith(".join(\"\")"))
+                               or result.endswith('.join("")') or result.endswith(".join(\"\")")
+                               or " & " in result)  # already a string concat chain
                 right_is_str = (right.startswith('"') or right.startswith('fmt"')
                                 or right.endswith('.join("")') or right.endswith(".join(\"\")"))
+
                 # field access on typed object (e.g. self.off where off: string)
                 if not left_is_str and "." in result:
                     _field = result.rsplit(".", 1)[-1]
