@@ -170,9 +170,9 @@ class Tokenizer:
     _BASH_ENV_RE  = _re.compile(r'\$([A-Z_][A-Z0-9_]*)')
 
     # Bash file-test operators: '-e FILE', '-f FILE', etc.
-    # Must be preceded by whitespace or start-of-line, and followed by a space,
-    # so we never confuse with subtraction or negative numbers.
-    _BASH_FILE_TEST_RE = _re.compile(r'(?:^|(?<=\s)|(?<=\())-([efdLrwxscbpS])(?=\s)')
+    # Must be preceded by a boolean-context keyword or '(' to avoid matching
+    # command-line flags like 'Csetup -e foo' inside shell: bodies.
+    _BASH_FILE_TEST_RE = _re.compile(r'(?:(?<=\bif\s)|(?<=\belif\s)|(?<=\bwhile\s)|(?<=\band\s)|(?<=\bor\s)|(?<=\bnot\s)|(?<=\())-([efdLrwxscbpS])(?=\s)')
     # Bash file-comparison operators: FILE1 -nt FILE2 / FILE1 -ot FILE2
     # Only match '-nt' and '-ot' surrounded by whitespace.
     _BASH_FILE_NT_RE = _re.compile(r'(?<=\s)-nt(?=\s)')

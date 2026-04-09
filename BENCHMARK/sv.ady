@@ -5,10 +5,9 @@ let baseline : str =$2
 let (view,_,_) = shell: choose_view_sorted {pattern}
 if view:
   if $USER == $LOGNAME:
-    if baseline:
+    if baseline: # WHAT IF ELD view ????
       shell: Csetup -e G!31.IP.L8 -b TACT.TACT_CONFIG.28.1.0.{baseline} {view}
-    else: # WHAT IF ELD view ????
-      print "No baseline provided"
+    else:
       shell: Csetup -e G!31.IP.L8 {view}
   else:
     shell: Ccontext -e G!31.IP.L8 -b TACT.TACT_CONFIG.{view}
