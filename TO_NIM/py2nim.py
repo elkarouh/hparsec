@@ -97,9 +97,7 @@ def parse_module(code):
 
         result = statement.parse(stream)
         if not result:
-            import sys
-            print(stream.format_error(), file=sys.stderr)
-            break
+            raise SyntaxError(stream.format_error())
 
         node = result[0]
         node._leading_comments = inter_comments
@@ -1055,7 +1053,11 @@ def main(argv=None):
         # --- tier 1: transpile? ---
         need_transpile = nim_mtime < max(ady_mtime, transpiler_mtime)
         if need_transpile:
-            nim_output = translate(code)
+            try:
+                nim_output = translate(code)
+            except SyntaxError as e:
+                print(str(e), file=sys.stderr)
+                sys.exit(1)
             with open(nim_file, "w") as f:
                 f.write(nim_output)
             # Refresh mtime after write so tier-2 comparison is accurate
@@ -1117,7 +1119,11 @@ def main(argv=None):
     else:
         # No subcommand (or -t/--transpile explicitly given):
         # transpile and either write .nim or print to stdout.
-        nim_output = translate(code)
+        try:
+            nim_output = translate(code)
+        except SyntaxError as e:
+            print(str(e), file=sys.stderr)
+            sys.exit(1)
         if ady_file and transpile_only:
             # -t with a file: write the .nim into the cache directory
             cache_dir, nim_file, _exe, _nc = _cache_paths(ady_file)

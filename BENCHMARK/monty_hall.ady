@@ -4,34 +4,34 @@ nimport random
 
 randomize()
 
-type Door is enum Door1, Door2, Door3
-
-def randomDoor() -> Door: 
-  rand(Door)
+type Door_T is enum Door1, Door2, Door3
+type Choice_T is enum Switch, DontSwitch
 
 let trials : int = 100_000
 var stayWins : int =0
 var switchWins : int = 0
 
 for _ in 1..trials:
-  let carLocation : Door = randomDoor()
-  let candidateFirstChoice : Door = randomDoor()
-  let availableDoors : {}Door = Door'Range - {candidateFirstChoice, carLocation}
-  var hostChoice : Door
+  let carLocation : Door_T = rand(Door_T)
+  let candidateFirstChoice : Door_T = rand(Door_T)
+  let availableDoors : {}Door_T = Door_T'Range - {candidateFirstChoice, carLocation}
+  var hostChoice : Door_T
   for door in availableDoors:
     hostChoice = door
   #
-  if candidateFirstChoice == carLocation: # we don't switch
-    stayWins += 1
-  else: # we switch
-    let switchOptions : {}Door = Door'Range - {candidateFirstChoice, hostChoice}
-    for door in switchOptions:
-      if door == carLocation:
-        switchWins += 1
-      break # we choose the first possible
+  for choice in Choice_T:
+    case choice:
+      when DontSwitch:
+        if candidateFirstChoice == carLocation: # we don't switch
+          stayWins += 1
+      when Switch:
+        let switchOptions : {}Door_T = Door_T'Range - {candidateFirstChoice, hostChoice}
+        for door in switchOptions:
+          if door == carLocation:
+            switchWins += 1
+          break # we choose the first possible
 
 print "Trials: ", trials
 print ""
 print f"Stay:   {stayWins} wins (, {stayWins * 100 / trials} %)"
 print f"Switch: {switchWins} wins (, {switchWins * 100 / trials} %)"
-
