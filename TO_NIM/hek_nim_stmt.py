@@ -1213,7 +1213,7 @@ if __name__ == "__main__":
         # --- Assignment ---
         ("x = 1", "var x = 1"),
         ("a = b = 1", "var a = b = 1"),
-        ("a, b = 1, 2", "var a, b = 1, 2"),
+        ("a, b = 1, 2", "let (a, b) = 1, 2"),
         # --- Augmented assignment (same in Nim) ---
         ("x += 1", "x += 1"),
         ("x -= 1", "x -= 1"),
