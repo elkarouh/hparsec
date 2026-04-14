@@ -313,7 +313,112 @@ def example7():
 
 def example8():
     # -----------------------------------------------------------------------
-    # Example 8 -- Hidden Markov Model (Viterbi via shortest_path)
+    # Example 8 -- Least-Square Segmentation
+    # Partition a series into k segments minimising the sum of squared deviations.
+    # -----------------------------------------------------------------------
+    type Seg_T is []int
+    type State_T is tuple:
+        nr_segs: int
+        last_idx: int
+    type Decision_T is Seg_T
+    type Cost_T is float
+
+    class LeastSquareSegmenter(Optimizer[State_T, Decision_T, Cost_T]):
+        var series: []int = [10, 20, 34, 50, 60, 70, 80]
+
+        def SSD(self, lo: int, hi: int) -> float:
+            """Sum of squared deviations for series[lo:hi]."""
+            sub: []int = self.series[lo:hi]
+            n: int = hi - lo
+            if n == 0:
+                return 0.0
+            sum_v: float = 0.0
+            sum_sq: float = 0.0
+            for x in sub:
+                sum_v += float(x)
+                sum_sq += float(x * x)
+            return sum_sq - (sum_v * sum_v) / float(n)
+
+        def get_state(self, past_decisions: []Decision_T) -> State_T:
+            nr_segs: int = self.start_state.nr_segs - len(past_decisions)
+            last_idx: int = 0
+            for d in past_decisions:
+                last_idx += len(d)
+            return (nr_segs:nr_segs, last_idx:last_idx)
+
+        def is_end_state(self, state: State_T) -> bool:
+            return state.nr_segs == 0
+
+        def get_next_decisions(self, current_state: State_T) -> [](Decision_T, Cost_T):
+            let (nr_segs, j) = current_state
+            if nr_segs == 0:
+                return []
+            n: int = len(self.series)
+            if nr_segs == 1:
+                return [(self.series[j:], self.SSD(j, n))]
+            return [(self.series[j:i], self.SSD(j, i))
+                    for i in range(j + 1, n - nr_segs + 1)]
+
+    print('======= LEAST-SQUARE SEGMENTATION (2 segments) =======')
+    op8: LeastSquareSegmenter = LeastSquareSegmenter()
+    for sol in op8.shortest_path((nr_segs:2, last_idx:0), (nr_segs:0, last_idx:0)):
+        print(sol)
+
+
+def example9():
+    # -----------------------------------------------------------------------
+    # Example 9 -- Best String Alignment
+    # Align two sequences with minimum edit cost (match=0, mismatch=2, gap=6).
+    # -----------------------------------------------------------------------
+    type State_T is tuple:
+        r1: str
+        r2: str
+    type Decision_T is tuple:
+        c1: str
+        c2: str
+    type Cost_T is float
+
+    class BestAlignment(Optimizer[State_T, Decision_T, Cost_T]):
+        def get_state(self, past_decisions: []Decision_T) -> State_T:
+            s1: str = self.start_state.r1
+            s2: str = self.start_state.r2
+            len1: int = 0
+            len2: int = 0
+            for d in past_decisions:
+                if d.c1 != "=":
+                    len1 += 1
+                if d.c2 != "=":
+                    len2 += 1
+            return (r1:s1[len1:len(s1)], r2:s2[len2:len(s2)])
+
+        def get_next_decisions(self, current_state: State_T) -> [](Decision_T, Cost_T):
+            let (r1, r2) = current_state
+            if r1 == "" and r2 == "":
+                return []
+            if r1 == "":
+                return [((c1:"=", c2:r2[0:1]), 6.0)]
+            if r2 == "":
+                return [((c1:r1[0:1], c2:"="), 6.0)]
+            ch1: str = r1[0:1]
+            ch2: str = r2[0:1]
+            cost: Cost_T = 0.0 if ch1 == ch2 else 2.0
+            return [
+                ((c1:ch1, c2:ch2), cost),
+                ((c1:"=", c2:ch2), 6.0),
+                ((c1:ch1, c2:"="), 6.0),
+            ]
+
+    str1: str = "GAATTCAGTTA"
+    str2: str = "GGATCGA"
+    op9: BestAlignment = BestAlignment()
+    print("======= BEST ALIGNMENT =======")
+    for solution in op9.shortest_path((r1:str1, r2:str2), (r1:"", r2:"")):
+        print(solution)
+
+
+def example10():
+    # -----------------------------------------------------------------------
+    # Example 10 -- Hidden Markov Model (Viterbi via shortest_path)
     # -----------------------------------------------------------------------
     from math import log
     type Hidden_State_T is enum HEALTHY, FEVER, NONE
@@ -401,3 +506,5 @@ if __name__=="__main__":
     example6()
     example7()
     example8()
+    example9()
+    example10()
