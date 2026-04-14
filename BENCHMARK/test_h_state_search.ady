@@ -47,6 +47,11 @@ def demo_waterjug():
             self.S = cap_small
             self.T = target
 
+        def heuristic(self, state: State_T) -> float:
+            """Distance of the big jug from the target volume."""
+            let (b, _) = state
+            return float(abs(b - self.T))
+
         def get_next_states(self, current_state: State_T) -> []Step_T[State_T, Action_T]:
             let (b, s) = current_state
             B: int = self.B
@@ -80,7 +85,19 @@ def demo_waterjug():
     sol_bfs: []Step_T[State_T, Action_T] = jug.search(initial)
     jug.print_solution(sol_bfs, initial)
 
-    print("\n[A* — optimal solution]")
+    print("\n[DFS — depth-unlimited]")
+    sol_dfs: []Step_T[State_T, Action_T] = jug.search_dfs(initial)
+    jug.print_solution(sol_dfs, initial)
+
+    print("\n[DFS — depth-limited to 5]")
+    sol_dfs5: []Step_T[State_T, Action_T] = jug.search_dfs(initial, limit=5)
+    jug.print_solution(sol_dfs5, initial)
+
+    print("\n[Best-first — greedy heuristic (abs(big - target))]")
+    sol_bf: []Step_T[State_T, Action_T] = jug.search_best_first(initial)
+    jug.print_solution(sol_bf, initial)
+
+    print("\n[A* — optimal with heuristic]")
     sol_astar: []Step_T[State_T, Action_T] = jug.search_astar(initial)
     jug.print_solution(sol_astar, initial)
 
@@ -248,9 +265,27 @@ def demo_eight_puzzle():
     type State_T is str
     type Action_T is str
 
-    GOAL: State_T = "123456780"
+    GOAL_STR: State_T = "123456780"
 
     class EightPuzzle(StateSearcher[State_T, Action_T]):
+
+        def heuristic(self, state: State_T) -> float:
+            """Sum of Manhattan distances of each tile from its goal position."""
+            total: float = 0.0
+            for k in range(9):
+                tile: str = state[k:k+1]
+                if tile != "0":
+                    goal_pos: int = 0
+                    for j in range(9):
+                        if GOAL_STR[j:j+1] == tile:
+                            goal_pos = j
+                            break
+                    cur_row: int = k // 3
+                    cur_col: int = k % 3
+                    goal_row: int = goal_pos // 3
+                    goal_col: int = goal_pos % 3
+                    total = total + float(abs(cur_row - goal_row) + abs(cur_col - goal_col))
+            return total
 
         def get_next_states(self, state: State_T) -> []Step_T[State_T, Action_T]:
             blank: int = 0
@@ -281,13 +316,31 @@ def demo_eight_puzzle():
             return result
 
         def is_goal(self, state: State_T) -> bool:
-            return state == GOAL
+            return state == GOAL_STR
 
     print("\n=== EIGHT PUZZLE ===")
     puzzle: EightPuzzle = EightPuzzle()
+
+    print("\n[BFS — easy start (2 moves)]")
     initial: State_T = "123406758"
     sol: []Step_T[State_T, Action_T] = puzzle.search(initial)
     puzzle.print_solution(sol, initial)
+
+    print("\n[Harder start — BFS vs best-first vs A* with Manhattan heuristic]")
+    # 724506831: blank at centre, requires 20 moves optimal
+    hard: State_T = "724506831"
+
+    print("\n  BFS:")
+    sol_bfs: []Step_T[State_T, Action_T] = puzzle.search(hard)
+    print(f"  {len(sol_bfs)} moves")
+
+    print("\n  Best-first (greedy Manhattan):")
+    sol_bf: []Step_T[State_T, Action_T] = puzzle.search_best_first(hard)
+    print(f"  {len(sol_bf)} moves")
+
+    print("\n  A* (Manhattan):")
+    sol_as: []Step_T[State_T, Action_T] = puzzle.search_astar(hard)
+    print(f"  {len(sol_as)} moves (optimal)")
 
 
 if __name__ == "__main__":
