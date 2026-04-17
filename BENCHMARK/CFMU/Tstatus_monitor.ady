@@ -1,34 +1,37 @@
 #!/usr/bin/env py2nim
 """
-cfmu_show_builds — parse tacot_corico output and display a formatted build status table.
+Tstatus_monitor — parse tacot_corico output and display a formatted build status table.
 
 Adascript translation of the original awk script.
 
 Usage:
-    tacot_corico ... | ./cfmu_show_builds
+    tacot_corico ... | ./Tstatus_monitor
 """
 import re
 import time
 
 nimport awk
 
+const MAX_BUILDS: int = 256
+
+type Index_T = 1 .. MAX_BUILDS
 
 class ShowBuilds(AwkBase):
     # per-build arrays indexed 1..Index
     var Index    : int = 0
-    var Day      : {int}str = {:}
-    var Hour     : {int}str = {:}
-    var User     : {int}str = {:}
-    var Host     : {int}str = {:}
-    var Build    : {int}str = {:}
-    var Version  : {int}str = {:}
-    var Details  : {int}str = {:}
-    var Test_Mode: {int}str = {:}
-    var Vnc      : {int}str = {:}
-    var Team     : {int}str = {:}
-    var Host_Load15_Scheduling: {int}str = {:}
-    var Nr_Failed : {int}str = {:}
-    var Nr_Success: {int}str = {:}
+    var Day      : [Index_T]str
+    var Hour     : [Index_T]str
+    var User     : [Index_T]str
+    var Host     : [Index_T]str
+    var Build    : [Index_T]str
+    var Version  : [Index_T]str
+    var Details  : [Index_T]str
+    var Test_Mode: [Index_T]str
+    var Vnc      : [Index_T]str
+    var Team     : [Index_T]str
+    var Host_Load15_Scheduling: [Index_T]str
+    var Nr_Failed : [Index_T]str
+    var Nr_Success: [Index_T]str
 
     # transient state
     var VALGRIND     : bool  = False
