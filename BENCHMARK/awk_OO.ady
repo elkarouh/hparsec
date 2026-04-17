@@ -13,7 +13,6 @@ import re
 type Severity_T is enum INFO, WARN, ERROR, OTHER
 
 
-@virtual
 class AwkProcessor:
     var FS        : str
     var OFS       : str

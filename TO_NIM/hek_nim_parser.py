@@ -2253,6 +2253,15 @@ def _generate_method_decl(func_node, indent, class_name, parent_name, is_virtual
         _body_no_comments = "\n".join(
             line for line in body_lines if not line.lstrip().startswith("#")
         )
+        # For non-virtual classes, promote self to var if body mutates any self.field
+        # or calls any self.method() (which may itself be a mutating proc).
+        if not is_virtual and class_name and _re.search(
+            r"self\.\w+\s*(\.add\(|\[.*\]\s*=(?!=)|[+\-*/]=|=(?!=)|\()", _body_no_comments
+        ):
+            params = [
+                f"self: var {class_name}{type_params}" if p.startswith(f"self: {class_name}") else p
+                for p in params
+            ]
         new_params = []
         for p in params:
             pname = p.split(":")[0].strip()
