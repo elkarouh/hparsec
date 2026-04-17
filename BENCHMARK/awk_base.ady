@@ -1,0 +1,49 @@
+#!/usr/bin/env py2nim
+"""
+awk_base — generic stdin line-processor framework.
+
+Subclass AwkBase and override:
+    process_record()   — called once per line after read_record()
+    begin()            — called before the main loop  (default: no-op)
+    finish()           — called after the main loop   (default: no-op)
+"""
+
+
+@virtual
+class AwkBase:
+    var FS        : str
+    var OFS       : str
+    var line      : str
+    var Fields    : []str
+    var NR        : int = 0
+    var NF        : int = 0
+    var total_len : int = 0
+    var total_nf  : int = 0
+
+    def __init__(self, fs: str = " ", ofs: str = " "):
+        self.FS  = fs
+        self.OFS = ofs
+
+    def read_record(self, raw: str):
+        self.line   = raw.rstrip()
+        self.Fields = (self.line.split() if self.FS == " " else self.line.split(self.FS))
+        self.NR        += 1
+        self.NF         = self.Fields'Length
+        self.total_len += self.line'Length
+        self.total_nf  += self.NF
+
+    def process_record(self):
+        raise NotImplementedError("Override process_record()")
+
+    def begin(self):
+        pass
+
+    def finish(self):
+        pass
+
+    def run(self):
+        self.begin()
+        for raw in stdin.lines:
+            self.read_record(raw)
+            self.process_record()
+        self.finish()
