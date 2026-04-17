@@ -16,7 +16,7 @@ type Severity_T is enum INFO, WARN, ERROR, OTHER
 class AwkProcessor(AwkBase): 
     var counts : [Severity_T]int = [INFO : 0, WARN : 0, ERROR : 0, OTHER: 0]
 
-    def classify(self) -> Severity_T:
+    def classify_record(self) -> Severity_T:
         if re.search(r"(?i)error", self.line):
             return ERROR
         if re.search(r"(?i)warn", self.line):
@@ -26,8 +26,7 @@ class AwkProcessor(AwkBase):
         return OTHER
 
     def process_record(self):
-        let sev: Severity_T = self.classify()
-        self.counts[sev] += 1
+        let sev: Severity_T = self.classify_record()
         case sev:
             when ERROR:
                 print f"!! {self.NR:>3}: {self.line}"
@@ -43,6 +42,7 @@ class AwkProcessor(AwkBase):
             when others:
                 let joined: str = self.OFS.join(self.Fields)
                 print f"   {self.NR:>3}: {joined}"
+        self.counts[sev] += 1
 
     def begin(self):
         print "--- awk report ---"
