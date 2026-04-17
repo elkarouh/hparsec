@@ -1059,7 +1059,7 @@ proc parse_state(s: string): State =
 
 ## Benchmark Programs
 
-The `BENCHMARK/` directory contains real programs that exercise the full
+The `EXAMPLES/` directory contains real programs that exercise the full
 language and serve as end-to-end tests. Each has a `.ady` source, a
 transpiled `.nim` output, and in most cases a reference Python `.py` file.
 
@@ -1217,7 +1217,7 @@ hparsec/
 │   ├── stdlib.nim              Nim shim for Python builtins (PriorityQueue, etc.)
 │   └── awk.ady                 Bundled Adascript stdlib: AwkBase record processor
 │
-└── BENCHMARK/                  End-to-end example programs
+└── EXAMPLES/                  End-to-end example programs
     ├── *.ady                   Adascript source
     ├── *.nim                   Transpiled Nim output
     └── stdlib.nim              Nim shim for Python builtins (PriorityQueue, etc.)

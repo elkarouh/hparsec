@@ -1,0 +1,14 @@
+#!/usr/bin/env py2nim
+"""
+cat FILE | ./average_line
+./average_line < FILE
+"""
+
+
+var sum : int = 0
+var count : int = 0
+for line in stdin.lines:
+  sum += line'Length
+  count += 1
+
+print f"Average line length is {sum/count}"

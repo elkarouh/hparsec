@@ -1,0 +1,26 @@
+[
+    {
+        "caption": "ClaudeCode: Open Session",
+        "command": "claude_code_open"
+    },
+    {
+        "caption": "ClaudeCode: Send to Claude (Ask)",
+        "command": "claude_code_send"
+    },
+    {
+        "caption": "ClaudeCode: Toggle Watcher",
+        "command": "claude_code_toggle_watch"
+    },
+    {
+        "caption": "ClaudeCode: Show Status",
+        "command": "claude_code_status"
+    },
+    {
+        "caption": "ClaudeCode: Browse Conversation History",
+        "command": "claude_code_list_threads"
+    },
+    {
+        "caption": "ClaudeCode: Save Session to History",
+        "command": "claude_code_save_thread"
+    }
+]

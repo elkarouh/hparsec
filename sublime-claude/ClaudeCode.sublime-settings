@@ -1,0 +1,10 @@
+{
+    // Path to the claude CLI binary.
+    "claude_bin": "claude",
+
+    // Path to the zstd CLI binary (used to compress/decompress Zed thread data).
+    "zstd_bin": "/auto/home/ekhassan/.cargo/bin/zstd",
+
+    // Path to the Zed AI threads SQLite database.
+    "zed_threads_db": "/auto/local_build/dhws149/disk1/DOWNLOADS/zed/threads/threads.db"
+}

@@ -962,7 +962,7 @@ class MyOptimizer(Optimizer[str, str, float]):
 
 ## 18. Real Examples
 
-The `BENCHMARK/` directory contains complete programs. Here are annotated
+The `EXAMPLES/` directory contains complete programs. Here are annotated
 highlights from each.
 
 ---

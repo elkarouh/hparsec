@@ -1,0 +1,19 @@
+[
+    // Open (or focus) an interactive Claude Code session in a Terminus panel
+    { "keys": ["ctrl+alt+c"], "command": "claude_code_open" },
+
+    // Send selected text (or whole file) to the Claude session with a prompt
+    { "keys": ["ctrl+alt+a"], "command": "claude_code_send" },
+
+    // Toggle auto-review watcher on save
+    { "keys": ["ctrl+alt+w"], "command": "claude_code_toggle_watch" },
+
+    // Show plugin status
+    { "keys": ["ctrl+alt+s"], "command": "claude_code_status" },
+
+    // Browse past conversations (History)
+    { "keys": ["ctrl+alt+h"], "command": "claude_code_list_threads" },
+
+    // Save current session transcript to DB
+    { "keys": ["ctrl+alt+shift+s"], "command": "claude_code_save_thread" }
+]
