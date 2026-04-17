@@ -327,6 +327,12 @@ def to_nim(self, indent=0, is_virtual=False, class_name=None, parent_name=None, 
             if field_type_match and class_name:
                 fname = field_type_match.group(1)
                 ftype = field_type_match.group(2).strip()
+                if fname in hek_nim_expr._PY_UNIVERSAL_METHOD_TO_NIM:
+                    nim_equiv = hek_nim_expr._PY_UNIVERSAL_METHOD_TO_NIM[fname]
+                    raise SyntaxError(
+                        f"Field name '{fname}' in class '{class_name}' conflicts with "
+                        f"the universal method mapping '{fname}' -> '{nim_equiv}'. "
+                        f"Rename the field.")
                 if class_name not in ParserState.class_field_types:
                     ParserState.class_field_types[class_name] = {}
                 ParserState.class_field_types[class_name][fname] = ftype
