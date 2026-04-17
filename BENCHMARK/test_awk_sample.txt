@@ -1,0 +1,9 @@
+INFO  server started on port 8080
+ERROR disk full on /var/log
+WARN  memory usage at 92 percent
+INFO  user alice logged in
+ERROR connection timeout to db
+DEBUG cache miss for key foo
+WARN  queue depth rising
+plain line with no tag
+INFO  backup complete
