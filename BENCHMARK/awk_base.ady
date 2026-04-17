@@ -58,7 +58,7 @@ class AwkBase:
                 self.read_record(raw)
                 self.process_record()
         else:
-            let all: str = stdin.read()
+            let all: str = stdin.readAll()
             for raw in all.split(self.RS):
                 if raw'Length > 0:
                     self.read_record(raw)
