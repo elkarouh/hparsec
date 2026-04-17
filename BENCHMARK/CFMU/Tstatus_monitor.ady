@@ -14,11 +14,11 @@ nimport awk
 
 const MAX_BUILDS: int = 256
 
-type Index_T = 1 .. MAX_BUILDS
+type Index_T = 0 .. MAX_BUILDS
 
 class ShowBuilds(AwkBase):
     # per-build arrays indexed 1..Index
-    var Index    : int = 0
+    var Index    : Index_T = 0
     var Day      : [Index_T]str
     var Hour     : [Index_T]str
     var User     : [Index_T]str
