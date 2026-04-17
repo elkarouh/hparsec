@@ -137,18 +137,14 @@ class ShowBuilds(AwkBase):
         var max_load   : int = 0
 
         for i in 1 .. self.Index:
-            let b: str = self.Build[i]
-            let m: str = self.Test_Mode[i]
-            let d: str = self.Details[i]
-            let l: str = self.Host_Load15_Scheduling[i]
-            if b'Length > max_build:
-                max_build   = b'Length
-            if m'Length > max_mode:
-                max_mode    = m'Length
-            if d'Length > max_details:
-                max_details = d'Length
-            if l'Length > max_load:
-                max_load    = l'Length
+            if len(self.Build[i]) > max_build:
+                max_build   = len(self.Build[i])
+            if len(self.Test_Mode[i]) > max_mode:
+                max_mode    = len(self.Test_Mode[i])
+            if len(self.Details[i]) > max_details:
+                max_details = len(self.Details[i])
+            if len(self.Host_Load15_Scheduling[i]) > max_load:
+                max_load    = len(self.Host_Load15_Scheduling[i])
 
         def row(fail: str, succ: str, team: str, host: str,
                 build: str, ver: str, upd: str, mode: str,
