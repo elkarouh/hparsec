@@ -59,7 +59,7 @@ def process(raw: str):
             else:
                 print f"[info] NR={NR} (empty)"
         when others:
-            let joined: str = OFS.join(Fields)
+            let joined: str = OFS.join(Fields[1:])
             print f"   {NR:>3}: {joined}"
 
 

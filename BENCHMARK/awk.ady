@@ -12,6 +12,10 @@ awk variables supported:
     OFS  output field separator  (default: " ")
     RS   record separator        (default: "\n" = one line per record)
     ORS  output record separator (default: "\n", available to subclasses)
+
+Fields layout (mirrors awk):
+    Fields[0]       = full line  ($0)
+    Fields[1..NF]   = individual fields  ($1..$NF)
 """
 
 
@@ -36,9 +40,10 @@ class AwkBase:
 
     def read_record(self, raw: str):
         self.line   = raw.rstrip()
-        self.Fields = (self.line.split() if self.FS == " " else self.line.split(self.FS))
+        let parts: []str = (self.line.split() if self.FS == " " else self.line.split(self.FS))
+        self.Fields = [self.line] + parts   # F[0] = $0 (full line), F[1..NF] = fields
         self.NR        += 1
-        self.NF         = self.Fields'Length
+        self.NF         = parts'Length
         self.total_len += self.line'Length
         self.total_nf  += self.NF
 

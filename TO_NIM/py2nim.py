@@ -1256,7 +1256,12 @@ def main(argv=None):
         produces_binary = subcommand in BINARY_COMMANDS
 
         # If we re-transpiled, always recompile regardless of exe mtime.
-        need_compile = need_transpile or (exe_mtime < nim_mtime)
+        # Also recompile if any dependency .nim is newer than the exe.
+        _dep_nim_max_mtime = max(
+            (os.path.getmtime(os.path.join(cache_dir, f))
+             for f in os.listdir(cache_dir) if f.endswith(".nim")),
+            default=0)
+        need_compile = need_transpile or (exe_mtime < max(nim_mtime, _dep_nim_max_mtime))
 
         def _make_symlink():
             if produces_binary and ady_file:

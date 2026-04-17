@@ -26,21 +26,22 @@ class AwkProcessor(AwkBase):
         return OTHER
 
     def process_record(self):
+        let F:    []str = self.Fields # equivalent to $0, $1, ... in awk
         let sev: Severity_T = self.classify_record()
         case sev:
             when ERROR:
-                print f"!! {self.NR:>3}: {self.line}"
+                print f"!! {self.NR:>3}: {F[0]}" # F[0] contains the entire line !!!
             when WARN:
-                print f" ! {self.NR:>3}: {self.line}"
+                print f" ! {self.NR:>3}: {F[0]}"
             when INFO:
                 if self.NF >= 1:
-                    let first: str = self.Fields[1]
-                    let last:  str = self.Fields[self.NF]
+                    let first: str = F[1]
+                    let last:  str = F[self.NF]
                     print f"[info] NR={self.NR} NF={self.NF} first={first}{self.OFS}last={last}"
                 else:
                     print f"[info] NR={self.NR} (empty)"
             when others:
-                let joined: str = self.OFS.join(self.Fields)
+                let joined: str = self.OFS.join(F[1:])
                 print f"   {self.NR:>3}: {joined}"
         self.counts[sev] += 1
 
