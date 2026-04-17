@@ -16,20 +16,15 @@ type Severity_T is enum INFO, WARN, ERROR, OTHER
 class AwkProcessor:
     var FS        : str
     var OFS       : str
-    var NR        : int
-    var NF        : int
-    var total_len : int
-    var total_nf  : int
-    var counts    : [Severity_T]int
+    var NR        : int = 0
+    var NF        : int = 0
+    var total_len : int = 0
+    var total_nf  : int = 0
+    var counts    : [Severity_T]int = [INFO : 0, WARN : 0, ERROR : 0, OTHER: 0]
 
     def __init__(self, fs: str = " ", ofs: str = " "):
         self.FS        = fs
         self.OFS       = ofs
-        self.NR        = 0
-        self.NF        = 0
-        self.total_len = 0
-        self.total_nf  = 0
-        self.counts    = [INFO : 0, WARN : 0, ERROR : 0, OTHER: 0]
 
     def classify(self, line: str) -> Severity_T:
         if re.search(r"(?i)error", line):
