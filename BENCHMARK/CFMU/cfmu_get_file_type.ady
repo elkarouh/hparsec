@@ -1,0 +1,111 @@
+#!/usr/bin/env py2nim
+# cfmu_get_file_type.ady
+# Return the file type for a free_text pattern or symbolic name.
+# Translated from cfmu_get_file_type.ksh
+#
+# Usage:
+#   cfmu_get_file_type [-app_key <instance>] [-service <FTPS_service>]
+#                      <-text <file_pattern> | -sym_name <symbolic_name>>
+#
+# Exit 0: found (prints file type)
+# Exit 1: not found
+# Exit 2: multiple matches
+
+import os
+import re
+
+var app_key      : str = os.environ.get("APPLICATION_INSTANCE_KEY", "")
+var service      : str = "FTPS"
+var in_text      : str = ""
+var search_field : str = ""
+var args         : []str = $@
+var i            : int = 0
+
+while i < len(args):
+  let arg : str = args[i]
+  if arg == "-app_key":
+    i += 1
+    app_key = args[i]
+  elif arg == "-service":
+    i += 1
+    service = args[i].upper()
+  elif arg == "-text":
+    i += 1
+    if search_field == "SYM_NAME":
+      print "ERROR: -text and -sym_name are mutually exclusive"
+      sys.exit(1)
+    in_text = args[i]
+    search_field = "FREE_TEXT"
+  elif arg == "-sym_name":
+    i += 1
+    if search_field == "FREE_TEXT":
+      print "ERROR: -text and -sym_name are mutually exclusive"
+      sys.exit(1)
+    in_text = args[i]
+    search_field = "SYM_NAME"
+  i += 1
+
+if in_text == "":
+  print "ERROR: -text or -sym_name must be specified"
+  sys.exit(1)
+
+if app_key == "":
+  print "ERROR: APPLICATION_INSTANCE_KEY is not set and -app_key not provided"
+  sys.exit(1)
+
+let (loc_out, loc_rc) = shell: oracle_server_location.hdr.query EXEC_ENV SECURE_DOMAIN SECURITY_LEVEL -where APP_KEY {app_key}
+if loc_rc != 0 or loc_out.strip() == "":
+  print f"ERROR: {app_key} is not recognised"
+  sys.exit(1)
+
+var exec_env   : str = ""
+var secure_dom : str = ""
+var sec_level  : str = ""
+for part in loc_out.split(";"):
+  let kv : []str = part.strip().split("=", 1)
+  if len(kv) == 2:
+    let k : str = kv[0].strip()
+    let v : str = kv[1].strip().strip('"')
+    if k == "EXEC_ENV":
+      exec_env = v
+    elif k == "SECURE_DOMAIN":
+      secure_dom = v
+    elif k == "SECURITY_LEVEL":
+      sec_level = v
+
+if exec_env == "":
+  print f"ERROR: {app_key} is not recognised"
+  sys.exit(1)
+
+if secure_dom == "" or sec_level == "HOSTED":
+  secure_dom = "TRUE"
+
+let (tdir_out, _) = shell: connection.info.query TARGET_DIR -where APP_KEY {app_key} -where INTERNAL_NAME {service}
+let target_dir : str = tdir_out.strip()
+
+let the_sys_raw : str = app_key.split("_")[0] if "_" in app_key else app_key[:3]
+let (remap_out, _) = shell: ftps_prefix_map.info.query TO_SYSTEM -where FROM_SYSTEM {the_sys_raw} -list
+var the_sys : str = remap_out.strip() if remap_out.strip() != "" else the_sys_raw
+if target_dir != "":
+  the_sys = the_sys + "/" + target_dir
+
+let (rows_out, _) = shell: ftps_cleanup.info.query FILE_TYPE {search_field} -where EXEC_ENV {exec_env} -where SECURE_DOMAIN {secure_dom} -where CFMU_SYSTEM {the_sys} -list " "
+
+let match_prefix : str = ".*" if (os.environ.get("CM_SYSTEM") == "TACT" and os.environ.get("CONFIGURATION_TYPE") == "dev") else ""
+
+var matched_types : []str = []
+for row in rows_out.splitlines():
+  let parts : []str = row.split(None, 1)
+  if len(parts) == 2:
+    let ftype    : str = parts[0]
+    let out_text : str = parts[1].strip()
+    if out_text != "" and re.match(r"^" + match_prefix + out_text + r"$", in_text):
+      matched_types.append(ftype)
+
+let nr : int = len(matched_types)
+if nr > 1:
+  sys.exit(2)
+elif nr == 0:
+  sys.exit(1)
+else:
+  print matched_types[0]

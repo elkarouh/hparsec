@@ -1,0 +1,184 @@
+#!/usr/bin/env py2nim
+# ftps_rename.ady
+# Rename a file on the FTPS server.
+# Translated from FTPS::Rename (Perl).
+#
+# Usage:
+#   ftps_rename <ftps_service> <old_file_name> [options]
+#
+# At least one of: --free_text, --from_appl, --file_type, --seq_number, --period, --date
+
+nimport ftps_common
+import os
+import re
+
+if $# < 2:
+  print "Usage: ftps_rename <ftps_service> <old_file_name> [options]"
+  sys.exit(RC_ARG_ERROR)
+
+let ftps_service  : str = $1
+let old_file_name : str = $2
+let app_key       : str = os.environ.get("APPLICATION_INSTANCE_KEY", "")
+let appl_part     : str = app_key.lower().replace("_", "")[:6]
+
+var new_free_text  : str  = ""
+var new_appl       : str  = ""
+var new_file_type  : str  = ""
+var new_seq_number : str  = ""
+var new_period     : str  = ""
+var new_date       : str  = ""
+var allow_multi    : bool = False
+var free_text_set  : bool = False
+var appl_set       : bool = False
+var ft_set         : bool = False
+var seq_set        : bool = False
+var period_set     : bool = False
+var date_set       : bool = False
+
+for arg in $@[2:]:
+  if arg.startswith("--free_text="):
+    new_free_text = arg[12:]
+    free_text_set = True
+  elif arg.startswith("--from_appl="):
+    new_appl = arg[12:]
+    appl_set = True
+  elif arg.startswith("--file_type="):
+    new_file_type = arg[12:]
+    ft_set = True
+  elif arg.startswith("--seq_number="):
+    new_seq_number = arg[13:]
+    seq_set = True
+  elif arg.startswith("--period="):
+    new_period = arg[9:]
+    period_set = True
+  elif arg.startswith("--date="):
+    new_date = arg[7:]
+    date_set = True
+  elif arg == "--allow_multi_ver":
+    allow_multi = True
+
+if not (free_text_set or appl_set or ft_set or seq_set or period_set or date_set):
+  print "ERROR: at least one of --free_text, --from_appl, --file_type, --seq_number, --period, --date must be specified"
+  sys.exit(RC_ARG_ERROR)
+
+let fnc_re : str = "" + FNC_VERSION + FNC_DATE + FNC_SEQ_NB + FNC_PERIOD + FNC_APP_KEY + FNC_TYPE + FNC_FREE
+var remote_file : str = old_file_name
+let fnc_re_pat : str = "^" + fnc_re + "$"
+var m_bare      : bool = bool(re.match(fnc_re_pat, old_file_name))
+let versioned_name : str = "1." + old_file_name
+var m_versioned : bool = bool(re.match(fnc_re_pat, versioned_name))
+if m_versioned and not m_bare:
+  remote_file = "1." + old_file_name
+
+var fnc_captures : [7]str = ["", "", "", "", "", "", ""]
+let m_ok : bool = remote_file.match(re(fnc_re_pat), fnc_captures)
+if not m_ok:
+  print f"ERROR: '{old_file_name}' does not match FTPS naming convention"
+  sys.exit(RC_ARG_ERROR)
+
+let version_prefix : str = fnc_captures[0]
+let old_date       : str = fnc_captures[1]
+let old_seq        : str = fnc_captures[2]
+let old_period     : str = fnc_captures[3]
+let old_appl       : str = fnc_captures[4]
+let old_ft         : str = fnc_captures[5]
+let old_free_text  : str = fnc_captures[6]
+
+if not appl_set and old_appl != appl_part:
+  print f"ERROR: Not allowed to rename file {old_file_name} (owned by '{old_appl}', you are '{appl_part}')"
+  sys.exit(RC_NOT_ALLOWED_ERROR)
+
+let eff_free_text : str = new_free_text if free_text_set else old_free_text
+let eff_appl      : str = new_appl.lower().replace("_", "") if appl_set else old_appl
+let eff_ft        : str = new_file_type if ft_set else old_ft
+let eff_seq       : str = new_seq_number if seq_set else old_seq
+let eff_period    : str = new_period if period_set else old_period
+let eff_date      : str = new_date if date_set else old_date
+
+if free_text_set and eff_free_text == old_free_text:
+  print f"ERROR: --free_text value is the same as existing: '{old_free_text}'"
+  sys.exit(RC_ARG_ERROR)
+if appl_set and eff_appl == old_appl:
+  print f"ERROR: --from_appl value is the same as existing: '{old_appl}'"
+  sys.exit(RC_ARG_ERROR)
+if ft_set and eff_ft == old_ft:
+  print f"ERROR: --file_type value is the same as existing: '{old_ft}'"
+  sys.exit(RC_ARG_ERROR)
+if seq_set and eff_seq == old_seq:
+  print f"ERROR: --seq_number value is the same as existing: '{old_seq}'"
+  sys.exit(RC_ARG_ERROR)
+if period_set and eff_period == old_period:
+  print f"ERROR: --period value is the same as existing: '{old_period}'"
+  sys.exit(RC_ARG_ERROR)
+if date_set and eff_date == old_date:
+  print f"ERROR: --date value is the same as existing: '{old_date}'"
+  sys.exit(RC_ARG_ERROR)
+
+if date_set:
+  var dm_caps : [3]str = ["", "", ""]
+  let dm_ok : bool = eff_date.match(re(r"^(\d{4})(\d{2})(\d{2})$"), dm_caps)
+  if not dm_ok:
+    print f"ERROR: --date must be exactly 8 digits (YYYYMMDD), got: '{eff_date}'"
+    sys.exit(RC_ARG_ERROR)
+  let mo : int = int(dm_caps[1])
+  let dy : int = int(dm_caps[2])
+  if mo < 1 or mo > 12 or dy < 1 or dy > 31:
+    print f"ERROR: Invalid date: '{eff_date}'"
+    sys.exit(RC_ARG_ERROR)
+
+var new_remote_file : str = version_prefix + eff_date + eff_seq + eff_period + eff_appl + eff_ft + eff_free_text
+
+let server  : {str}str = get_server_info(app_key, ftps_service, "WRITE", "")
+if len(server) == 0:
+  print f"ERROR: No FTP server found for APP_KEY={app_key} INTERNAL_NAME={ftps_service}"
+  sys.exit(RC_NO_FTP_SERVER_ERROR)
+
+let secure  : str = server["secure"]
+let src_dir : str = server["dir"]
+
+var file_src_dir  : str = src_dir
+var file_dest_dir : str = src_dir
+if secure != "FALSE" and re.match(r"^1\.\d{12}", remote_file):
+  let s_month : str = remote_file[6:8] + "m"
+  let s_day   : str = remote_file[8:10] + "d"
+  let d_month : str = new_remote_file[6:8] + "m"
+  let d_day   : str = new_remote_file[8:10] + "d"
+  file_src_dir  = src_dir + f"/{s_month}/{s_day}"
+  file_dest_dir = src_dir + f"/{d_month}/{d_day}"
+
+let (check_out, _) = lftp_run(server, f"cd {file_dest_dir}\nnlist {new_remote_file}")
+if check_out.strip() != "":
+  if allow_multi:
+    var found_slot : bool = False
+    for seq_try in range(1, 10):
+      let try_file : str = re.sub(r"^(1\.\d{8})\d", f"\\g<1>{seq_try}", new_remote_file)
+      let (try_out, _) = lftp_run(server, f"cd {file_dest_dir}\nnlist {try_file}")
+      if try_out.strip() == "":
+        new_remote_file = try_file
+        found_slot = True
+        break
+    if not found_slot:
+      print f"ERROR: 9 versions already exist for {new_remote_file}"
+      sys.exit(RC_MAX_VER_EXIST_ERROR)
+  else:
+    print f"ERROR: Target filename already exists on server: {new_remote_file}"
+    sys.exit(RC_NOT_ALLOWED_ERROR)
+
+var from_path : str = remote_file
+var to_path   : str = new_remote_file
+if file_src_dir != file_dest_dir:
+  let clean_src : str = re.sub(r"^\./", "", src_dir)
+  from_path = re.sub("^[./]+", "", file_src_dir + "/" + remote_file)
+  to_path   = re.sub("^[./]+", "", file_dest_dir + "/" + new_remote_file)
+  let base : str = "/" + clean_src if clean_src else "/"
+  let (_, mv_rc) = lftp_run(server, f"cd {base}\nmv {from_path} {to_path}")
+  if mv_rc != 0:
+    print f"ERROR: Failed to rename {remote_file} to {new_remote_file}"
+    sys.exit(RC_NOT_ALLOWED_ERROR)
+else:
+  let (_, mv_rc) = lftp_run(server, f"cd {file_src_dir}\nmv {from_path} {to_path}")
+  if mv_rc != 0:
+    print f"ERROR: Failed to rename {remote_file} to {new_remote_file}"
+    sys.exit(RC_NOT_ALLOWED_ERROR)
+
+print f"Remote file {remote_file} successfully renamed to {new_remote_file}"

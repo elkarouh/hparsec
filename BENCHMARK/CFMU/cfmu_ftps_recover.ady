@@ -1,0 +1,124 @@
+#!/usr/bin/env py2nim
+# cfmu_ftps_recover.ady
+# Recovery script: upload a previously failed file to the FTPS server.
+# Translated from cfmu_ftps_recover.pl (wrapper around FTPS::Recover)
+#
+# Usage:
+#   cfmu_ftps_recover <local_file> <ftp_server> <destination_dir>
+#                     <user_id> <user_pwd> [options]
+#
+# Exit codes:
+#   0  success
+#   5  argument validation error
+#   8  failed to upload the file
+#   16 symlink for the uploaded file was not created in the allocated time
+
+import os
+
+let RC_OK            : int = 0
+let RC_ARG_ERROR     : int = 5
+let RC_FTP_ERROR     : int = 8
+let RC_SYMLINK_ERROR : int = 16
+
+# Helper: run an lftp script with explicit user/pass credentials
+def lftp_cmd(srv: str, uid: str, pwd: str, cmds: str) -> (str, int):
+  let (tmp_out, _) = shell: mktemp /tmp/lftp_recover_XXXXXX.lftp
+  let tmp : str = tmp_out.strip()
+  with open(tmp, "w") as tf:
+    tf.write(cmds + "\n")
+  let url : str = "ftp://" + srv
+  let (lftp_out, rc) = shell: lftp -u {uid},{pwd} {url} -f {tmp}
+  shell: rm -f {tmp}
+  return (lftp_out, rc)
+
+if $# < 5:
+  print "Usage: cfmu_ftps_recover <local_file> <ftp_server> <destination_dir> <user_id> <user_pwd>"
+  sys.exit(RC_ARG_ERROR)
+
+let local_file  : str = $1
+let ftp_server  : str = $2
+let dest_dir    : str = $3
+let user_id     : str = $4
+let user_pwd    : str = $5
+
+let app_key : str = os.environ.get("APPLICATION_INSTANCE_KEY", "")
+if app_key == "":
+  print "ERROR: APPLICATION_INSTANCE_KEY is not set"
+  sys.exit(RC_ARG_ERROR)
+
+if not os.path.isfile(local_file):
+  print f"ERROR: Local file {local_file} does not exist or is not readable"
+  sys.exit(RC_ARG_ERROR)
+
+let local_size : int = os.path.getsize(local_file)
+let base_name  : str = os.path.basename(local_file)
+
+# Determine if secure (dated directory) or flat directory layout
+let (secure_out, _) = shell: oracle_server_location.hdr.query SECURE_DOMAIN -where PACKAGE_NAME {ftp_server} -list
+let secure : str = secure_out.strip()
+
+let month : str = base_name[4:6] + "m"
+let day   : str = base_name[6:8] + "d"
+
+var upload_area : str
+var target_dir  : str
+if secure == "FALSE":
+  target_dir  = dest_dir
+  upload_area = dest_dir + "/upload_area"
+else:
+  target_dir  = dest_dir + "/" + month + "/" + day
+  upload_area = dest_dir + "/" + month + "/upload_area"
+
+print f"*** Start '{local_file}' file upload on {ftp_server} server"
+
+# Upload to upload_area first, then rename to dest
+let (hostname_out, _) = shell: hostname -s
+let tmp_name   : str = "ftp." + hostname_out.strip() + "." + str(os.getpid())
+let upload_cmd : str = "mkdir -p " + upload_area + "\ncd " + upload_area + "\nput " + local_file + " -o " + tmp_name
+let (_, put_rc) = lftp_cmd(ftp_server, user_id, user_pwd, upload_cmd)
+
+var rc : int = RC_OK
+if put_rc != 0:
+  print f"ERROR: Failed to upload {base_name} to {ftp_server}"
+  rc = RC_FTP_ERROR
+else:
+  let remote_tmp    : str = upload_area + "/" + tmp_name
+  let final_target  : str = target_dir + "/" + base_name
+  let mv_cmd        : str = "mv " + remote_tmp + " " + final_target
+  let (_, mv_rc) = lftp_cmd(ftp_server, user_id, user_pwd, mv_cmd)
+  if mv_rc != 0:
+    print f"ERROR: Failed to rename {remote_tmp} to {final_target} on {ftp_server}"
+    let rm_cmd : str = "rm " + remote_tmp
+    let (_, _rm_rc) = lftp_cmd(ftp_server, user_id, user_pwd, rm_cmd)
+    rc = RC_FTP_ERROR
+  else:
+    # Verify size
+    let size_cmd : str = "cd " + target_dir + "\nls -l " + base_name
+    let (size_out, _) = lftp_cmd(ftp_server, user_id, user_pwd, size_cmd)
+    var remote_size : int = 0
+    for line in size_out.splitlines():
+      let parts : []str = line.split()
+      if len(parts) >= 5:
+        if parts[4].isdigit():
+          remote_size = int(parts[4])
+        break
+    if remote_size == local_size:
+      print f"Recovery procedure completed successfully"
+      # If regression test, check symlink creation
+      if os.environ.get("CFMU_REGRESS_TEST_RECOVERY_DIR", "") != "":
+        let symlink_path : str = os.environ.get("CFMU_REGRESS_TEST_RECOVERY_DIR") + "/" + base_name
+        var waited : int = 0
+        while waited < 300 and not os.path.islink(symlink_path):
+          shell: sleep 1
+          waited += 1
+        if not os.path.islink(symlink_path):
+          print f"ERROR: Symlink for {base_name} was not created within 5 minutes"
+          rc = RC_SYMLINK_ERROR
+    else:
+      print f"ERROR: Local size ({local_size}) != remote size ({remote_size})"
+      let del_cmd : str = "cd " + target_dir + "\nrm " + base_name
+      let (_, _del_rc) = lftp_cmd(ftp_server, user_id, user_pwd, del_cmd)
+      rc = RC_FTP_ERROR
+
+print f"*** End '{local_file}' file upload on {ftp_server} server"
+sys.exit(rc)

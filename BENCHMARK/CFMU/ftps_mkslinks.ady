@@ -1,0 +1,62 @@
+#!/usr/bin/env py2nim
+# ftps_mkslinks.ady
+# Front-end caller to ftps_mkslinks.locked; handles locking via the 'locked' command.
+# Translated from ftps_mkslinks.ksh
+#
+# Usage:
+#   ftps_mkslinks [-h|-help|-ht|-html] [-controlled_restart] [-skip_lock] [-nowait]
+#                 [<args passed to ftps_mkslinks.locked>]
+
+import os
+
+let ftpsroot : str = os.environ.get("FTPSROOT", "")
+if ftpsroot == "":
+  print "FATAL: FTPSROOT env var not set"
+  sys.exit(1)
+
+let app_key : str = os.environ.get("APPLICATION_INSTANCE_KEY", "")
+if app_key == "":
+  print "FATAL: APPLICATION_INSTANCE_KEY env var not set"
+  sys.exit(1)
+
+var mkslink_args      : []str = []
+var skip_lock         : bool  = False
+var controlled_restart: bool  = False
+var wait_flag         : str   = "-nowait"
+var locked_args       : str   = ""
+var args              : []str = $@
+
+var i : int = 0
+while i < len(args):
+  let arg : str = args[i]
+  if arg == "-h" or arg == "-help" or arg == "-ht" or arg == "-html":
+    skip_lock = True
+    mkslink_args.append(arg)
+  elif arg == "-controlled_restart":
+    controlled_restart = True
+    mkslink_args.append("-restart")
+    wait_flag = ""
+  elif arg == "-skip_lock":
+    skip_lock = True
+  elif arg == "-nowait":
+    locked_args = "-nowait"
+  else:
+    mkslink_args.append(arg)
+  i += 1
+
+let extra_args : str = " ".join(mkslink_args)
+
+var cmd : str
+if skip_lock:
+  cmd = "ftps_mkslinks.locked " + extra_args
+else:
+  let mutex : str = ftpsroot + "/ftps_copy_cleanup.mutex"
+  cmd = "locked -verbose " + wait_flag + " " + locked_args + " " + mutex + " ftps_mkslinks.locked " + extra_args
+
+if controlled_restart:
+  let outer_mutex : str = ftpsroot + "/ftps_mkslinks.mutex"
+  let (_, rc) = shell: locked -verbose -nowait {outer_mutex} ksh -c "{cmd}"
+  sys.exit(rc)
+else:
+  let (_, rc) = shell: ksh -c "{cmd}"
+  sys.exit(rc)

@@ -456,7 +456,7 @@ def to_nim(self, indent=0):
 @method(elif_clause)
 def to_nim(self, indent=0):
     """elif_clause: 'elif' expression ':' block -> Nim: 'elif cond:\n  body'"""
-    cond = self.nodes[0].to_nim()
+    cond = hek_nim_expr._nim_truthiness(self.nodes[0].to_nim())
     hc = _block_inline_header_comment(self.nodes[1])
     body = self.nodes[1].to_nim(indent + 1)
     return f"{_ind(indent)}elif {cond}:{hc}\n{body}"

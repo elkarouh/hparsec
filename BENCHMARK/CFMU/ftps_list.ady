@@ -1,0 +1,274 @@
+#!/usr/bin/env py2nim
+# ftps_list.ady
+# List files on the FTPS server matching a pattern.
+# Translated from FTPS::List (Perl).
+#
+# Usage:
+#   ftps_list <ftps_service> [options]
+#
+# Mandatory:
+#   $1  ftps_service
+#
+# Optional flags:
+#   --file_name_mask=PATTERN
+#   --from_dmz=0|1
+#   --app_key=KEY
+#   --file_type=NN
+#   --ops_file_only
+#   --need_not_exist
+#   --no_header_ever
+#   --no_header
+#   --no_prefix
+#   --long
+#   --time
+#   --path
+#   --date=YYYYMMDD
+#   --start_date=YYYYMMDD
+#   --end_date=YYYYMMDD
+#   --sequence=D|ALL
+#   --period=DDD
+#   --free_text=TEXT
+#   --source_key=APPKEY
+
+nimport ftps_common
+import os
+import re
+
+if $# < 1:
+  print "Usage: ftps_list <ftps_service> [options]"
+  sys.exit(RC_ARG_ERROR)
+
+let ftps_service : str = $1
+let app_key      : str = os.environ.get("APPLICATION_INSTANCE_KEY", "")
+
+var file_name_mask : str = ""
+var from_dmz       : str = ""
+var override_key   : str = ""
+var file_type      : str = ""
+var ops_file_only  : bool = False
+var need_not_exist : bool = False
+var no_header_ever : bool = False
+var no_header      : bool = False
+var no_prefix      : bool = False
+var long_listing   : bool = False
+var timestamp      : bool = False
+var show_path      : bool = False
+var date_arg       : str = ""
+var start_date     : str = "00000000"
+var end_date       : str = "99999999"
+var sequence_arg   : str = ""
+var period_arg     : str = ""
+var free_text_arg  : str = ""
+var source_key_arg : str = ""
+
+for arg in $@[1:]:
+  if arg.startswith("--file_name_mask="):
+    file_name_mask = arg[17:]
+  elif arg.startswith("--from_dmz="):
+    from_dmz = arg[11:]
+  elif arg.startswith("--app_key="):
+    override_key = arg[10:]
+  elif arg.startswith("--file_type="):
+    file_type = arg[12:]
+  elif arg == "--ops_file_only":
+    ops_file_only = True
+  elif arg == "--need_not_exist":
+    need_not_exist = True
+  elif arg == "--no_header_ever":
+    no_header_ever = True
+  elif arg == "--no_header":
+    no_header = True
+  elif arg == "--no_prefix":
+    no_prefix = True
+  elif arg == "--long":
+    long_listing = True
+  elif arg == "--time":
+    timestamp = True
+  elif arg == "--path":
+    show_path = True
+  elif arg.startswith("--date="):
+    date_arg = arg[7:]
+  elif arg.startswith("--start_date="):
+    start_date = arg[13:]
+  elif arg.startswith("--end_date="):
+    end_date = arg[11:]
+  elif arg.startswith("--sequence="):
+    sequence_arg = arg[11:]
+  elif arg.startswith("--period="):
+    period_arg = arg[9:]
+  elif arg.startswith("--free_text="):
+    free_text_arg = arg[12:]
+  elif arg.startswith("--source_key="):
+    source_key_arg = arg[13:]
+
+if long_listing:
+  timestamp = False
+
+if date_arg != "" and (start_date != "00000000" or end_date != "99999999"):
+  print "ERROR: --date is mutually exclusive with --start_date and --end_date"
+  sys.exit(RC_ARG_ERROR)
+
+let (date_val, date_rc) = check_date(date_arg, "date")
+if date_rc != RC_OK:
+  sys.exit(date_rc)
+let (sd_val, sd_rc) = check_date(start_date, "start_date")
+if sd_rc != RC_OK:
+  sys.exit(sd_rc)
+let (ed_val, ed_rc) = check_date(end_date, "end_date")
+if ed_rc != RC_OK:
+  sys.exit(ed_rc)
+if sd_val != "":
+  start_date = sd_val
+if ed_val != "":
+  end_date = ed_val
+
+let (seq_val, seq_rc) = check_sequence(sequence_arg)
+if seq_rc != RC_OK:
+  sys.exit(seq_rc)
+let (per_val, per_rc) = check_period(period_arg)
+if per_rc != RC_OK:
+  sys.exit(per_rc)
+
+let eff_app_key : str = override_key if override_key != "" else app_key
+if eff_app_key == "":
+  print "ERROR: APPLICATION_INSTANCE_KEY is not set and --app_key not provided"
+  sys.exit(RC_ARG_ERROR)
+
+let server : {str}str = get_server_info(eff_app_key, ftps_service, "READ", from_dmz)
+if len(server) == 0:
+  print f"ERROR: No FTP server found for APP_KEY={eff_app_key} INTERNAL_NAME={ftps_service}"
+  sys.exit(RC_NO_FTP_SERVER_ERROR)
+
+var mount_point : str = server["nfs_mount"]
+if os.environ.get("CFMU_FTPS_FORCE_FTP") == "FTP":
+  mount_point = ""
+
+var src_dir : str = server["dir"]
+if file_type != "" and not (server["secure"] == "FALSE"):
+  if ops_file_only:
+    src_dir += "/OPS"
+  src_dir += "/" + file_type
+
+var patterns : []str = []
+if file_name_mask != "":
+  patterns = file_name_mask.split()
+elif date_arg != "" or sequence_arg != "" or period_arg != "" or free_text_arg != "" or source_key_arg != "":
+  var src_key : str = ""
+  if source_key_arg != "":
+    let (sk_out, sk_rc) = shell: oracle_server_location.hdr.query APP_KEY -where APP_KEY {source_key_arg} -list
+    if sk_rc != 0 or sk_out.strip() == "":
+      print f"ERROR: Invalid --source_key: {source_key_arg}"
+      sys.exit(RC_ARG_ERROR)
+    src_key = source_key_arg.lower().replace("_", "")
+  patterns = [construct_filename_pattern(date_val, seq_val, per_val, src_key, file_type, free_text_arg if free_text_arg != "" else "*")]
+else:
+  patterns = ["*"]
+
+var retries   : int = int(os.environ.get("CFMU_FTPS_LIST_RETRIES", "5"))
+let sleep_secs : int = int(os.environ.get("CFMU_FTPS_LIST_SLEEP", "5"))
+if need_not_exist:
+  retries = 1
+
+var mount_path : str = src_dir
+if mount_path.startswith("."):
+  mount_path = mount_path[1:]
+if not mount_path.startswith("/"):
+  mount_path = "/" + mount_path
+
+let ftp_server : str = server["host"]
+if not no_header and not no_header_ever:
+  print ftp_server
+  print "-" * len(ftp_server)
+
+var fcount    : int = 0
+var exit_loop : bool = False
+
+while retries > 0 and not exit_loop:
+  for pattern in patterns:
+    var entries : []str = []
+
+    if mount_point != "":
+      var full_pattern : str = pattern
+      if show_path:
+        if src_dir == ".":
+          full_pattern = mount_point + "/" + pattern
+        else:
+          full_pattern = mount_point + mount_path + "/" + pattern
+      if long_listing:
+        let (ls_out, _) = shell: echo {full_pattern} | xargs ls -l 2>/dev/null
+        entries = [l for l in ls_out.splitlines() if l.strip() != ""]
+      else:
+        let (ls_out, _) = shell: echo {full_pattern} | xargs ls -1 2>/dev/null
+        entries = [l for l in ls_out.splitlines() if l.strip() != ""]
+      if entries and not long_listing and not show_path:
+        entries = [os.path.basename(e) for e in entries]
+    else:
+      if long_listing:
+        let (ls_out, _) = lftp_run(server, f"cd {src_dir}\nls {pattern}")
+        entries = [l for l in ls_out.splitlines() if l.strip() != ""]
+      else:
+        let (ls_out, _) = lftp_run(server, f"cd {src_dir}\nnlist {pattern}")
+        entries = [l for l in ls_out.splitlines() if l.strip() != ""]
+
+    var seen         : {str}bool = {:}
+    var output_list  : []str = []
+    for entry in sorted(entries):
+      if entry == "":
+        continue
+      if re.search(r"(\s|^)\d\d$", entry):
+        continue
+      if re.search(r"(\s|^)\d\dm:?$", entry):
+        continue
+      if re.search(r"(\s|^)\d\dd:?$", entry):
+        continue
+      if re.search(r"(\s|^)\d{4}y$", entry):
+        continue
+      if re.search(r"(\s|^)upload_area:?$", entry):
+        continue
+      if re.search(r"(\s|^)OPS$", entry):
+        continue
+      if seen.get(entry):
+        continue
+      seen[entry] = True
+
+      if not filter_output(entry, start_date, end_date):
+        continue
+
+      if timestamp and not long_listing:
+        if mount_point != "":
+          let (ts_out, _) = shell: date --reference {entry} "+%Y%m%d%H%M%S"
+          output_list.append(ts_out.strip() + " " + entry)
+        else:
+          let fname : str = os.path.basename(entry)
+          let (mt_out, _) = lftp_run(server, f"cd {src_dir}\nmodtime {fname}")
+          output_list.append(mt_out.strip() + " " + entry)
+      else:
+        output_list.append(entry)
+
+    for line in sorted(output_list):
+      if no_header and fcount == 0 and not no_header_ever:
+        print ftp_server
+        print "-" * len(ftp_server)
+      var out_line : str = line
+      if no_prefix:
+        out_line = re.sub(r"^1\.", "", out_line)
+      print out_line
+      fcount += 1
+
+  if fcount == 0:
+    if need_not_exist:
+      exit_loop = True
+    else:
+      retries -= 1
+      if retries == 0:
+        let pat_display : str = file_name_mask if file_name_mask != "" else patterns[0]
+        print f"Pattern \"{pat_display}\" not found"
+      else:
+        shell: sleep {sleep_secs}
+  else:
+    exit_loop = True
+
+if fcount > 0 or need_not_exist:
+  sys.exit(RC_OK)
+else:
+  sys.exit(RC_NO_MATCH)

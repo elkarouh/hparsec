@@ -1,0 +1,85 @@
+#!/usr/bin/env py2nim
+# cfmu_list_ftp_server.ady
+# List files on an FTP server instance under a given directory level.
+# Translated from cfmu_list_ftp_server.ksh
+#
+# Usage:
+#   cfmu_list_ftp_server <ftp_instance> <level> <pattern>
+#
+# If no arguments are given, prompts interactively.
+
+import os
+
+var remote_instance : str
+var level           : str
+var pattern         : str
+
+if $# == 3:
+  remote_instance = $1
+  level           = $2
+  pattern         = $3
+elif $# == 0:
+  remote_instance = input("Enter FTP instance : ").strip()
+  level           = input("Enter directory level : ").strip()
+  pattern         = input("Enter file pattern i.e. YYYYMMDD : ").strip()
+else:
+  print "Usage: cfmu_list_ftp_server <ftp_instance> <level> <pattern>"
+  sys.exit(1)
+
+let (loc_out, loc_rc) = shell: oracle_server_location.hdr.query PACKAGE_NAME EXEC_ENV -where APP_KEY {remote_instance}
+if loc_rc != 0 or loc_out.strip() == "":
+  print f"ERROR: {remote_instance} is not recognised"
+  sys.exit(1)
+
+var pkg_name : str = ""
+var exec_env : str = ""
+for part in loc_out.split(";"):
+  let kv : []str = part.strip().split("=", 1)
+  if len(kv) == 2:
+    let k : str = kv[0].strip()
+    let v : str = kv[1].strip().strip('"')
+    if k == "PACKAGE_NAME":
+      pkg_name = v
+    elif k == "EXEC_ENV":
+      exec_env = v
+
+if pkg_name == "":
+  print f"ERROR: No PACKAGE_NAME found for {remote_instance}"
+  sys.exit(1)
+
+let group_name : str = f"FTP_{exec_env.upper()}_{level.upper()}_READ"
+
+let (user_out, _) = shell: user_to_group_relationship.info.query USER_NAME -where GROUP_NAME {group_name} -list
+let users : []str = [u.strip() for u in user_out.splitlines() if u.strip() != ""]
+
+var username : str = ""
+var password : str = ""
+
+if len(users) == 1:
+  username = users[0]
+  let (pw_out, _) = shell: user_to_group_relationship.hdr.query PASSWD -where USER_NAME {username} -list
+  password = pw_out.strip()
+elif len(users) == 0:
+  let (conn_out, _) = shell: connection.info.query USERNAME PASSWORD -where REMOTE_INSTANCE {remote_instance} -where INTERNAL_NAME {group_name}
+  for part in conn_out.split(";"):
+    let kv : []str = part.strip().split("=", 1)
+    if len(kv) == 2:
+      let k : str = kv[0].strip()
+      let v : str = kv[1].strip().strip('"')
+      if k == "USERNAME":
+        username = v
+      elif k == "PASSWORD":
+        password = v
+  if username == "":
+    print f"ERROR: No user configured for group {group_name} on {remote_instance}"
+    sys.exit(1)
+else:
+  print f"ERROR: Multiple users defined for group {group_name} on {remote_instance}"
+  sys.exit(1)
+
+let (ls_out, ls_rc) = shell: lftp -u {username},{password} ftp://{pkg_name} -e "ls *{pattern}*; quit"
+if ls_rc != 0:
+  print "ERROR: lftp command failed"
+  sys.exit(1)
+
+print ls_out

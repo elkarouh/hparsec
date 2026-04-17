@@ -1,0 +1,286 @@
+#!/usr/bin/env py2nim
+# ftps_common.ady
+# Shared constants, helpers and server-lookup for FTPS scripts.
+# Translated from FTPS::Common (Perl).
+
+import os
+import re
+
+# ---------------------------------------------------------------------------
+# Return codes
+# ---------------------------------------------------------------------------
+let RC_OK                       : int = 0
+let RC_NO_MATCH                 : int = 1
+let RC_NO_FILE_ERROR            : int = 4
+let RC_ARG_ERROR                : int = 5
+let RC_NOT_ALLOWED_ERROR        : int = 6
+let RC_COMPRESS_ERROR           : int = 7
+let RC_CONFIG_ERROR             : int = 8
+let RC_RECOVERY_DIR_ERROR       : int = 9
+let RC_NO_FTP_SERVER_ERROR      : int = 10
+let RC_NO_SRCE_FILE_ERROR       : int = 11
+let RC_FTP_DIR_ERROR            : int = 12
+let RC_FTP_UPLOAD_DIR_ERROR     : int = 13
+let RC_REG_TEST_DIR_ERROR       : int = 14
+let RC_MAX_VER_EXIST_ERROR      : int = 15
+let RC_FTP_SYMLINK_CREATE_ERROR : int = 16
+let RC_FTP_SYMLINK_DELETE_ERROR : int = 17
+let RC_RECOVERY_ERROR           : int = 255
+
+# ---------------------------------------------------------------------------
+# Filename naming convention regex parts
+# ---------------------------------------------------------------------------
+let FNC_VERSION : str = "(1\\.){0,1}"
+let FNC_DATE    : str = "(\\d{8})"
+let FNC_SEQ_NB  : str = "(\\d{1})"
+let FNC_PERIOD  : str = "(\\d{3})"
+let FNC_APP_KEY : str = "(\\w{6})"
+let FNC_TYPE    : str = "(\\d{2})"
+let FNC_FREE    : str = "(.{0,100})"
+let FNC_FULL    : str = FNC_VERSION + FNC_DATE + FNC_SEQ_NB + FNC_PERIOD + FNC_APP_KEY + FNC_TYPE + FNC_FREE
+
+# ---------------------------------------------------------------------------
+# construct_filename_pattern
+#   Build a glob pattern for FTPS filename matching.
+#   Pass "" for any field to use wildcards.
+# ---------------------------------------------------------------------------
+def construct_filename_pattern(date: str, sequence: str, period: str,
+                               source_key: str, file_type: str,
+                               free_text: str) -> str:
+  var pattern : str
+  if date != "":
+    pattern = "1." + date
+    pattern += "?" * (8 - len(date))
+  else:
+    pattern = "1.????????"
+
+  pattern += sequence   if sequence  != "" else "?"
+  pattern += period     if period    != "" else "???"
+  pattern += source_key if source_key != "" else "??????"
+  pattern += file_type  if file_type != "" else "??"
+  pattern += free_text  if free_text != "" else "*"
+  return pattern
+
+# ---------------------------------------------------------------------------
+# filter_output
+#   Returns True if file's embedded date is within [start_date, end_date].
+# ---------------------------------------------------------------------------
+def filter_output(filename: str, start_date: str, end_date: str) -> bool:
+  let base      : str = os.path.basename(filename)
+  let file_date : str = base[2:10]
+  if re.match(r"^\d+$", file_date):
+    return start_date <= file_date and file_date <= end_date
+  elif start_date == "00000000" and end_date == "99999999":
+    return True
+  else:
+    return False
+
+# ---------------------------------------------------------------------------
+# Validators — return (value, rc)
+# ---------------------------------------------------------------------------
+def check_period(period: str) -> (str, int):
+  if period == "":
+    return ("", RC_OK)
+  if re.match(r"^\d{3}$", period):
+    return (period, RC_OK)
+  print "ERROR: -period must be 3 digits, got: ", period
+  return ("", RC_ARG_ERROR)
+
+def check_sequence(sequence: str) -> (str, int):
+  if sequence == "":
+    return ("", RC_OK)
+  if sequence == "ALL":
+    return ("?", RC_OK)
+  if re.match(r"^\d$", sequence):
+    return (sequence, RC_OK)
+  print "ERROR: -sequence must be a single digit or ALL, got: ", sequence
+  return ("", RC_ARG_ERROR)
+
+def check_date(date: str, option_name: str) -> (str, int):
+  if date == "":
+    return ("", RC_OK)
+  if re.match(r"^\d+$", date):
+    return (date, RC_OK)
+  print f"ERROR: -{option_name} must be numeric, got: {date}"
+  return ("", RC_ARG_ERROR)
+
+# ---------------------------------------------------------------------------
+# parse_dbt_hdr
+#   Parse KEY="VALUE"; output from *.hdr.query commands into a dict.
+# ---------------------------------------------------------------------------
+def parse_dbt_hdr(text: str) -> {str}str:
+  var d : {str}str = {:}
+  let pairs : []str = re.findall("(\\w+)=\"((?:[^\"\\\\]|\\\\.)*)\"", text)
+  var i : int = 0
+  while i + 1 < len(pairs):
+    let key : str = pairs[i]
+    var val : str = pairs[i + 1]
+    val = val.replace("\\\"", "\"").replace("\\\\", "\\")
+    d[key] = val
+    i += 2
+  return d
+
+# ---------------------------------------------------------------------------
+# get_server_info
+#   Resolve FTP server connection details.
+#   direction: "READ" or "WRITE"
+#   from_dmz:  "0", "1", or "" (not specified)
+#   Returns a dict with: host, user, pass, dir, sftp, secure, app_key,
+#                        cfmu_system, nfs_mount
+#   Returns {} on error.
+# ---------------------------------------------------------------------------
+def get_server_info(app_key: str, ftps_service: str, direction: str,
+                    from_dmz: str) -> {str}str:
+  let empty : {str}str = {:}
+
+  # local simulation override (regression testing)
+  if os.environ.get("CFMU_REGRESS_TEST_FTPS_DIR") != "":
+    let sim_dir : str = os.environ.get("CFMU_REGRESS_TEST_FTPS_DIR")
+    return {"host": "localsim", "user": "user", "pass": "pass",
+            "dir": sim_dir, "sftp": "0", "secure": "TRUE",
+            "app_key": "FTP_SIM", "cfmu_system": "", "nfs_mount": sim_dir}
+
+  # 1. connection table
+  let (conn_out, conn_rc) = shell: connection.info.query -all -where APP_KEY {app_key} -where INTERNAL_NAME {ftps_service}
+  if conn_rc != 0 or conn_out == "":
+    print f"ERROR: connection.info.query failed for APP_KEY={app_key} INTERNAL_NAME={ftps_service}"
+    return empty
+  let conn : {str}str = parse_dbt_hdr(conn_out)
+
+  var ftp_app_key : str = conn.get("REMOTE_INSTANCE", "")
+  let target_dir  : str = conn.get("TARGET_DIR", ".")
+  let conn_type   : str = conn.get("TYPE", "FTP")
+  let username_db : str = conn.get("USERNAME", "")
+  let password_db : str = conn.get("PASSWORD", "")
+
+  # contingency override file
+  let override_file : str = os.path.join(os.environ.get("HOME", ""), "opdata", "common", f"ftp_server_{ftps_service}.txt")
+  if os.path.exists(override_file):
+    with open(override_file) as f:
+      let ov : str = f.readline().strip()
+      if ov:
+        ftp_app_key = ov
+
+  # 2. oracle_server_location
+  let (loc_out, loc_rc) = shell: oracle_server_location.hdr.query -all -where APP_KEY {ftp_app_key}
+  if loc_rc != 0 or loc_out == "":
+    print f"ERROR: oracle_server_location.hdr.query failed for APP_KEY={ftp_app_key}"
+    return empty
+  let loc : {str}str = parse_dbt_hdr(loc_out)
+
+  var host        : str = os.environ.get("CFMU_FTPS_FORCE_PACKAGE_NAME", loc.get("PACKAGE_NAME", ""))
+  let exec_env    : str = loc.get("EXEC_ENV", "")
+  var secure      : str = loc.get("SECURE_DOMAIN", "TRUE")
+  let mode        : str = loc.get("MODE", "")
+  let system_type : str = loc.get("SYSTEM_TYPE", "FTPS")
+
+  # 3. DMZ area logic
+  var area : str = ""
+  if from_dmz == "1":
+    area = "_DMZ"
+  elif from_dmz == "0" and secure == "FALSE":
+    # user wants internal but connection points to DMZ -> find internal instance
+    var q : str
+    if exec_env == "ops":
+      q = f"oracle_server_location.hdr.query APP_KEY -where MODE {mode} -where SYSTEM_TYPE {system_type} -where EXEC_ENV {exec_env} -where_not SECURE_DOMAIN FALSE -list"
+    else:
+      q = f"oracle_server_location.hdr.query APP_KEY -where SYSTEM_TYPE {system_type} -where EXEC_ENV {exec_env} -where_not SECURE_DOMAIN FALSE -list"
+    let (new_key, _) = shell: {q}
+    let nk : str = new_key.strip()
+    if nk:
+      ftp_app_key = nk
+      let (loc2_out, _) = shell: oracle_server_location.hdr.query -all -where APP_KEY {ftp_app_key}
+      let loc2 : {str}str = parse_dbt_hdr(loc2_out)
+      host   = os.environ.get("CFMU_FTPS_FORCE_PACKAGE_NAME", loc2.get("PACKAGE_NAME", host))
+      secure = loc2.get("SECURE_DOMAIN", secure)
+  elif secure == "FALSE":
+    area = "_DMZ"
+
+  # 4. credentials
+  var user   : str = username_db
+  var passwd : str = password_db
+  var cfmu_system : str = ""
+  if not user:
+    let sys_part   : str = app_key[:3].upper()
+    let group_name : str = f"FTP_{exec_env.upper()}_{sys_part}{area}_{direction}"
+    let (ug_out, _) = shell: user_to_group_relationship.info.query USER_NAME -where GROUP_NAME {group_name} -list
+    let users : []str = [l.strip() for l in ug_out.splitlines() if l.strip() != ""]
+    if len(users) == 1:
+      user = users[0]
+      let (pw_out, _) = shell: user_to_group_relationship.hdr.query PASSWD -where USER_NAME {user}
+      let pw : {str}str = parse_dbt_hdr(pw_out)
+      passwd = pw.get("PASSWD", "")
+    else:
+      print f"ERROR: expected 1 user for group {group_name}, found {len(users)}"
+      return empty
+
+  # 5. NFS mount shortcut (internal connections only)
+  var nfs_mount : str = ""
+  if area == "" and user != "":
+    let (sys_out, _) = shell: user_to_group_relationship.hdr.query CFMU_SYSTEM -where USER_NAME {user} -list
+    cfmu_system = sys_out.strip()
+    if cfmu_system:
+      let aik : str = os.environ.get("ACTUAL_APPLICATION_INSTANCE_KEY", app_key)
+      let (ploc_local_out,  _) = shell: physical_location.hdr.query REAL_LOCATION -where APP_KEY {aik} -list
+      let (ploc_remote_out, _) = shell: physical_location.hdr.query REAL_LOCATION -where APP_KEY {ftp_app_key} -list
+      let ploc_local  : str = ploc_local_out.strip()
+      let ploc_remote : str = ploc_remote_out.strip()
+      if ploc_local == ploc_remote and ploc_local != "":
+        let env_key : str = exec_env + ("_dmz" if secure == "FALSE" else "")
+        var mnt : str = f"/cfmu/nasdata/{env_key}/ftps_{cfmu_system}"
+        let (mnt_out, _) = shell: mount
+        if mnt not in mnt_out:
+          let flat : str = f"/cfmu/nasdata/{env_key}/ftps"
+          if flat in mnt_out:
+            mnt = flat + f"/{cfmu_system}"
+          else:
+            mnt = ""
+        let (_, mnt_x_rc) = shell: test -x {mnt}
+        if mnt != "" and os.path.isdir(mnt) and mnt_x_rc == 0:
+          let (_, cd_rc) = shell: cd {mnt}
+          if cd_rc == 0:
+            if secure != "FALSE":
+              let (_, cd01_rc) = shell: cd {mnt}/01m
+              if cd01_rc == 0:
+                nfs_mount = mnt
+            else:
+              nfs_mount = mnt
+
+  return {"host":        host,
+          "user":        user,
+          "pass":        passwd,
+          "dir":         target_dir,
+          "sftp":        ("1" if conn_type == "SFTP" else "0"),
+          "secure":      secure,
+          "app_key":     ftp_app_key,
+          "cfmu_system": cfmu_system,
+          "nfs_mount":   nfs_mount}
+
+# ---------------------------------------------------------------------------
+# lftp_run
+#   Execute lftp commands. commands is a multi-line lftp script string.
+#   Returns (stdout, rc).
+# ---------------------------------------------------------------------------
+def lftp_run(server: {str}str, commands: str) -> (str, int):
+  var proto : str
+  if server["sftp"] == "1":
+    proto = "sftp"
+  elif server["secure"] != "FALSE":
+    proto = "ftps"
+  else:
+    proto = "ftp"
+
+  let srv_host : str = server["host"]
+  let url      : str = f"{proto}://{srv_host}"
+  let srv_user : str = server["user"]
+  let srv_pass : str = server["pass"]
+  let user_arg : str = f"{srv_user},{srv_pass}"
+
+  let (tmp_out, _) = shell: mktemp /tmp/lftp_XXXXXX.lftp
+  let tmp : str = tmp_out.strip()
+  with open(tmp, "w") as f:
+    f.write(commands + "\nquit\n")
+
+  let (lftp_out, lftp_rc) = shell: lftp -u {user_arg} {url} -f {tmp}
+  os.unlink(tmp)
+  return (lftp_out, lftp_rc)

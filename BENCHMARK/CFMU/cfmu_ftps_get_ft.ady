@@ -1,0 +1,59 @@
+#!/usr/bin/env py2nim
+# cfmu_ftps_get_ft.ady
+# Return the file type for a given symbolic name.
+# Translated from cfmu_ftps_get_ft.ksh
+#
+# Usage:
+#   cfmu_ftps_get_ft [-app_key <instance>] <symbolic_name>
+
+import os
+
+var app_key  : str = os.environ.get("APPLICATION_INSTANCE_KEY", "")
+var sym_name : str = ""
+var args     : []str = $@
+var i        : int = 0
+
+while i < len(args):
+  if args[i] == "-app_key":
+    i += 1
+    app_key = args[i]
+  else:
+    sym_name = args[i]
+  i += 1
+
+if sym_name == "":
+  print "Usage: cfmu_ftps_get_ft [-app_key <instance>] <symbolic_name>"
+  sys.exit(1)
+
+if app_key == "":
+  print "ERROR: APPLICATION_INSTANCE_KEY is not set and -app_key not provided"
+  sys.exit(1)
+
+let (env_out, env_rc) = shell: oracle_server_location.hdr.query EXEC_ENV -where APP_KEY {app_key} -list
+if env_rc != 0 or env_out.strip() == "":
+  print f"ERROR: {app_key} is not recognised"
+  sys.exit(1)
+let exec_env : str = env_out.strip()
+
+let the_sys_raw : str = app_key.split("_")[0] if "_" in app_key else app_key[:3]
+
+let (remap_out, _) = shell: ftps_prefix_map.info.query TO_SYSTEM -where FROM_SYSTEM {the_sys_raw} -list
+let the_sys : str = remap_out.strip() if remap_out.strip() != "" else the_sys_raw
+
+let (ft_out, _) = shell: ftps_cleanup.info.query FILE_TYPE -where SYM_NAME {sym_name} -where EXEC_ENV {exec_env} -where CFMU_SYSTEM {the_sys} -list
+var ft : str = ft_out.strip()
+
+if ft == "":
+  let (ft2_out, _) = shell: ftps_cleanup.info.query FILE_TYPE -where SYM_NAME {sym_name} -where EXEC_ENV {exec_env} -list
+  ft = ft2_out.strip()
+
+if ft == "":
+  print f"ERROR: Symbolic name '{sym_name}' not found"
+  sys.exit(1)
+
+let lines : []str = [l for l in ft.splitlines() if l.strip() != ""]
+if len(lines) > 1:
+  print f"ERROR: Multiple file types found for '{sym_name}'"
+  sys.exit(1)
+
+print lines[0]

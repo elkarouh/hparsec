@@ -1,0 +1,284 @@
+#!/usr/bin/env py2nim
+# ftps_get.ady
+# Download files from the FTPS server.
+# Translated from FTPS::Get (Perl).
+#
+# Usage:
+#   ftps_get <dest_dir> <ftps_service> <decompress:true|false> [options]
+
+nimport ftps_common
+import os
+import re
+
+if $# < 3:
+  print "Usage: ftps_get <dest_dir> <ftps_service> <decompress:true|false> [options]"
+  sys.exit(RC_ARG_ERROR)
+
+let dest_dir     : str  = $1
+let ftps_service : str  = $2
+let decompress   : bool = $3 == "true" or $3 == "1"
+let app_key      : str  = os.environ.get("APPLICATION_INSTANCE_KEY", "")
+
+let (_, dest_w_rc) = shell: test -w {dest_dir}
+if not os.path.isdir(dest_dir) or dest_w_rc != 0:
+  print f"ERROR: {dest_dir} does not exist or is not writable"
+  sys.exit(RC_ARG_ERROR)
+
+let full_path : str = os.path.realpath(dest_dir)
+
+var file_name_mask  : str  = ""
+var from_dmz        : str  = ""
+var override_key    : str  = ""
+var file_type       : str  = ""
+var ops_file_only   : bool = False
+var need_not_exist  : bool = False
+var always_prefix   : bool = False
+var show_path       : bool = False
+var use_dest_cache  : bool = False
+var date_arg        : str  = ""
+var start_date      : str  = "00000000"
+var end_date        : str  = "99999999"
+var sequence_arg    : str  = ""
+var period_arg      : str  = ""
+var free_text_arg   : str  = ""
+var source_key_arg  : str  = ""
+
+for arg in $@[3:]:
+  if arg.startswith("--file_name_mask="):
+    file_name_mask = arg[17:]
+  elif arg.startswith("--from_dmz="):
+    from_dmz = arg[11:]
+  elif arg.startswith("--app_key="):
+    override_key = arg[10:]
+  elif arg.startswith("--file_type="):
+    file_type = arg[12:]
+  elif arg == "--ops_file_only":
+    ops_file_only = True
+  elif arg == "--need_not_exist":
+    need_not_exist = True
+  elif arg == "--always_prefix":
+    always_prefix = True
+  elif arg == "--path":
+    show_path = True
+  elif arg == "--use_dest_as_cache":
+    use_dest_cache = True
+  elif arg.startswith("--date="):
+    date_arg = arg[7:]
+  elif arg.startswith("--start_date="):
+    start_date = arg[13:]
+  elif arg.startswith("--end_date="):
+    end_date = arg[11:]
+  elif arg.startswith("--sequence="):
+    sequence_arg = arg[11:]
+  elif arg.startswith("--period="):
+    period_arg = arg[9:]
+  elif arg.startswith("--free_text="):
+    free_text_arg = arg[12:]
+  elif arg.startswith("--source_key="):
+    source_key_arg = arg[13:]
+
+if date_arg != "" and (start_date != "00000000" or end_date != "99999999"):
+  print "ERROR: --date is mutually exclusive with --start_date and --end_date"
+  sys.exit(RC_ARG_ERROR)
+
+let (date_val, date_rc) = check_date(date_arg, "date")
+if date_rc != RC_OK:
+  sys.exit(date_rc)
+let (sd_val, sd_rc) = check_date(start_date, "start_date")
+if sd_rc != RC_OK:
+  sys.exit(sd_rc)
+let (ed_val, ed_rc) = check_date(end_date, "end_date")
+if ed_rc != RC_OK:
+  sys.exit(ed_rc)
+if sd_val != "":
+  start_date = sd_val
+if ed_val != "":
+  end_date = ed_val
+
+let (seq_val, seq_rc) = check_sequence(sequence_arg)
+if seq_rc != RC_OK:
+  sys.exit(seq_rc)
+let (per_val, per_rc) = check_period(period_arg)
+if per_rc != RC_OK:
+  sys.exit(per_rc)
+
+let eff_app_key : str = override_key if override_key != "" else app_key
+if eff_app_key == "":
+  print "ERROR: APPLICATION_INSTANCE_KEY is not set and --app_key not provided"
+  sys.exit(RC_ARG_ERROR)
+
+let server : {str}str = get_server_info(eff_app_key, ftps_service, "READ", from_dmz)
+if len(server) == 0:
+  print f"ERROR: No FTP server found for APP_KEY={eff_app_key} INTERNAL_NAME={ftps_service}"
+  sys.exit(RC_NO_FTP_SERVER_ERROR)
+
+var mount_point : str = server["nfs_mount"]
+if os.environ.get("CFMU_FTPS_FORCE_FTP") == "FTP":
+  mount_point = ""
+
+let (the_env_out, _) = shell: oracle_server_location.hdr.query EXEC_ENV -where APP_KEY {eff_app_key} -list
+let the_env : str = the_env_out.strip()
+let awk_field2 : str = "$2"
+let (subdirs_out, _) = shell: ftps_cleanup.info.query CFMU_SYSTEM -where EXEC_ENV {the_env} -where SECURE_DOMAIN TRUE -list | sort -u | grep "/" | awk -F"/" "{{ print {awk_field2} }}"
+let subdirs : []str = [s.strip() for s in subdirs_out.splitlines() if s.strip() != ""]
+
+var src_dir : str = server["dir"]
+if file_type != "" and not (server["secure"] == "FALSE"):
+  if ops_file_only:
+    src_dir += "/OPS"
+  src_dir += "/" + file_type
+
+var patterns : []str = []
+if file_name_mask != "":
+  patterns = file_name_mask.split()
+elif date_arg != "" or sequence_arg != "" or period_arg != "" or free_text_arg != "" or source_key_arg != "":
+  var src_key : str = ""
+  if source_key_arg != "":
+    let (sk_out, sk_rc) = shell: oracle_server_location.hdr.query APP_KEY -where APP_KEY {source_key_arg} -list
+    if sk_rc != 0 or sk_out.strip() == "":
+      print f"ERROR: Invalid --source_key: {source_key_arg}"
+      sys.exit(RC_ARG_ERROR)
+    src_key = source_key_arg.lower().replace("_", "")
+  patterns = [construct_filename_pattern(date_val, seq_val, per_val, src_key, file_type, free_text_arg if free_text_arg != "" else "*")]
+else:
+  print "ERROR: no file pattern provided (use --file_name_mask or field options)"
+  sys.exit(RC_ARG_ERROR)
+
+var unchecked   : []str = []
+var seen_files  : {str}bool = {:}
+
+for pattern in patterns:
+  var raw_files : []str = []
+  if mount_point != "":
+    let full_pat : str = mount_point + "/" + (src_dir if src_dir != "." else "") + "/" + pattern
+    let (ls_out, _) = shell: ls -1 {full_pat} 2>/dev/null
+    raw_files = [l.strip() for l in ls_out.splitlines() if l.strip() != "" and "*" not in l]
+  else:
+    let (ls_out, _) = lftp_run(server, f"cd {src_dir}\nnlist {pattern}")
+    raw_files = [l.strip() for l in ls_out.splitlines() if l.strip() != "" and "*" not in l]
+  for f in raw_files:
+    let fname : str = os.path.basename(f)
+    if not seen_files.get(fname):
+      seen_files[fname] = True
+      unchecked.append(fname)
+
+if len(unchecked) == 0:
+  if need_not_exist:
+    sys.exit(RC_OK)
+  else:
+    print f"ERROR: {eff_app_key}: File not found"
+    sys.exit(RC_NO_FILE_ERROR)
+
+var remote_files : []str = []
+for remote_file in sorted(unchecked):
+  if re.search(r"(\s|^)\d\d$", remote_file):
+    continue
+  if re.search(r"(\s|^)\d\dm:?$", remote_file):
+    continue
+  if re.search(r"(\s|^)\d\dd:?$", remote_file):
+    continue
+  if re.search(r"(\s|^)\d{4}y$", remote_file):
+    continue
+  if re.search(r"(\s|^)upload_area:?$", remote_file):
+    continue
+  if re.search(r"(\s|^)OPS$", remote_file):
+    continue
+  if remote_file in subdirs:
+    continue
+  if filter_output(remote_file, start_date, end_date):
+    remote_files.append(remote_file)
+
+var received_ok : int = 0
+
+for remote_file in sorted(remote_files):
+  var local_name : str = remote_file
+  if not always_prefix:
+    local_name = re.sub(r"^\d\.", "", local_name)
+
+  let local_file      : str = dest_dir + "/" + local_name
+  let full_local_file : str = full_path + "/" + local_name
+
+  if mount_point == "":
+    if use_dest_cache:
+      let no_gz     : str = re.sub(r"\.gz$", "", remote_file)
+      let no_prefix : str = re.sub(r"^\d\.", "", remote_file)
+      let just_mid  : str = re.sub(r"\.gz$", "", no_prefix)
+      var found_cached : str = ""
+      for candidate in [remote_file, no_gz, no_prefix, just_mid]:
+        let cpath : str = full_path + "/" + candidate
+        if os.path.isfile(cpath):
+          found_cached = cpath
+          break
+      if found_cached != "":
+        received_ok += 1
+        if show_path or use_dest_cache:
+          print found_cached
+        else:
+          print f"remote file = '{remote_file}', local file = '{found_cached}'"
+        continue
+
+    let (_, get_rc) = lftp_run(server, f"cd {src_dir}\nget {remote_file} -o {full_local_file}")
+    if get_rc != 0:
+      print f"ERROR: Failed to GET '{remote_file}'"
+      continue
+  else:
+    let src_path : str = mount_point + "/" + (src_dir if src_dir != "." else "") + "/" + remote_file
+    if show_path and not decompress and not use_dest_cache:
+      received_ok += 1
+      print src_path
+      continue
+    let (_, cp_rc) = shell: cp {src_path} {full_local_file}
+    if cp_rc != 0:
+      print f"ERROR: Failed to copy '{src_path}'"
+      continue
+
+  received_ok += 1
+
+  var is_gzipped : bool = False
+  if os.path.getsize(full_local_file) > 0:
+    let (magic_hex, _) = shell: xxd -p -l 2 {full_local_file}
+    is_gzipped = magic_hex.strip() == "1f8b"
+
+  if not decompress or not is_gzipped:
+    if show_path or use_dest_cache:
+      print local_file
+    else:
+      print f"remote file = '{remote_file}', local file = '{local_file}'"
+    continue
+
+  if full_local_file.endswith(".gz"):
+    let target_unzipped : str = re.sub(r"\.gz$", "", full_local_file)
+    if os.path.isfile(target_unzipped):
+      shell: rm -f {target_unzipped}
+    let (_, gz_rc) = shell: gunzip {full_local_file}
+    if gz_rc != 0:
+      print f"ERROR: gunzip failed for '{full_local_file}'"
+      received_ok -= 1
+    else:
+      let local_unzipped : str = re.sub(r"\.gz$", "", local_file)
+      if show_path:
+        print local_unzipped
+      else:
+        print f"remote file = '{remote_file}', local file = '{local_unzipped}'"
+  else:
+    let tmp_file : str = full_path + f"/.ftptmplocal_{os.getpid()}"
+    let (_, mv_rc) = shell: mv {full_local_file} {tmp_file}
+    if mv_rc != 0:
+      print f"ERROR: mv failed for '{full_local_file}'"
+      received_ok -= 1
+    else:
+      let (_, gz_rc) = shell: gunzip <{tmp_file} >{full_local_file}
+      shell: rm -f {tmp_file}
+      if gz_rc != 0:
+        print f"ERROR: gunzip failed for '{tmp_file}'"
+        received_ok -= 1
+      else:
+        if show_path or use_dest_cache:
+          print local_file
+        else:
+          print f"remote file = '{remote_file}', local file = '{local_file}'"
+
+if received_ok > 0 or need_not_exist:
+  sys.exit(RC_OK)
+else:
+  sys.exit(RC_NO_FILE_ERROR)

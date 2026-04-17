@@ -139,6 +139,9 @@ class Tokenizer:
     # Must be applied before Python tokenization since ' is a string delimiter.
     import re as _re
     _TICK_RE = _re.compile(r"(\b[A-Za-z_]\w*)'([A-Za-z_]\w*)")
+    # Subscript-tick pattern: expr[...]'Attr  ->  expr[...]__tick__Attr
+    # Handles tick attributes on subscript expressions e.g. arr[i]'Length
+    _SUBSCRIPT_TICK_RE = _re.compile(r"(\])'([A-Za-z_]\w*)")
     # Paren-tick pattern: (expr)'Attr  ->  __paren_tick_Attr__(expr)
     # Handles tick attributes on parenthesised expressions e.g. (1..n)'Choice
     _PAREN_TICK_RE = _re.compile(r"\(([^()]*)\)'([A-Za-z_]\w*)")
@@ -271,13 +274,12 @@ class Tokenizer:
                                       'rb','rB','Rb','RB','br','bR','Br','BR',
                                       'fr','fR','Fr','FR','rf','rF','Rf','RF'])
         def _tick_sub(m):
-            if m.group(1) in _STRING_PREFIXES:
-                return m.group(0)
             return m.group(1) + '__tick__' + m.group(2)
         parts = _DQ_CMT_RE.split(s)
         for i in range(0, len(parts), 2):
             parts[i] = Tokenizer._PAREN_TICK_RE.sub(
                 lambda m: f"__paren_tick_{m.group(2)}__({m.group(1)})", parts[i])
+            parts[i] = Tokenizer._SUBSCRIPT_TICK_RE.sub(r'\1__tick__\2', parts[i])
             parts[i] = Tokenizer._TICK_RE.sub(_tick_sub, parts[i])
         return ''.join(parts)
 

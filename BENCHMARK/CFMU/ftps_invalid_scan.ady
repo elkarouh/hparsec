@@ -1,0 +1,103 @@
+#!/usr/bin/env py2nim
+# ftps_invalid_scan.ady
+# Scan FTPSROOT for invalid symlinks in a given time window per CFMU system.
+# Translated from ftps_invalid_scan.ksh
+#
+# Usage:
+#   ftps_invalid_scan <cfmu_system> [<cfmu_system> ...]
+#
+# Environment:
+#   FTPSROOT                     - root directory for FTPS files (default: /ftpdir)
+#   APPLICATION_INSTANCE_KEY     - required
+#   FTPS_INVALID_SCAN_START_DAYS - how far back to scan (default: 2)
+#   FTPS_INVALID_SCAN_END_MINUTES- minimum age of links to scan (default: 5)
+#   USE_FIND                     - set to "ls" to use ls-based scan instead of find
+
+import os
+
+let ftpsroot : str = os.environ.get("FTPSROOT", "/ftpdir")
+let app_key  : str = os.environ.get("APPLICATION_INSTANCE_KEY", "")
+
+let end_minutes   : int = int(os.environ.get("FTPS_INVALID_SCAN_END_MINUTES", "5"))
+let start_days    : int = int(os.environ.get("FTPS_INVALID_SCAN_START_DAYS",  "2"))
+let use_find_mode : str = os.environ.get("USE_FIND", "find")
+
+let end_min_str   : str = str(end_minutes) + " minutes ago"
+let start_day_str : str = str(start_days) + " days ago"
+let (end_epoch_out, _)   = shell: date -d {end_min_str} +%s
+let (start_epoch_out, _) = shell: date -d {start_day_str} +%s
+let end_epoch_s   : str = end_epoch_out.strip()
+let start_epoch_s : str = start_epoch_out.strip()
+let end_period   : int = int(end_epoch_s)
+let start_period : int = int(start_epoch_s)
+
+# Determine find command
+let (find_cmd_out, _) = shell: which oldfind 2>/dev/null
+var find_cmd : str = "find"
+if find_cmd_out.strip() != "":
+  find_cmd = "oldfind"
+
+print f"Started checking for invalid symlinks"
+print f"FTPS_INVALID_SCAN_END_MINUTES = {end_minutes}"
+print f"FTPS_INVALID_SCAN_START_DAYS = {start_days}"
+
+var log_files : []str = []
+let systems   : []str = $@
+
+for next_stype in systems:
+  let safe_stype : str = next_stype.replace("/", "_")
+  let (log_out, _) = shell: cfmu_file ftps_invalid_scan.{app_key}.{safe_stype}.log
+  let stype_log : str = log_out.strip()
+  log_files.append(stype_log)
+
+  print f"Checking for invalid symlinks under {ftpsroot}/{next_stype}"
+
+  if use_find_mode == "ls":
+    # ls-based scan using pre-built scan log
+    let (scan_log_out, _) = shell: get_scan_log_file_for_cfmu_system {next_stype}
+    let scan_log : str = scan_log_out.strip()
+    if not os.path.isfile(scan_log):
+      shell: scan_directory {scan_log} {ftpsroot}/{next_stype} yes
+    let awk_f1 : str = "$1"
+    let awk_f3 : str = "$3"
+    let awk_f4 : str = "$4"
+    let awk_cmd : str = awk_f3 + " > " + str(start_period) + " && " + awk_f3 + " < " + str(end_period) + " && " + awk_f1 + " ~/^l/ { print " + awk_f4 + " }"
+    let (scan_out, _) = shell: awk '{awk_cmd}' {scan_log}
+    for slink in scan_out.splitlines():
+      let candidate : str = slink.strip()
+      if candidate == "":
+        continue
+      if os.path.islink(candidate):
+        let (_, check_rc) = shell: readlink -e {candidate} 2>/dev/null
+        if check_rc != 0:
+          print candidate
+  else:
+    # find-based scan; run in a subshell, results go to log file
+    shell: {find_cmd} {ftpsroot}/{next_stype} -ignore_readdir_race -path '*/.ckpt*' -prune -o -type l -mtime -{start_days} -mmin +{end_minutes} -print | while read NEXT_SLINK; do readlink -e $NEXT_SLINK 2>/dev/null 1>&2; if [[ $? -ne 0 ]]; then echo $NEXT_SLINK; fi; done > {stype_log} 2>&1
+    print f"Completed check for invalid symlinks under {ftpsroot}/{next_stype}"
+
+# Re-test: remove links that are still dangling after a short delay
+print f"Re-test invalid symlinks"
+
+var did_something : bool = False
+
+for log_file in log_files:
+  if not os.path.isfile(log_file):
+    continue
+  let (log_content_out, _) = shell: cat {log_file}
+  for slink in log_content_out.splitlines():
+    let candidate : str = slink.strip()
+    if candidate == "":
+      continue
+    let (_, check_rc) = shell: readlink -e {candidate} 2>/dev/null
+    if check_rc != 0:
+      # Link still exists but points nowhere — remove it
+      print f"WARNING Following symlink removed:"
+      shell: ls -l {candidate}
+      shell: rm {candidate}
+      did_something = True
+
+if not did_something:
+  print "No invalid symlinks found"
+
+print "Finished checking for invalid symlinks"

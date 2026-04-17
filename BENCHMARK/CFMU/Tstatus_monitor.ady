@@ -1,0 +1,173 @@
+#!/usr/bin/env py2nim
+"""
+cfmu_show_builds — parse tacot_corico output and display a formatted build status table.
+
+Adascript translation of the original awk script.
+
+Usage:
+    tacot_corico ... | ./cfmu_show_builds
+"""
+import re
+import time
+
+nimport awk
+
+
+class ShowBuilds(AwkBase):
+    # per-build arrays indexed 1..Index
+    var Index    : int = 0
+    var Day      : {int}str = {:}
+    var Hour     : {int}str = {:}
+    var User     : {int}str = {:}
+    var Host     : {int}str = {:}
+    var Build    : {int}str = {:}
+    var Version  : {int}str = {:}
+    var Details  : {int}str = {:}
+    var Test_Mode: {int}str = {:}
+    var Vnc      : {int}str = {:}
+    var Team     : {int}str = {:}
+    var Host_Load15_Scheduling: {int}str = {:}
+    var Nr_Failed : {int}str = {:}
+    var Nr_Success: {int}str = {:}
+
+    # transient state
+    var VALGRIND     : bool  = False
+    var VALGRIND_TOOL: str   = ""
+    var newhost      : bool  = False
+    var CURRENT_TIME : float = 0.0
+
+    def begin(self):
+        self.CURRENT_TIME = time.time()
+
+    def process_record(self):
+        let line: str  = self.line
+        let F:    []str = self.Fields
+
+        # --- pattern clauses ---
+
+        if re.search(r"-valgrind_tool memcheck", line):
+            self.VALGRIND      = True
+            self.VALGRIND_TOOL = "memcheck"
+
+        if re.search(r"-valgrind_tool helgrind", line):
+            self.VALGRIND      = True
+            self.VALGRIND_TOOL = "helgrind"
+
+        if re.search(r"Error: cannot get the LOG_FILE\. Check for errors on file", line):
+            self.VALGRIND = False
+
+        if re.search(r"Error: could not find", line):
+            self.VALGRIND = False
+
+        # --- main record action ---
+
+        if self.NF >= 1:
+            if F[0] == "Showing" and self.NF >= 12:
+                let idx: int           = self.Index
+                let log_file: str      = F[10]
+                let file_mod: float    = float(F[11])
+                self.Day[idx]  = F[8]
+                self.Hour[idx] = F[9]
+                if self.VALGRIND:
+                    self.Details[idx] = self.VALGRIND_TOOL
+                    self.VALGRIND = False
+                    if file_mod + 4 * 3600 < self.CURRENT_TIME:
+                        let mins: int = int((self.CURRENT_TIME - file_mod) / 60)
+                        self.Details[idx] = self.Details[idx] + f" <-- STUCK? {mins} min "
+                else:
+                    if re.search(r"/cm/local_build/TACTDEV_HOME/replay_dir/work", log_file):
+                        self.Details[idx] = "performance"
+                    elif re.search(r"saved_logs/replay_dir-", log_file):
+                        self.Details[idx] = re.sub(r".*saved_logs/replay_dir-(.*[^.]*)\..*$", r"\1", log_file)
+                    elif re.search(r"work/logging-([^/]*)/LOGS_([^/]{1,16}.*)/", log_file):
+                        self.Details[idx] = re.sub(r".*work/logging-([^/]*)/LOGS_([^/]{1,16}).*\/.*$", r"\1/\2", log_file)
+                    if file_mod + 2 * 3600 < self.CURRENT_TIME:
+                        let mins: int = int((self.CURRENT_TIME - file_mod) / 60)
+                        self.Details[idx] = self.Details[idx] + f"  <-- STUCK {mins} min "
+                if re.search(r"/cm/nasdata", log_file) or re.search(r"/auto/home", log_file):
+                    self.Test_Mode[idx] = "TACTDEV"
+
+            elif F[0] == "User:" and self.NF >= 2:
+                self.Index += 1
+                self.User[self.Index] = F[1]
+
+            elif F[0] == "Host:" and self.NF >= 2:
+                self.Host[self.Index]      = F[1]
+                self.newhost               = True
+                self.Test_Mode[self.Index] = "REGRESS"
+
+            elif re.search(r"TACT\.TACT_CONFIG|IFPS\.FPL_CONFIG", F[0]):
+                if not self.newhost:
+                    self.User[self.Index + 1] = self.User[self.Index]
+                    self.Host[self.Index + 1] = self.Host[self.Index]
+                    self.Index += 1
+                    self.Test_Mode[self.Index] = "REGRESS"
+                let idx: int = self.Index
+                self.Build[idx]   = F[0]
+                self.Version[idx] = (F[1] if self.NF >= 2 else "")
+                self.Host_Load15_Scheduling[idx] = (F[2] if self.NF >= 3 else "")
+                if self.NF < 4 or F[3] == "":
+                    self.Vnc[idx]  = ""
+                    self.Team[idx] = "?"
+                else:
+                    self.Vnc[idx] = f"(vncviewer \"{F[3]}\")"
+                    if self.User[idx] == "cmadm":
+                        if re.search(r"^" + self.Host[idx] + r"(:|$)", F[3]):
+                            self.Team[idx] = "NeOS"
+                        else:
+                            self.Team[idx] = "CFMUTEST"
+                    else:
+                        self.Team[idx] = self.User[idx]
+                self.newhost = False
+
+        if self.NF >= 4 and F[3] == "replay_day:":
+            self.Test_Mode[self.Index] = "REPLAY"
+
+        if re.search(r"General result:", line) and self.NF >= 6:
+            self.Nr_Failed[self.Index]  = F[2]
+            self.Nr_Success[self.Index] = F[5]
+
+    def finish(self):
+        var max_build  : int = 0
+        var max_mode   : int = 0
+        var max_details: int = 0
+        var max_load   : int = 0
+
+        for i in 1 .. self.Index:
+            let b: str = self.Build[i]
+            let m: str = self.Test_Mode[i]
+            let d: str = self.Details[i]
+            let l: str = self.Host_Load15_Scheduling[i]
+            if b'Length > max_build:
+                max_build   = b'Length
+            if m'Length > max_mode:
+                max_mode    = m'Length
+            if d'Length > max_details:
+                max_details = d'Length
+            if l'Length > max_load:
+                max_load    = l'Length
+
+        def row(fail: str, succ: str, team: str, host: str,
+                build: str, ver: str, upd: str, mode: str,
+                details: str, load: str, vnc: str):
+            print (fail.ljust(4) + " " + succ.ljust(4) + " " + team.ljust(8) + " " +
+                   host.ljust(8) + " " + build.ljust(max_build) + " " + ver.ljust(12) + " " +
+                   upd.ljust(10) + " " + mode.ljust(max_mode) + " " +
+                   details.ljust(max_details) + " " + load.ljust(max_load) + " " + vnc)
+
+        row("FAIL", "SUCC", "TEAM", "HOST", "BASELINE",  "CM_ENV_ID",  "LAST_UPD", "TEST", "DETAILS", "LOAD-SCHED", "EMACS VNC COMMAND")
+        row("----", "----", "----", "----", "--------",  "---------",  "--------", "----", "-------",  "----------", "-----------------")
+
+        for i in 1 .. self.Index:
+            row(self.Nr_Failed[i],  self.Nr_Success[i], self.Team[i],    self.Host[i],
+                self.Build[i],      self.Version[i],    self.Day[i] + "-" + self.Hour[i],
+                self.Test_Mode[i],  self.Details[i],    self.Host_Load15_Scheduling[i],
+                self.Vnc[i])
+
+
+def main():
+    var p: ShowBuilds = ShowBuilds()
+    p.run()
+
+
+main()

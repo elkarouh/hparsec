@@ -1,0 +1,286 @@
+#!/usr/bin/env py2nim
+# ftps_put.ady
+# Upload a file to the FTPS server.
+# Translated from FTPS::Put (Perl).
+#
+# Usage:
+#   ftps_put <source_dir> <source_file> <do_not_compress:true|false> \
+#            <ftps_service> <date> <sequence_nr> <period> <filetype_nr> \
+#            <overwrite:0|1|2> <free_text> [options]
+#
+# Mandatory positional arguments:
+#   $1   source_dir
+#   $2   source_file
+#   $3   do_not_compress   true|false
+#   $4   ftps_service
+#   $5   date              YYYYMMDD
+#   $6   sequence_nr       single digit
+#   $7   period            3 digits
+#   $8   filetype_nr       2 digits
+#   $9   overwrite         0=no, 1=yes, 2=multi-version
+#   $10  free_text         may be ""
+#
+# Optional flags:
+#   --sym    symlink source file into recovery dir instead of copying
+
+nimport ftps_common
+import os
+import re
+
+let source_dir      : str  = $1
+let source_file     : str  = $2
+let do_not_compress : bool = $3 == "true" or $3 == "1"
+let ftps_service    : str  = $4
+let date_arg        : str  = $5
+let sequence_nr     : str  = $6
+let period_arg      : str  = $7
+let filetype_nr     : str  = $8
+let overwrite_str   : str  = $9
+let free_text       : str  = $10 if $# >= 10 else ""
+let overwrite      : int  = int(overwrite_str) if overwrite_str in ["0","1","2"] else 0
+
+let app_key        : str  = os.environ.get("APPLICATION_INSTANCE_KEY", "")
+var sym_link : bool = False
+
+for arg in $@[10:]:
+  if arg == "--sym":
+    sym_link = True
+
+if app_key == "":
+  print "ERROR: APPLICATION_INSTANCE_KEY is not set"
+  sys.exit(RC_ARG_ERROR)
+
+# --- validate date ---
+var month_days : {str}int = {"01":31,"02":29,"03":31,"04":30,"05":31,"06":30,
+                              "07":31,"08":31,"09":30,"10":31,"11":30,"12":31}
+let month_str : str = date_arg[4:6]
+let day_str   : str = date_arg[6:8]
+if month_str not in month_days:
+  print "ERROR: invalid month in date"
+  sys.exit(RC_ARG_ERROR)
+let day_int : int = int(day_str)
+if day_int < 1 or day_int > month_days[month_str]:
+  print "ERROR: invalid day in date"
+  sys.exit(RC_ARG_ERROR)
+
+# derive 6-char app identifier from instance key
+let appl_part : str = app_key.lower().replace("_", "")[:6]
+
+# compose FTPS destination filename:  1.<date><seq><period><appl><filetype>[free_text]
+let dest_file : str = "1." + date_arg + sequence_nr + period_arg + appl_part + filetype_nr + free_text
+
+# --- validate source file ---
+let src_path : str = source_dir + "/" + source_file
+let (_, src_r_rc) = shell: test -r {src_path}
+if not os.path.isfile(src_path) or src_r_rc != 0:
+  print f"ERROR: Source file {src_path} does not exist or is not readable"
+  sys.exit(RC_NO_SRCE_FILE_ERROR)
+
+# --- resolve server ---
+let server : {str}str = get_server_info(app_key, ftps_service, "WRITE", "")
+if len(server) == 0:
+  print f"ERROR: No FTP server found for APP_KEY={app_key} INTERNAL_NAME={ftps_service}"
+  sys.exit(RC_NO_FTP_SERVER_ERROR)
+
+let secure      : str = server["secure"]
+let base_dir    : str = server["dir"]
+let ftp_server  : str = server["host"]
+
+# check CFMU_FTP_DISABLE
+if os.environ.get("CFMU_FTP_DISABLE") != "":
+  sys.exit(RC_OK)
+
+# --- resolve recovery directory ---
+var recovery_dir : str = ""
+if os.environ.get("CFMU_REGRESS_TEST_RECOVERY_DIR") != "":
+  recovery_dir = os.environ.get("CFMU_REGRESS_TEST_RECOVERY_DIR")
+elif os.environ.get("CFMU_REGRESS_TEST_FTPS_DIR") != "":
+  recovery_dir = os.environ.get("CFMU_REGRESS_TEST_FTPS_DIR")
+else:
+  let (rd_out, _) = shell: oracle_server_location.hdr.query FTPS_RECOVERY_DIR -where APP_KEY {app_key} -list
+  recovery_dir = rd_out.strip()
+
+var bad_recovery_dir : bool = False
+let (_, recov_wx_rc) = shell: test -w {recovery_dir} && test -x {recovery_dir}
+if not os.path.isdir(recovery_dir) or recov_wx_rc != 0:
+  print f"WARNING: Recovery directory '{recovery_dir}' is not accessible"
+  bad_recovery_dir = True
+
+# --- compress if needed ---
+var local_file     : str = src_path
+var compressed_tmp : str = ""
+if not do_not_compress:
+  let (tmp_out, _) = shell: mktemp /tmp/ftps_gz_XXXXXX
+  let tmp : str = tmp_out.strip()
+  let (_, gz_rc) = shell: gzip <{src_path} >{tmp}
+  if gz_rc != 0:
+    print f"ERROR: Could not compress {src_path}"
+    os.unlink(tmp)
+    sys.exit(RC_COMPRESS_ERROR)
+  local_file = tmp
+  compressed_tmp = tmp
+
+let original_local_size : int = os.path.getsize(local_file)
+print f"Local file size = {original_local_size}"
+
+# --- compute destination directory ---
+let month_dir : str = date_arg[4:6] + "m"
+let day_dir   : str = date_arg[6:8] + "d"
+var dest_dir    : str
+var upload_area : str
+if secure == "FALSE":
+  dest_dir    = base_dir
+  upload_area = base_dir + "/upload_area"
+else:
+  dest_dir    = base_dir + f"/{month_dir}/{day_dir}"
+  upload_area = base_dir + f"/{month_dir}/upload_area"
+
+print f"Begin upload of {src_path}"
+
+# --- handle regression test directory setup ---
+let in_regress : bool = os.environ.get("CFMU_REGRESS_TEST_FTPS_DIR", "") != ""
+if in_regress:
+  let reg_dir : str = os.environ.get("CFMU_REGRESS_TEST_FTPS_DIR")
+  shell: mkdir -p {reg_dir}/{dest_dir}
+  shell: mkdir -p {reg_dir}/{upload_area}
+
+var rc : int = RC_OK
+
+# --- check overwrite policy ---
+if overwrite == 0 or overwrite == 2:
+  let check_cmd : str = f"cd {dest_dir}\nnlist {dest_file}"
+  let (check_out, _) = lftp_run(server, check_cmd)
+  if check_out.strip() != "":
+    if overwrite == 0:
+      print f"ERROR: File exists on server and --overwrite was not specified"
+      rc = RC_CONFIG_ERROR
+    elif overwrite == 2:
+      # increment sequence number
+      var found_slot : bool = False
+      for seq_try in range(1, 10):
+        let try_file : str = re.sub(r"^(1\.\d{8})\d", f"\\g<1>{seq_try}", dest_file)
+        let try_cmd  : str = f"cd {dest_dir}\nnlist {try_file}"
+        let (try_out, _) = lftp_run(server, try_cmd)
+        if try_out.strip() == "":
+          # dest_file = try_file  # can't reassign let; use put_dest below
+          found_slot = True
+          break
+      if not found_slot:
+        print f"ERROR: 9 versions already exist for {dest_file}"
+        rc = RC_MAX_VER_EXIST_ERROR
+
+if rc == RC_OK:
+  # upload to upload_area first, then rename to dest_dir/dest_file
+  var put_dest : str = dest_file
+  let (hostname_out, _) = shell: hostname -s
+  let tmp_name : str = f"ftp.{app_key}.{hostname_out.strip()}.{os.getpid()}"
+  let upload_cmd : str = f"mkdir -p {upload_area}\ncd {upload_area}\nput {local_file} -o {tmp_name}"
+  let (_, put_rc) = lftp_run(server, upload_cmd)
+  if put_rc != 0:
+    print f"ERROR: Failed to upload {dest_file} to {ftp_server}"
+    rc = RC_CONFIG_ERROR
+  else:
+    let remote_tmp  : str = upload_area + "/" + tmp_name
+    let final_target : str = dest_dir + "/" + put_dest
+    let mv_cmd : str = f"mv {remote_tmp} {final_target}"
+    let (_, mv_rc) = lftp_run(server, mv_cmd)
+    if mv_rc != 0:
+      print f"ERROR: Failed to rename {remote_tmp} to {final_target} on {ftp_server}"
+      # clean up the partially uploaded temp file
+      let rm_cmd : str = f"rm {remote_tmp}"
+      let (_, _rm_rc) = lftp_run(server, rm_cmd)
+      rc = RC_CONFIG_ERROR
+    else:
+      # verify uploaded size
+      let size_cmd : str = f"cd {dest_dir}\nls -l {put_dest}"
+      let (size_out, _) = lftp_run(server, size_cmd)
+      # lftp ls -l output: "-rw-r--r-- 1 user grp SIZE date filename"
+      var remote_size : int = 0
+      for line in size_out.splitlines():
+        let parts : []str = line.split()
+        if len(parts) >= 5:
+          remote_size = int(parts[4]) if parts[4].isdigit() else 0
+          break
+      print f"Remote file size = {remote_size}"
+      if original_local_size == remote_size:
+        print f"Upload of {src_path} as {put_dest} succeeded"
+        if in_regress and server.get("cfmu_system"):
+          let srv_system : str = server["cfmu_system"]
+          shell: ftps_mkslinks -skip_lock -rescan -system {srv_system}
+      else:
+        print f"ERROR: Local size ({original_local_size}) != remote size ({remote_size})"
+        # delete the partial file
+        let del_cmd : str = f"cd {dest_dir}\nrm {put_dest}"
+        let (_, _del_rc) = lftp_run(server, del_cmd)
+        rc = RC_CONFIG_ERROR
+
+# --- recovery handling on failure ---
+if rc != RC_OK:
+  print f"ERROR: Failed to upload {src_path} to {ftp_server} as {dest_file}"
+  if bad_recovery_dir:
+    if compressed_tmp != "":
+      os.unlink(compressed_tmp)
+    sys.exit(RC_RECOVERY_DIR_ERROR)
+
+  let recover_file : str = recovery_dir + "/" + dest_file
+  let (scripts_out, _) = shell: grep -l {dest_file} {recovery_dir}/ftps_recover.* 2>/dev/null
+  var existing_scripts : []str = [s.strip() for s in scripts_out.splitlines() if s.strip() != ""]
+
+  var need_new_file : bool = True
+  if os.path.isfile(recover_file):
+    let awk_f1 : str = "$1"
+    let (local_cksum_out, _) = shell: cksum {local_file} | awk "{{ print {awk_f1} }}"
+    let (recov_cksum_out, _) = shell: cksum {recover_file} | awk "{{ print {awk_f1} }}"
+    if local_cksum_out.strip() == recov_cksum_out.strip():
+      need_new_file = False
+    else:
+      print f"Found {recover_file} with different cksum — replacing"
+
+  # remove stale recovery scripts for the same dest_file
+  if existing_scripts and need_new_file:
+    for old_script in existing_scripts:
+      os.unlink(old_script)
+
+  if not existing_scripts or need_new_file:
+    # copy (or symlink) local file to recovery dir
+    if sym_link:
+      let (cwd_out, _) = shell: cd {source_dir} && pwd
+      let cwd : str = cwd_out.strip()
+      let local_name : str = os.path.basename(local_file)
+      if os.path.islink(recover_file) or os.path.exists(recover_file):
+        os.unlink(recover_file)
+      os.symlink(cwd + "/" + local_name, recover_file)
+    elif need_new_file:
+      shell: cp -p {local_file} {recover_file}
+
+    # write recovery script
+    let (now_out, _) = shell: date +"%d%m%y%H%M%S"
+    let now : str = now_out.strip()
+    let script_path : str = f"{recovery_dir}/ftps_recover.{os.getpid()}_0_{now}"
+    with open(script_path, "w") as sf:
+      sf.write("#!/usr/bin/ksh\n")
+      sf.write(f"RC_RECOVER={RC_OK}\n\n")
+      sf.write("function cfmu_ftps_recover_file\n{\n")
+      sf.write("  if [[ -r $1 ]]\n  then\n")
+      sf.write("    FTPS_MUTEX=/tmp/$(basename $1).mutex\n")
+      sf.write("    locked -verbose -nowait ${FTPS_MUTEX} cfmu_ftps_recover $*\n")
+      sf.write("    RC_FILE_RECOVER=$?\n\n")
+      sf.write("    if [[ ${RC_FILE_RECOVER} -eq 254 ]]\n    then\n      RC_RECOVER=" + str(RC_OK) + "\n    fi\n")
+      sf.write("  else\n")
+      sf.write("    RC_FILE_RECOVER=" + str(RC_OK) + "\n  fi\n\n")
+      sf.write("  if [[ ${RC_RECOVER} -eq " + str(RC_OK) + " ]]\n  then\n    RC_RECOVER=${RC_FILE_RECOVER}\n  fi\n}\n\n")
+      let srv_user : str = server["user"]
+      let srv_pass : str = server["pass"]
+      sf.write(f"cfmu_ftps_recover_file {recover_file} {ftp_server} {base_dir} {srv_user} '{srv_pass}'\n")
+      sf.write("\nif [[ ${RC_RECOVER} -eq " + str(RC_OK) + " ]]\nthen\n")
+      let exit_line : str = "  rm -Rf " + recover_file + "\n  nohup rm -f $0 1>/dev/null 2>&1 </dev/null &\nfi\n\nexit ${RC_RECOVER}\n"
+      sf.write(exit_line)
+    shell: chmod 755 {script_path}
+    print f"Execute {script_path} to retry the upload"
+  else:
+    print f"Execute {existing_scripts[0]} to retry the upload"
+
+if compressed_tmp != "":
+  os.unlink(compressed_tmp)
+
+sys.exit(rc)

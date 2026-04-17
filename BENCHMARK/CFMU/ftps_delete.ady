@@ -1,0 +1,188 @@
+#!/usr/bin/env py2nim
+# ftps_delete.ady
+# Delete files from the FTPS server.
+# Translated from FTPS::Delete (Perl).
+#
+# Usage:
+#   ftps_delete <ftps_service> [options]
+
+nimport ftps_common
+import os
+import re
+
+if $# < 1:
+  print "Usage: ftps_delete <ftps_service> [options]"
+  sys.exit(RC_ARG_ERROR)
+
+let ftps_service : str = $1
+let app_key      : str = os.environ.get("APPLICATION_INSTANCE_KEY", "")
+
+var file_name_mask : str  = ""
+var override_key   : str  = ""
+var file_type      : str  = ""
+var ops_file_only  : bool = False
+var date_arg       : str  = ""
+var start_date     : str  = "00000000"
+var end_date       : str  = "99999999"
+var sequence_arg   : str  = ""
+var period_arg     : str  = ""
+var free_text_arg  : str  = ""
+var source_key_arg : str  = ""
+
+for arg in $@[1:]:
+  if arg.startswith("--file_name_mask="):
+    file_name_mask = arg[17:]
+  elif arg.startswith("--app_key="):
+    override_key = arg[10:]
+  elif arg.startswith("--file_type="):
+    file_type = arg[12:]
+  elif arg == "--ops_file_only":
+    ops_file_only = True
+  elif arg.startswith("--date="):
+    date_arg = arg[7:]
+  elif arg.startswith("--start_date="):
+    start_date = arg[13:]
+  elif arg.startswith("--end_date="):
+    end_date = arg[11:]
+  elif arg.startswith("--sequence="):
+    sequence_arg = arg[11:]
+  elif arg.startswith("--period="):
+    period_arg = arg[9:]
+  elif arg.startswith("--free_text="):
+    free_text_arg = arg[12:]
+  elif arg.startswith("--source_key="):
+    source_key_arg = arg[13:]
+
+if date_arg != "" and (start_date != "00000000" or end_date != "99999999"):
+  print "ERROR: --date is mutually exclusive with --start_date and --end_date"
+  sys.exit(RC_ARG_ERROR)
+
+let (date_val, date_rc) = check_date(date_arg, "date")
+if date_rc != RC_OK:
+  sys.exit(date_rc)
+let (sd_val, sd_rc) = check_date(start_date, "start_date")
+if sd_rc != RC_OK:
+  sys.exit(sd_rc)
+let (ed_val, ed_rc) = check_date(end_date, "end_date")
+if ed_rc != RC_OK:
+  sys.exit(ed_rc)
+if sd_val != "":
+  start_date = sd_val
+if ed_val != "":
+  end_date = ed_val
+
+let (seq_val, seq_rc) = check_sequence(sequence_arg)
+if seq_rc != RC_OK:
+  sys.exit(seq_rc)
+let (per_val, per_rc) = check_period(period_arg)
+if per_rc != RC_OK:
+  sys.exit(per_rc)
+
+let eff_app_key : str = override_key if override_key != "" else app_key
+if eff_app_key == "":
+  print "ERROR: APPLICATION_INSTANCE_KEY is not set and --app_key not provided"
+  sys.exit(RC_ARG_ERROR)
+
+let server : {str}str = get_server_info(eff_app_key, ftps_service, "WRITE", "")
+if len(server) == 0:
+  print f"ERROR: No FTP server found for APP_KEY={eff_app_key} INTERNAL_NAME={ftps_service}"
+  sys.exit(RC_NO_FTP_SERVER_ERROR)
+
+let secure  : str = server["secure"]
+var src_dir : str = server["dir"]
+
+if file_type != "":
+  if secure == "FALSE":
+    print "WARNING: --file_type is not valid for DMZ instances"
+  else:
+    if ops_file_only:
+      src_dir += "/OPS"
+    src_dir += "/" + file_type
+
+var patterns : []str = []
+if file_name_mask != "":
+  patterns = file_name_mask.split()
+elif date_arg != "" or sequence_arg != "" or period_arg != "" or free_text_arg != "" or source_key_arg != "":
+  var src_key : str = ""
+  if source_key_arg != "":
+    let (sk_out, sk_rc) = shell: oracle_server_location.hdr.query APP_KEY -where APP_KEY {source_key_arg} -list
+    if sk_rc != 0 or sk_out.strip() == "":
+      print f"ERROR: Invalid --source_key: {source_key_arg}"
+      sys.exit(RC_ARG_ERROR)
+    src_key = source_key_arg.lower().replace("_", "")
+  patterns = [construct_filename_pattern(date_val, seq_val, per_val, src_key, file_type, free_text_arg if free_text_arg != "" else "*")]
+else:
+  print "ERROR: no file pattern provided"
+  sys.exit(RC_ARG_ERROR)
+
+var remote_list : []str = []
+var seen_r      : {str}bool = {:}
+
+for pattern in patterns:
+  var target_dir : str = src_dir
+  if secure != "FALSE" and re.match(r"^1\.\d{12}", pattern):
+    let month : str = pattern[6:8] + "m"
+    let day   : str = pattern[8:10] + "d"
+    target_dir = src_dir + f"/{month}/{day}"
+
+  let (ls_out, _) = lftp_run(server, f"cd {target_dir}\nnlist {pattern}")
+  for f in ls_out.splitlines():
+    let fname : str = f.strip()
+    if fname and "*" not in fname and not seen_r.get(fname):
+      seen_r[fname] = True
+      remote_list.append(fname)
+
+  if not pattern.startswith("1."):
+    let pat2 : str = "1." + pattern
+    let (ls2_out, _) = lftp_run(server, f"cd {target_dir}\nnlist {pat2}")
+    for f in ls2_out.splitlines():
+      let fname : str = f.strip()
+      if fname and "*" not in fname and not seen_r.get(fname):
+        seen_r[fname] = True
+        remote_list.append(fname)
+
+if len(remote_list) == 0:
+  let srv_host : str = server["host"]
+  print f"ERROR: No file with name {patterns[0]} exists on the FTP server {srv_host}"
+  sys.exit(RC_NO_FILE_ERROR)
+
+var files_per_key : {str}int = {:}
+for f in remote_list:
+  if re.match(r"^1\.", f):
+    let src_key_part : str = f[14:20]
+    files_per_key[src_key_part] = files_per_key.get(src_key_part, 0) + 1
+
+let in_regression : bool = os.environ.get("CFMU_REGRESS_TEST_RECOVERY_DIR", "") != ""
+if len(files_per_key) > 1 and not in_regression:
+  print "ERROR: Cannot delete files from different originating instances at the same time."
+  for f in sorted(remote_list):
+    print f
+  sys.exit(RC_NOT_ALLOWED_ERROR)
+
+var files_to_delete : []str = [f for f in remote_list if filter_output(f, start_date, end_date)]
+
+if len(files_to_delete) > 1 and not in_regression:
+  print "WARNING: Multiple files to delete:"
+  for f in sorted(files_to_delete):
+    print f
+  print "Do you confirm the deletion, YES/NO (NO=default):"
+  let answer : str = input().strip()
+  if answer != "YES":
+    print "Not deleting the files"
+    sys.exit(RC_OK)
+
+for remote_file in files_to_delete:
+  var target_dir : str = src_dir
+  if secure != "FALSE" and re.match(r"^1\.\d{12}", remote_file):
+    let month : str = remote_file[6:8] + "m"
+    let day   : str = remote_file[8:10] + "d"
+    target_dir = src_dir + f"/{month}/{day}"
+
+  let (_, del_rc) = lftp_run(server, f"cd {target_dir}\nrm {remote_file}")
+  if del_rc == 0:
+    print f"Remote file {remote_file} successfully removed"
+  else:
+    print f"ERROR: Cannot remove remote file {remote_file}"
+    sys.exit(RC_NOT_ALLOWED_ERROR)
+
+sys.exit(RC_OK)

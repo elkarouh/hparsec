@@ -1,0 +1,53 @@
+#!/usr/bin/env py2nim
+# cfmu_ftps_put_formatted.ady
+# Upload files that already follow the FTPS naming convention.
+# Fields are extracted from the filename itself.
+# Translated from cfmu_ftps_put_formatted.ksh
+#
+# Usage:
+#   cfmu_ftps_put_formatted <file> [<file> ...]
+
+import os
+
+if $# < 1:
+  print "Usage: cfmu_ftps_put_formatted <file> [<file> ...]"
+  sys.exit(1)
+
+let here : str = os.path.dirname(os.path.abspath($0))
+
+for next_file in $@:
+  if not os.path.isfile(next_file):
+    print f"{next_file} does not exist"
+    continue
+
+  let base : str = os.path.basename(next_file)
+  let file : str = base[2:] if base.startswith("1.") else base
+
+  if len(file) < 20:
+    print f"Filename too short to be a valid FTPS file: {next_file}"
+    continue
+
+  let date_part      : str = file[0:8]
+  let seq_part       : str = file[8:9]
+  let period_part    : str = file[9:12]
+  let app_key_raw    : str = file[12:18]
+  let file_type_part : str = file[18:20]
+  let free_text_part : str = file[20:]
+
+  let sys_part : str = app_key_raw[0:3].upper()
+  let env_part : str = app_key_raw[3:6].upper()
+  let app_key  : str = sys_part + "_" + env_part
+
+  let (key_out, key_rc) = shell: oracle_server_location.hdr.query APP_KEY -where APP_KEY {app_key} -list
+  if key_rc != 0 or key_out.strip() == "":
+    print f"The APPLICATION_INSTANCE_KEY in the filename, {app_key}, is not valid"
+    print f"Skipping {next_file}"
+    continue
+
+  let src_dir : str = os.path.dirname(os.path.abspath(next_file))
+
+  let (_, put_rc) = shell: {here}/ftps_put {src_dir} {base} false FTPS {date_part} {seq_part} {period_part} {file_type_part} 1 {free_text_part}
+  if put_rc != 0:
+    print f"The ftps_put failed for {next_file}. Check the put log."
+  else:
+    print f"The ftps_put succeeded for {next_file}"

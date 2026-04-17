@@ -140,7 +140,10 @@ def _nim_truthiness(expr):
     """
     import re as _re_truth
     # find(re(...)) returns int (position or -1); convert to bool with >= 0
-    if _re_truth.search(r'\.find\(re\(', expr):
+    # Only apply when the whole expression is a single find(re(...)) call, not a compound bool expr.
+    _has_top_bool = bool(_re_truth.search(r'\b(and|or)\b', expr))
+    _already_bool = bool(_re_truth.search(r'\s*(>=|<=|==|!=|>|<)\s*\d', expr))
+    if _re_truth.search(r'\.find\(re\(', expr) and not _has_top_bool and not _already_bool:
         return f"{expr} >= 0"
     # getOrDefault on a Table[K, string] returns string — check truthiness
     # Only convert when we can verify the table maps to string values
@@ -316,9 +319,11 @@ def binop_to_nim(self, prec=None, my_prec=None):
                 left_is_seq = result.startswith("@[")
                 right_is_seq = right.startswith("@[")
                 left_is_str = (result.startswith('"') or result.startswith('fmt"')
+                               or result.startswith('r"')
                                or result.endswith('.join("")') or result.endswith(".join(\"\")")
                                or " & " in result)  # already a string concat chain
                 right_is_str = (right.startswith('"') or right.startswith('fmt"')
+                                or right.startswith('r"')
                                 or right.endswith('.join("")') or right.endswith(".join(\"\")"))
 
                 # field access on typed object (e.g. self.off where off: string)
@@ -777,7 +782,7 @@ def to_nim(self, prec=None):
     return self.nodes[0].to_nim()
 
 
-_STRUTILS_METHODS = {"toLowerAscii", "toUpperAscii", "strip", "startsWith", "endsWith", "splitLines", "parseInt", "split", "join", "replace", "find"}
+_STRUTILS_METHODS = {"toLowerAscii", "toUpperAscii", "strip", "startsWith", "endsWith", "splitLines", "parseInt", "split", "join", "replace", "find", "alignLeft", "alignRight"}
 
 # Universal method mappings that apply regardless of receiver type
 _PY_UNIVERSAL_METHOD_TO_NIM = {
@@ -790,6 +795,8 @@ _PY_UNIVERSAL_METHOD_TO_NIM = {
     "endswith": "endsWith",
     "get": "getOrDefault",
     "index": "find",
+    "ljust": "alignLeft",
+    "rjust": "alignRight",
 }
 
 def _translate_method(obj_name, method_name):

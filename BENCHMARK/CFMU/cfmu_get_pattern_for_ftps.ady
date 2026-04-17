@@ -1,0 +1,47 @@
+#!/usr/bin/env py2nim
+# cfmu_get_pattern_for_ftps.ady
+# Return the pattern string for an APPLICATION_INSTANCE_KEY used to get files from FTPS server.
+# Translated from cfmu_get_pattern_for_ftps.pl
+#
+# Usage:
+#   cfmu_get_pattern_for_ftps --app_key=<APPLICATION_INSTANCE_KEY>
+
+import os
+
+var app_key   : str  = ""
+var show_help : bool = False
+var args      : []str = $@
+
+var i : int = 0
+while i < len(args):
+  let arg : str = args[i]
+  if arg == "-help" or arg == "-h" or arg == "--help":
+    show_help = True
+  elif arg.startswith("--app_key="):
+    app_key = arg[10:]
+  elif arg == "--app_key" or arg == "-app_key":
+    i += 1
+    if i < len(args):
+      app_key = args[i]
+  i += 1
+
+if show_help:
+  print "This routine returns the pattern string for the input APPLICATION_INSTANCE_KEY in order to get files from FTPS server"
+  sys.exit(0)
+
+if $# < 1:
+  print "Usage: cfmu_get_pattern_for_ftps [--help] --app_key=<APPLICATION_INSTANCE_KEY>"
+  sys.exit(1)
+
+app_key = app_key.strip()
+let key_len : int = len(app_key)
+
+if key_len == 7:
+  shell: export APPLICATION_INSTANCE_KEY={app_key}
+  # The application part is derived from the instance name (lower case, underscore removed)
+  let appl_part : str = app_key.lower().replace("_", "")
+  print appl_part
+else:
+  print "Invalid APPLICATION_INSTANCE_KEY"
+  print "Usage: cfmu_get_pattern_for_ftps [--help] --app_key=<APPLICATION_INSTANCE_KEY>"
+  sys.exit(1)

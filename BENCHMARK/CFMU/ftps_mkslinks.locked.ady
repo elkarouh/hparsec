@@ -1,0 +1,700 @@
+#!/usr/bin/env py2nim
+# ftps_mkslinks.locked.ady
+# Rebuild/maintain FTPS symlink indices.  Optionally restart the ftps_notifier.
+# Translated from ftps_mkslinks.locked.pl
+#
+# Usage:
+#   ftps_mkslinks.locked [-h|-help|-ht|-html]
+#     [-s] [-restart] [-restart_local] [-relocate <pattern>]
+#     [-flag <name>] [[-rescan [<days>]] | [-no_scan]] [-no_invalid]
+#     [[-system <sys>] | [-exclude <sys> ...]] [-ft <filetype>]
+#     [-retouch] [[-ops_link_check] [-del_bad_links]]
+#     [[-check_ftime] [-fix_ftime]] [-mail [<address>]]
+
+import os
+
+let app_key  : str = os.environ.get("APPLICATION_INSTANCE_KEY", "")
+let ftpsroot : str = os.environ.get("FTPSROOT", "")
+let script   : str = os.path.basename($0)
+
+if app_key == "":
+  print "FATAL: APPLICATION_INSTANCE_KEY is not set"
+  sys.exit(1)
+
+if ftpsroot == "":
+  print "FATAL: FTPSROOT is not set"
+  sys.exit(1)
+
+var work_dir : str = os.environ.get("WORK_DIR", "")
+if work_dir == "" or not os.path.isdir(work_dir):
+  work_dir = os.environ.get("HOME", ".")
+shell: mkdir -p {work_dir}
+
+let (loc_date_out, _) = shell: date +"%y%m%d%H%M%S"
+let loc_date : str = loc_date_out.strip()
+
+let (log_file_out, _) = shell: cfmu_file {script}.{app_key}.log
+let log_file  : str = log_file_out.strip()
+let notif_log : str = work_dir + "/ftps_notifier.out." + loc_date
+
+# Query exec environment
+let (env_out, _) = shell: oracle_server_location.hdr.query EXEC_ENV -where APP_KEY {app_key} -list
+let the_env : str = env_out.strip()
+
+# Month days table for directory creation
+let month_dirnames : {str}str = {
+  "jan": "01m", "feb": "02m", "mar": "03m", "apr": "04m",
+  "may": "05m", "jun": "06m", "jul": "07m", "aug": "08m",
+  "sep": "09m", "oct": "10m", "nov": "11m", "dec": "12m"
+}
+let month_days : {str}int = {
+  "jan": 31, "feb": 29, "mar": 31, "apr": 30,
+  "may": 31, "jun": 30, "jul": 31, "aug": 31,
+  "sep": 30, "oct": 31, "nov": 30, "dec": 31
+}
+
+# --- flags ---
+var silent            : bool  = False
+var do_restart        : bool  = False
+var do_local          : bool  = False
+var rescan            : bool  = False
+var no_scan           : bool  = False
+var invalid_scan      : bool  = True
+var rescan_period     : int   = 0
+var relocate          : bool  = False
+var retouch           : bool  = False
+var ops_link_check    : bool  = False
+var del_bad_links     : bool  = False
+var check_ftime       : bool  = False
+var fix_ftime         : bool  = False
+var mail_flag         : bool  = False
+var mail_address      : str   = ""
+var reloc_pattern     : str   = ""
+var one_system        : str   = ""
+var excluded_systems  : []str = []
+var scan_ft           : str   = ""
+let flag_base         : str   = ".notifier_restart"
+var flag              : str   = flag_base + "." + loc_date
+
+var notifier_running : bool = True
+var notif_err        : bool = False
+var bad_dirs         : []str = []
+var bad_files_list   : []str = []
+
+# --- parse args ---
+let argv : []str = $@
+var i : int = 0
+while i < len(argv):
+  let arg : str = argv[i]
+  if arg == "-h" or arg == "-help":
+    print "Usage: ftps_mkslinks.locked [-h|-restart|-restart_local|-rescan [days]|-relocate <pat>|-system <sys>|-exclude <sys...>|-ft <ft>|-retouch|-ops_link_check|-del_bad_links|-check_ftime|-fix_ftime|-mail [addr]|-no_scan|-no_invalid|-s|-flag <name>]"
+    sys.exit(0)
+  elif arg == "-s":
+    silent = True
+  elif arg == "-restart":
+    do_restart = True
+  elif arg == "-restart_local":
+    do_local = True
+  elif arg == "-no_invalid":
+    invalid_scan = False
+  elif arg == "-no_scan":
+    if rescan:
+      print "FATAL: -no_scan and -rescan are mutually exclusive"
+      sys.exit(1)
+    no_scan = True
+  elif arg == "-rescan":
+    if no_scan:
+      print "FATAL: -no_scan and -rescan are mutually exclusive"
+      sys.exit(1)
+    rescan = True
+    if i + 1 < len(argv) and not argv[i+1].startswith("-"):
+      i += 1
+      rescan_period = -int(argv[i])
+  elif arg == "-relocate":
+    i += 1
+    if i >= len(argv) or argv[i].startswith("-"):
+      print "FATAL: -relocate needs a pattern or keyword ALL"
+      sys.exit(1)
+    relocate = True
+    reloc_pattern = argv[i]
+  elif arg == "-flag":
+    i += 1
+    if i >= len(argv) or argv[i].startswith("-"):
+      print "FATAL: -flag needs a flag name"
+      sys.exit(1)
+    flag = argv[i]
+  elif arg == "-system":
+    if len(excluded_systems) > 0:
+      print "FATAL: -exclude and -system are mutually exclusive"
+      sys.exit(1)
+    i += 1
+    if i >= len(argv) or argv[i].startswith("-"):
+      print "FATAL: -system needs a system name"
+      sys.exit(1)
+    one_system = argv[i]
+  elif arg == "-exclude":
+    if one_system != "":
+      print "FATAL: -exclude and -system are mutually exclusive"
+      sys.exit(1)
+    while i + 1 < len(argv) and not argv[i+1].startswith("-"):
+      i += 1
+      excluded_systems.append(argv[i])
+    if len(excluded_systems) == 0:
+      print "FATAL: -exclude needs one or more system names"
+      sys.exit(1)
+  elif arg == "-ft":
+    i += 1
+    if i >= len(argv) or argv[i].startswith("-"):
+      print "FATAL: -ft needs a file type value"
+      sys.exit(1)
+    scan_ft = argv[i]
+  elif arg == "-retouch":
+    retouch = True
+  elif arg == "-ops_link_check":
+    ops_link_check = True
+  elif arg == "-del_bad_links":
+    del_bad_links = True
+  elif arg == "-check_ftime":
+    check_ftime = True
+  elif arg == "-fix_ftime":
+    fix_ftime = True
+  elif arg == "-mail":
+    mail_flag = True
+    if i + 1 < len(argv) and not argv[i+1].startswith("-"):
+      i += 1
+      mail_address = argv[i]
+  elif arg.startswith("-"):
+    print f"FATAL: Illegal option {arg}"
+    sys.exit(1)
+  i += 1
+
+# ---- helpers ----
+
+def atomic_symlink(target: str, name: str) -> bool:
+  let name_dir  : str = os.path.dirname(name)
+  let name_base : str = os.path.basename(name)
+  let tmp_sym  : str = name_dir + "/." + name_base + "." + str(os.getpid()) + ".tmp"
+  os.symlink(target, tmp_sym)
+  if not os.path.islink(tmp_sym):
+    return False
+  let (_, rc) = shell: mv {tmp_sym} {name}
+  return rc == 0
+
+def file_checks(the_file: str, the_full_path: str) -> int:
+  let l : int = len(the_file)
+  if the_file == "this_is_an_invalid_name_file_to_be_on_the_ftps_used_by_regression_test.tmp":
+    return -1
+  if "ftps_copy" in the_file:
+    return -1
+  if the_file.startswith("ftp."):
+    return -1
+  if the_file.startswith("."):
+    return -1
+  if l >= 22:
+    let ft : str = the_file[20:22]
+    if not ft.isdigit():
+      print f"WARNING Invalid file type found: {the_full_path}"
+      bad_files_list.append(the_full_path)
+      return -1
+    return int(ft)
+  else:
+    print f"WARNING Invalid file found, it is too short: {the_full_path}"
+    bad_files_list.append(the_full_path)
+    return -1
+
+def make_dirs(base_dir: str, new_dated_path: str, the_ft: str, month: str) -> bool:
+  for d in [base_dir + "upload_area", base_dir + month + "/upload_area",
+             base_dir + the_ft, new_dated_path]:
+    if not os.path.isdir(d):
+      let (_, rc) = shell: mkdir -p {d}
+      if rc != 0:
+        bad_dirs.append(d)
+        return False
+  return True
+
+def make_link(new_file: str, path_to_orig: str) -> bool:
+  let the_path : str = os.path.dirname(new_file)
+  if not os.path.isdir(the_path):
+    let (_, rc) = shell: mkdir -p {the_path}
+    if rc != 0:
+      bad_dirs.append(the_path)
+      return False
+  if not os.path.islink(new_file):
+    if not silent:
+      print f"INFO Making symlink {new_file} -> {path_to_orig}"
+    let ok : bool = atomic_symlink(path_to_orig, new_file)
+    if not ok:
+      print f"SEVERE Failed to make symlink {new_file} -> {path_to_orig}"
+      return False
+    if os.path.islink(new_file) and not do_restart:
+      let (abs_out, _) = shell: readlink -f {new_file}
+      let abs_path : str = abs_out.strip()
+      shell: touch -h -r {abs_path} {new_file}
+  else:
+    let (cur_target_out, _) = shell: readlink {new_file}
+    let cur_target : str = cur_target_out.strip()
+    if cur_target != path_to_orig:
+      if not silent:
+        print f"INFO Removing symlink {new_file} -> {cur_target}"
+        print f"INFO Remaking symlink {new_file} -> {path_to_orig}"
+      shell: rm {new_file}
+      let ok : bool = atomic_symlink(path_to_orig, new_file)
+      if not ok:
+        print f"SEVERE Failed to make symlink {new_file} -> {path_to_orig}"
+        return False
+    elif retouch:
+      let (abs_out, _) = shell: readlink -f {new_file}
+      let abs_path : str = abs_out.strip()
+      shell: touch -h -r {abs_path} {new_file}
+  return True
+
+def make_symname_link(base_dir: str, the_sym: str, the_ft: str) -> bool:
+  if the_sym == "":
+    return True
+  let link_file : str = base_dir + the_sym
+  if not os.path.islink(link_file):
+    if not silent:
+      print f"INFO Making symlink {link_file} -> {the_ft}"
+    let ok : bool = atomic_symlink(the_ft, link_file)
+    if not ok:
+      print f"SEVERE Failed to make symlink {link_file} -> {the_ft}"
+      return False
+  else:
+    let (cur_target_out, _) = shell: readlink {link_file}
+    let cur_target : str = cur_target_out.strip()
+    if cur_target != the_ft:
+      if not silent:
+        print f"INFO Removing symlink {link_file} -> {cur_target}"
+        print f"INFO Remaking symlink {link_file} -> {the_ft}"
+      shell: rm {link_file}
+      let ok : bool = atomic_symlink(the_ft, link_file)
+      if not ok:
+        print f"SEVERE Failed to make symlink {link_file} -> {the_ft}"
+        return False
+  return True
+
+def check_ops_link_timing(next_time: int, next_file: str, current_ops: [](int, str)) -> bool:
+  let src_key  : str = next_file[14:20]
+  let orig_key : str = src_key[0:3].upper() + "_" + src_key[3:6].upper()
+  let (partner_out, _) = shell: oracle_server_location.hdr.query NEXT_MIGRATION_INSTANCE -where APP_KEY {orig_key} -list
+  var partner_key : str = partner_out.strip()
+  if partner_key == "":
+    partner_key = src_key
+  else:
+    partner_key = partner_key.replace("_", "")
+  let next_key  : str = partner_key.lower()
+  let nr_elems  : int = len(current_ops)
+  var ret_code  : bool = False
+  var found     : bool = False
+  var k : int = 0
+  while k < nr_elems and not found:
+    let (op_time, op_key) = current_ops[k]
+    if next_time >= op_time and src_key == op_key:
+      if k < nr_elems - 1:
+        var next_key_found : bool = False
+        var j2 : int = k + 1
+        while j2 < nr_elems:
+          let (op2_time, op2_key) = current_ops[j2]
+          if next_key == op2_key:
+            next_key_found = True
+            if next_time < op2_time:
+              ret_code = True
+              found = True
+            break
+          j2 += 1
+        if not next_key_found:
+          ret_code = True
+          found = True
+      else:
+        ret_code = True
+        found = True
+    k += 1
+  return ret_code
+
+def check_ops_links(sys_dir: str, current_ops: [](int, str)):
+  if len(current_ops) == 0:
+    print f"WARNING No CURRENT_OPS_INSTANCE files in {sys_dir}"
+    return
+  print f"INFO Rescanning {sys_dir} for invalid OPS links"
+  let ops_dir : str = sys_dir + "/OPS/"
+  let (find_out, _) = shell: find {ops_dir} -ignore_readdir_race -type l -name "1.*" -printf "%h %f %l\\n"
+  for entry in find_out.splitlines():
+    let parts : []str = entry.split()
+    if len(parts) < 3:
+      continue
+    let next_dir    : str = parts[0]
+    let next_link   : str = parts[1]
+    let next_target : str = parts[2]
+    if len(next_link) < 22:
+      continue
+    let file_type : str = next_link[20:22]
+    if file_type == "00":
+      continue
+    let full_link_name : str = next_dir + "/" + next_link
+    let next_file_path : str = next_dir + "/" + next_target
+    if not os.path.isfile(next_file_path):
+      print f"WARNING The following file just disappeared: {next_file_path}"
+      continue
+    let (mtime_out, _) = shell: stat -c "%Y" {next_file_path}
+    let mtime_s : str = mtime_out.strip()
+    let next_time : int = int(mtime_s)
+    let base_file : str = os.path.basename(next_file_path)
+    let correct_link : bool = check_ops_link_timing(next_time, base_file, current_ops)
+    if not correct_link:
+      let (bad_epoch_out, _) = shell: stat -c "%Y" {full_link_name}
+      let (bad_date_out, _)  = shell: date --date="@{bad_epoch_out.strip()}" +"%y/%m/%d-%H:%M:%S"
+      let (file_epoch_out, _) = shell: stat -c "%Y" {next_file_path}
+      let (file_date_out, _)  = shell: date --date="@{file_epoch_out.strip()}" +"%y/%m/%d-%H:%M:%S"
+      print ""
+      print f"SEVERE This OPS link is not valid: {bad_date_out.strip()} {full_link_name}"
+      print f"SEVERE Date/time of target file:   {file_date_out.strip()} {next_file_path}"
+      if del_bad_links:
+        print "SEVERE The link has been removed"
+        shell: rm {full_link_name}
+
+def check_file_times(sys_dir: str):
+  print f"INFO Scanning system {sys_dir}"
+  let path_list : str = sys_dir + "/??m/??d"
+  let (find_out, _) = shell: find {path_list} -ignore_readdir_race -maxdepth 1 -type f -printf "%TY%Tm%Td %h/%f\n"
+  for entry in find_out.splitlines():
+    let parts : []str = entry.split()
+    if len(parts) < 2:
+      continue
+    let next_time  : str = parts[0]
+    let next_file_path : str = parts[1]
+    let filebase   : str = os.path.basename(next_file_path)
+    if len(filebase) < 10:
+      continue
+    let date_str : str = filebase[2:10]
+    if date_str != next_time:
+      print ""
+      print f"SEVERE For file: {filebase}"
+      print f"SEVERE The date string in the file name is: {date_str}"
+      print f"SEVERE but its modification date string is: {next_time}"
+      if fix_ftime:
+        print "SEVERE The file has been re-time stamped"
+        shell: ftps_touch {next_file_path}
+
+def link_scan():
+  var the_systems : []str
+  if one_system == "":
+    let (sys_out, _) = shell: ftps_cleanup.info.query CFMU_SYSTEM -where EXEC_ENV {the_env} -where SECURE_DOMAIN TRUE -list | sort -u
+    the_systems = [s.strip() for s in sys_out.splitlines() if s.strip() != ""]
+  else:
+    the_systems = [one_system]
+
+  for next_stype in the_systems:
+    if next_stype in excluded_systems:
+      print "========================================================================="
+      print f"INFO Skipping system {next_stype} as specified by -exclude"
+      continue
+
+    let sys_dir : str = ftpsroot + "/" + next_stype
+    print "========================================================================="
+    print f"INFO Processing {sys_dir} on {app_key}"
+
+    if not os.path.isdir(sys_dir):
+      bad_dirs.append(sys_dir)
+      print f"SEVERE Directory {sys_dir} does not exist on {app_key}"
+      continue
+
+    # Create all month/day subdirectories
+    for mon in ["jan","feb","mar","apr","may","jun","jul","aug","sep","oct","nov","dec"]:
+      let mon_dir : str = sys_dir + "/" + month_dirnames[mon]
+      var d : int = 1
+      while d <= month_days[mon]:
+        let day_str : str = f"{d:02d}"
+        let day_dir : str = mon_dir + "/" + day_str + "d"
+        if not os.path.isdir(day_dir):
+          let (_, rc) = shell: mkdir -p {day_dir}
+          if rc != 0:
+            bad_dirs.append(day_dir)
+        d += 1
+
+    if relocate:
+      # Relocate top-level files to month/day subdirectories
+      let awk_f6 : str = "$6"
+      let awk_f7 : str = "$7"
+      let (ls_out, _) = shell: ls -lpL --time-style=+"%s" {sys_dir} 2>/dev/null | grep -hv -E "^total|/|ftp\\.| _uploading|\\.nfs|^$" | awk "{{ print {awk_f6},{awk_f7} }}"
+      for entry in ls_out.splitlines():
+        let eparts : []str = entry.strip().split()
+        if len(eparts) < 2:
+          continue
+        let next_file2 : str = eparts[1]
+        let full_path2 : str = sys_dir + "/" + next_file2
+        let ft2 : int = file_checks(next_file2, full_path2)
+        if ft2 < 0:
+          continue
+        let month2 : str = next_file2[4:6] + "m"
+        let day2    : str = next_file2[6:8] + "d"
+        let dated_file2 : str = sys_dir + "/" + month2 + "/" + day2 + "/" + next_file2
+        let dated_link2 : str = month2 + "/" + day2 + "/" + next_file2
+        if os.path.islink(full_path2):
+          let (cur_t2_out, _) = shell: readlink {full_path2}
+          if cur_t2_out.strip() != dated_link2:
+            shell: rm {full_path2}
+            shell: ln -sf {dated_link2} {full_path2}
+          continue
+        if reloc_pattern == "ALL" or next_file2.find(reloc_pattern) >= 0:
+          if os.path.islink(dated_file2):
+            shell: rm {dated_file2}
+          let new_path2 : str = sys_dir + "/" + month2 + "/" + day2
+          shell: cp -p {full_path2} {new_path2}
+          let ok2 : bool = make_link(full_path2, dated_link2)
+          if not ok2:
+            continue
+
+    # Collect CURRENT_OPS_INSTANCE files
+    let path_list  : str = sys_dir + "/??m/??d"
+    let (ops_find_out, _) = shell: find {sys_dir} {path_list} -ignore_readdir_race -maxdepth 1 -name "*00CURRENT_OPS_INSTANCE*" -type f -printf "%T@ %f %h\n" | sort
+    var current_ops : [](int, str) = []
+    for entry in ops_find_out.splitlines():
+      let ep : []str = entry.strip().split()
+      if len(ep) < 3:
+        continue
+      let op_time_f : float = float(ep[0])
+      let op_time : int = int(op_time_f)
+      let op_file : str = ep[1]
+      let op_path : str = ep[2]
+      let op_full  : str = op_path + "/" + op_file
+      if not os.path.isfile(op_full) or os.path.getsize(op_full) == 0:
+        print f"SEVERE File {op_full} is empty or missing, ignoring"
+        continue
+      let (key_raw_out, _) = shell: head -c 7 {op_full}
+      let key_raw : str = key_raw_out.strip()
+      let (key_val_out, _) = shell: oracle_server_location.hdr.query APP_KEY -where APP_KEY {key_raw} -list
+      let key_val : str = key_val_out.strip()
+      if key_val == "":
+        print f"SEVERE Key in {op_full} is not a valid app key, ignoring"
+        continue
+      let key_clean : str = key_val.replace("_", "").lower()
+      current_ops.append((op_time, key_clean))
+
+    if ops_link_check or del_bad_links:
+      check_ops_links(sys_dir, current_ops)
+    elif check_ftime or fix_ftime:
+      check_file_times(sys_dir)
+    else:
+      print f"INFO Rescanning from this amount of days backwards (0=last 24 hours): {rescan_period}"
+      let (scan_out, _) = shell: find {sys_dir} {path_list} -ignore_readdir_race -maxdepth 1 -type f -mtime {rescan_period} -printf "%T@ %f %h\n"
+
+      for entry in scan_out.splitlines():
+        let sparts : []str = entry.strip().split()
+        if len(sparts) < 3:
+          continue
+        let next_time_f : float = float(sparts[0])
+        let next_time   : int   = int(next_time_f)
+        let next_file   : str   = sparts[1]
+        let next_path   : str   = sparts[2]
+        let full_path   : str   = next_path + "/" + next_file
+        let file_type_i : int   = file_checks(next_file, full_path)
+        if file_type_i < 0:
+          continue
+        let file_type_s : str = f"{file_type_i:02d}"
+        let scan_ft_s   : str = f"{int(scan_ft):02d}" if scan_ft != "" else ""
+        if scan_ft != "" and file_type_s != scan_ft_s:
+          continue
+
+        let (sym_out, _) = shell: ftps_cleanup.info.query SYM_NAME -where EXEC_ENV {the_env} -where SECURE_DOMAIN TRUE -where CFMU_SYSTEM {next_stype} -where FILE_TYPE {file_type_s} -list
+        let sym_name : str = sym_out.strip()
+
+        let new_subdir   : str = sys_dir + "/"
+        let year         : str = next_file[2:6] + "y"
+        let month        : str = next_file[6:8] + "m"
+        let day          : str = next_file[8:10] + "d"
+        let real_key     : str = next_file[14:17].upper() + "_" + next_file[17:20].upper()
+        let rel_dated    : str = month + "/" + day + "/" + next_file
+        let top_file     : str = new_subdir + next_file
+        let file_path    : str = new_subdir + rel_dated
+        let dated_path   : str = new_subdir + year + "/" + month + "/" + day
+        let dated_file   : str = dated_path + "/" + next_file
+        let ft_file      : str = new_subdir + file_type_s + "/" + next_file
+        let app_key_path : str = new_subdir + real_key
+        let app_key_file : str = app_key_path + "/" + next_file
+        let key_ft_dir   : str = app_key_path + "/" + file_type_s
+        let key_ft_file  : str = key_ft_dir + "/" + next_file
+        let ops_dir      : str = sys_dir + "/OPS/"
+        let ops_dir_ft_path : str = ops_dir + file_type_s
+        let ops_ft_file  : str = ops_dir + file_type_s + "/" + next_file
+        let one_redirect   : str = "../" + rel_dated
+        let two_redirect   : str = "../../" + rel_dated
+        let three_redirect : str = "../../../" + rel_dated
+        let back_to_top    : str = "../../" + next_file
+
+        if not make_dirs(new_subdir, dated_path, file_type_s, month):
+          continue
+        if not make_symname_link(new_subdir, sym_name, file_type_s):
+          continue
+
+        # Ensure top-level <-> month/day linkage
+        if os.path.isfile(top_file) and not os.path.islink(top_file):
+          if not make_link(file_path, back_to_top):
+            continue
+        elif os.path.isfile(file_path) and not os.path.islink(file_path):
+          if not make_link(top_file, rel_dated):
+            continue
+
+        if do_restart:
+          continue
+
+        if not make_link(dated_file, three_redirect):
+          continue
+        if not make_link(ft_file, one_redirect):
+          continue
+
+        if not os.path.isdir(app_key_path):
+          let (_, rc) = shell: mkdir -p {app_key_path}
+          if rc != 0:
+            bad_dirs.append(app_key_path)
+            continue
+
+        if not make_link(app_key_file, one_redirect):
+          continue
+
+        if not os.path.isdir(key_ft_dir):
+          let (_, rc) = shell: mkdir -p {key_ft_dir}
+          if rc != 0:
+            bad_dirs.append(key_ft_dir)
+            continue
+
+        if not make_link(key_ft_file, two_redirect):
+          continue
+
+        if len(current_ops) > 0:
+          if not os.path.isdir(ops_dir_ft_path):
+            let (_, rc) = shell: mkdir -p {ops_dir_ft_path}
+            if rc != 0:
+              bad_dirs.append(ops_dir_ft_path)
+              continue
+          if file_type_s == "00":
+            if not make_link(ops_ft_file, two_redirect):
+              continue
+          else:
+            let make_ops : bool = check_ops_link_timing(next_time, next_file, current_ops)
+            if make_ops:
+              if not make_symname_link(ops_dir, sym_name, file_type_s):
+                continue
+              if not make_link(ops_ft_file, two_redirect):
+                continue
+
+def remove_invalid_links():
+  if retouch or ops_link_check or del_bad_links or check_ftime or fix_ftime or not invalid_scan:
+    print "========================================================================="
+    print "INFO Not checking for invalid symlinks due to option flags"
+    return
+  var the_systems : str
+  if one_system == "":
+    let (sys_out, _) = shell: ftps_cleanup.info.query CFMU_SYSTEM -where EXEC_ENV {the_env} -where SECURE_DOMAIN TRUE -list | sort -u | tr "\n" " "
+    the_systems = sys_out.strip()
+  else:
+    the_systems = one_system
+  let (_, rc) = shell: ftps_invalid_scan {the_systems}
+  if rc != 0:
+    print f"SEVERE ftps_invalid_scan {the_systems} failed"
+    sys.exit(1)
+
+def controlled_wait(the_flag: str, the_host: str):
+  # Clean up archaic flag files
+  let the_flags : str = ftpsroot + "/" + flag_base + ".*"
+  let awk_f6 : str = "$6"
+  let awk_f7 : str = "$7"
+  let (ls_out, _) = shell: ls -lpL --time-style=+"%s" {the_flags} 2>/dev/null | grep -hv -E "^total|^$" | awk "{{ print {awk_f6},{awk_f7} }}"
+  let (cur_time_out, _) = shell: date +%s
+  let cur_time_s : str = cur_time_out.strip()
+  let current_time : int = int(cur_time_s)
+  for entry in ls_out.splitlines():
+    let ep2 : []str = entry.strip().split()
+    if len(ep2) < 2:
+      continue
+    let file_time : int = int(ep2[0])
+    let next_file : str = ep2[1]
+    if current_time - file_time > 86400:
+      print f"INFO Removing archaic flag file: {next_file}"
+      shell: rm {next_file}
+  var count : int = 0
+  while count < 360 and not os.path.isfile(the_flag):
+    shell: sleep 5
+    count += 1
+  if not os.path.isfile(the_flag):
+    print f"SEVERE Watch points not created after 30 minutes on {the_host}"
+  else:
+    let duration : int = count * 5
+    print f"INFO Waited for {duration} seconds for watch points on {the_host}"
+
+# ---- main ----
+
+let (host_out, _) = shell: hostname
+let host : str = host_out.strip()
+
+if do_restart or do_local:
+  if rescan:
+    print "WARNING You do not need to specify -rescan with -restart, the rescan is implicit"
+  shell: killp ftps_notifier 1>/dev/null 2>&1
+
+  if do_local:
+    do_restart = True
+    if not silent:
+      print "INFO Restarting ftps_notifier locally"
+    let flag_local : str = ftpsroot + "/" + flag + "." + host
+    shell: nohup ftps_notifier -flag {flag} -restart_local 1>{notif_log} 2>&1 </dev/null &
+    controlled_wait(flag_local, host)
+    if not no_scan:
+      link_scan()
+      remove_invalid_links()
+  else:
+    if not silent:
+      print "INFO Restarting ftps_notifier on all nodes"
+    shell: shift_log {ftpsroot}/ftps_severe_msg.log
+    shell: nohup ftps_notifier -flag {flag} -no_scan 1>{notif_log} 2>&1 </dev/null &
+    let (other_hosts_out, _) = shell: oracle_server_location.info.query MACHINE_NAME -where APP_KEY {app_key} -list | grep -v {host}
+    for machine in other_hosts_out.splitlines():
+      let m : str = machine.strip()
+      if m == "":
+        continue
+      let local_flag : str = ftpsroot + "/" + flag + "." + m
+      controlled_wait(local_flag, m)
+    if not no_scan:
+      link_scan()
+      remove_invalid_links()
+elif retouch or rescan or relocate or ops_link_check or del_bad_links or check_ftime or fix_ftime:
+  link_scan()
+  remove_invalid_links()
+else:
+  # Default: check notifier is running
+  let (notif_pid_out, _) = shell: pidp ftps_notifier root
+  let notif_pid : str = notif_pid_out.strip()
+  if notif_pid == "":
+    notif_err = True
+    mail_flag = True
+    if not silent:
+      print "INFO Restarting ftps_notifier locally"
+    shell: nohup ftps_notifier -restart_local 1>{notif_log} 2>&1 </dev/null &
+    if not no_scan:
+      link_scan()
+      remove_invalid_links()
+
+if not notifier_running:
+  print "INFO The ftps_notifier needs to be restarted"
+  print "INFO Uncomment out the ftps_cron_indexer jobs in the crontab as well"
+
+if mail_flag and (notif_err or len(bad_dirs) > 0 or len(bad_files_list) > 0):
+  let (mail_tmp_out, _) = shell: cfmu_mktemp ftps_mail
+  let mail_file : str = mail_tmp_out.strip()
+  with open(mail_file, "w") as mf:
+    mf.write(f"There are the following problems detected on {app_key}:\n")
+    if notif_err:
+      mf.write(f"\nThe ftps_notifier was not running on {host} of {app_key}")
+      mf.write(f"\nCheck the controller WORK_DIR logs for a problem.")
+    if len(bad_dirs) > 0:
+      mf.write("\nThese system directories do not exist and they should:\n")
+      for d in bad_dirs:
+        mf.write(d + "\n")
+    if len(bad_files_list) > 0:
+      mf.write("\nThese files do not follow the FTPS file naming convention:\n")
+      for f in bad_files_list:
+        mf.write(f + "\n")
+  if mail_address == "":
+    let (addr_out, _) = shell: Qget_email_address_list "LEVEL2" {app_key}
+    mail_address = addr_out.strip()
+  shell: cat {mail_file} | mailx -s "{app_key} Indexer Error Report" {mail_address}
+  shell: rm {mail_file}
