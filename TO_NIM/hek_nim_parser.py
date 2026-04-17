@@ -408,7 +408,7 @@ def to_nim(self, indent=0, is_virtual=False, class_name=None, parent_name=None, 
                 if parent_name else []
             )
             parent_param_strs = (
-                getattr(ParserState, "proc_param_types_full", {}).get(f"new{parent_name}", [])
+                ParserState.proc_param_types_full.get(f"new{parent_name}", [])
                 if parent_name else []
             )
             if parent_param_strs:
@@ -2097,8 +2097,6 @@ def _generate_init_new(func_node, indent, class_name, parent_name, is_virtual=Tr
         param_types_list.append(m2.group(1).strip() if m2 else "")
     ParserState.proc_param_types[new_name_key] = param_types_list
     # Store full param strings (name: type = default) for forwarding constructors
-    if not hasattr(ParserState, "proc_param_types_full"):
-        ParserState.proc_param_types_full = {}
     ParserState.proc_param_types_full[new_name_key] = list(param_strs)
 
     init_name = f"init{class_name}"

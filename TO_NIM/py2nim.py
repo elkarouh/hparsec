@@ -33,10 +33,18 @@ def Input(code):
     return gen
 
 
+# Constructor signatures collected from nimport'd .ady dependencies.
+# Populated by the pre-pass in run_ady(); survives ParserState.reset() so
+# the main file's translate() can generate forwarding constructors for
+# subclasses of cross-file base classes.
+_nimport_param_types_full: dict = {}
+
+
 def parse_module(code):
     """Parse a full module. Comments are embedded in the parse tree via RichNL."""
     from hek_parsec import ParserState
     ParserState.reset()
+    ParserState.proc_param_types_full.update(_nimport_param_types_full)
     stream = Input(code)
     stmts = []
     leading = []
@@ -1132,6 +1140,26 @@ def main(argv=None):
                 if f.endswith(".py")
             ]
         )
+
+        # Pre-pass: parse nimport'd .ady dependencies to collect constructor
+        # signatures (proc_param_types_full) so the main file can generate
+        # forwarding constructors for subclasses of cross-file base classes.
+        # Signatures are stored in a module-level dict that survives reset().
+        import re as _re_prepass
+        _ady_dir_pre = os.path.dirname(os.path.abspath(ady_file))
+        for _dep_name_pre in _re_prepass.findall(r'^\s*nimport\s+(\w[\w.]*)', code, _re_prepass.MULTILINE):
+            _dep_ady_pre = os.path.join(_ady_dir_pre, _dep_name_pre + ".ady")
+            if not os.path.exists(_dep_ady_pre):
+                continue
+            with open(_dep_ady_pre) as _f:
+                _dep_code_pre = _f.read()
+            try:
+                from hek_parsec import ParserState as _PS_pre
+                _PS_pre.reset()
+                translate(_dep_code_pre, export_symbols=True)
+                _nimport_param_types_full.update(_PS_pre.proc_param_types_full)
+            except Exception:
+                pass  # errors will surface properly during the full dep transpile
 
         # --- tier 1: transpile? ---
         need_transpile = nim_mtime < max(ady_mtime, transpiler_mtime)

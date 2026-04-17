@@ -11,15 +11,10 @@ import re
 
 nimport awk_base
 
-
 type Severity_T is enum INFO, WARN, ERROR, OTHER
 
-
-class AwkProcessor(AwkBase):
+class AwkProcessor(AwkBase): 
     var counts : [Severity_T]int = [INFO : 0, WARN : 0, ERROR : 0, OTHER: 0]
-
-    def __init__(self, fs: str = " ", ofs: str = " "):
-        super().__init__(fs, ofs)
 
     def classify(self) -> Severity_T:
         if re.search(r"(?i)error", self.line):

@@ -149,6 +149,7 @@ class ParserState:
         cls.tick_types = {}
         cls.class_field_types = {}
         cls.proc_param_types = {}
+        cls.proc_param_types_full = {}
         cls.tuple_field_order = {}
         cls.object_field_order = {}
 
