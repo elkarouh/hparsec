@@ -26,7 +26,7 @@ class AwkProcessor(AwkBase):
         return OTHER
 
     def process_record(self):
-        let F:    []str = self.Fields # equivalent to $0, $1, ... in awk
+        let F:    []str = self.Fields # F[0..NF-1] = fields; self.line = full record ($0)
         let sev: Severity_T = self.classify_record()
         case sev:
             when ERROR:
