@@ -1,0 +1,102 @@
+#!/usr/bin/env py2nim
+"""
+Vcheck_coded_flight — extract max-bucket and weighted-avg of ft.coded_flight
+size from perf replay logs.
+
+Usage:
+    Vcheck_coded_flight <baseline1> [baseline2]
+
+E.g.:
+    Vcheck_coded_flight 30.0.0.6 VVL.TACT_PHASERND2
+"""
+import re
+import os
+
+nimport awk
+
+
+class HistogramExtractor(AwkBase):
+    var in_hist   : bool  = False
+    var total     : int   = 0
+    var weighted  : float = 0.0
+    var prev      : int   = 0
+    var max_bucket: int   = 0
+
+    def process_record(self):
+        let line: str   = self.line
+        let F:    []str = self.Fields
+
+        if re.search(r"LENGTH histogram of CODED_FLIGHT:", line):
+            self.in_hist    = True
+            self.total      = 0
+            self.weighted   = 0.0
+            self.prev       = 0
+            self.max_bucket = 0
+
+        elif self.in_hist and re.search(r"^< [0-9]+ +bytes:", line):
+            let bucket: int   = int(F[2])
+            let count:  int   = int(F[self.NF])
+            let mid:    float = float(self.prev + bucket) / 2.0
+            self.weighted   += mid * float(count)
+            self.total      += count
+            if count > 0:
+                self.max_bucket = bucket
+            self.prev = bucket
+
+        elif self.in_hist:
+            if self.total > 0:
+                let mb: str = str(self.max_bucket).ljust(7)
+                let av: int = int(self.weighted / float(self.total))
+                print f"  max_bucket={mb}  avg={av}  (n={self.total})"
+            self.in_hist = False
+            self.prev    = 0
+
+    def finish(self):
+        if self.in_hist and self.total > 0:
+            let mb: str = str(self.max_bucket).ljust(7)
+            let av: int = int(self.weighted / float(self.total))
+            print f"  max_bucket={mb}  avg={av}  (n={self.total})"
+
+
+def resolve_log(label: str) -> str:
+    let cm_env_id: str = os.environ.get("CM_ENV_ID", "")
+    let op_id:     str = cm_env_id.replace("IP", "OP")
+    let pattern:   str = f"/cm/ot/TACT/test_reports/Treplay_{op_id}_{label}_*performance*log"
+    let logs = shellLines: ls -tr {pattern} 2>/dev/null
+    if len(logs) == 0:
+        return ""
+    if re.search(r"^[A-Z]", label):
+        return logs[-1]
+    return logs[0]
+
+
+def extract_histogram(log: str):
+    var p: HistogramExtractor = HistogramExtractor()
+    p.run_file(log)
+
+
+def main():
+    if $# < 1:
+        print "Usage: Vcheck_coded_flight <baseline1> [baseline2]"
+        quit(1)
+
+    let baseline1: str = $1
+    let log1: str = resolve_log(baseline1)
+    if log1 == "":
+        print f"No log found for: {baseline1}"
+        quit(1)
+    print f"=== {log1} ==="
+    extract_histogram(log1)
+
+    if $# >= 2:
+        let baseline2: str = $2
+        let log2: str = resolve_log(baseline2)
+        if log2 == "":
+            print f"No log found for: {baseline2}"
+            quit(1)
+        print ""
+        print f"=== {log2} ==="
+        extract_histogram(log2)
+
+
+main()

@@ -72,3 +72,19 @@ class AwkBase:
                     self.read_record(raw)
                     self.process_record()
         self.finish()
+
+    def run_file(self, path: str):
+        self.begin()
+        if self.RS == "\n":
+            for raw in path.lines:
+                self.read_record(raw)
+                self.process_record()
+        else:
+            let f: File = open(path, fmRead)
+            let all: str = f.readAll()
+            f.close()
+            for raw in all.split(self.RS):
+                if raw'Length > 0:
+                    self.read_record(raw)
+                    self.process_record()
+        self.finish()
