@@ -34,8 +34,8 @@ class AwkProcessor(AwkBase):
                 print f" ! {self.NR:>3}: {self.line}"
             when INFO:
                 if self.NF >= 1:
-                    let first: str = self.Fields[0]
-                    let last:  str = self.Fields[self.NF - 1]
+                    let first: str = self.Fields[1]
+                    let last:  str = self.Fields[self.NF]
                     print f"[info] NR={self.NR} NF={self.NF} first={first}{self.OFS}last={last}"
                 else:
                     print f"[info] NR={self.NR} (empty)"

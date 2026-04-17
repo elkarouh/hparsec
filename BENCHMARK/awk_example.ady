@@ -53,8 +53,8 @@ def process(raw: str):
             print f" ! {NR:>3}: {line}"
         when INFO:
             if NF >= 1:
-                let first: str = Fields[0]
-                let last:  str = Fields[NF - 1]
+                let first: str = Fields[1]
+                let last:  str = Fields[NF]
                 print f"[info] NR={NR} NF={NF} first={first}{OFS}last={last}"
             else:
                 print f"[info] NR={NR} (empty)"
