@@ -1,6 +1,10 @@
 import tokenize as tkn
 from textwrap import dedent
 
+# Synthetic token type for Ada-style tick attributes (e.g. x'Image, arr[i]'First).
+# Chosen above Python's token range (which tops out around 62).
+TICK_TOKEN = 90
+
 #################################### UTILS ########################################
 if __name__ == "__main__":
     import platform
@@ -135,16 +139,13 @@ class Tokenizer:
     3. Plain NL (blank lines) -> RichNL with is_blank=True (type=NL)
     """
 
-    # Tick-attribute pattern: Name'Attr  ->  Name__tick__Attr
-    # Must be applied before Python tokenization since ' is a string delimiter.
+    # Tick-attribute patterns: replace ' with __TICK__ sentinel so Python's tokenizer
+    # sees three separate NAME tokens (base, __TICK__, attr) instead of a string literal.
+    # __TICK__ is then converted to a TICK_TOKEN synthetic token in _eager_tokenize.
     import re as _re
     _TICK_RE = _re.compile(r"(\b[A-Za-z_]\w*)'([A-Za-z_]\w*)")
-    # Subscript-tick pattern: expr[...]'Attr  ->  expr[...]__tick__Attr
-    # Handles tick attributes on subscript expressions e.g. arr[i]'Length
     _SUBSCRIPT_TICK_RE = _re.compile(r"(\])'([A-Za-z_]\w*)")
-    # Paren-tick pattern: (expr)'Attr  ->  __paren_tick_Attr__(expr)
-    # Handles tick attributes on parenthesised expressions e.g. (1..n)'Choice
-    _PAREN_TICK_RE = _re.compile(r"\(([^()]*)\)'([A-Za-z_]\w*)")
+    _PAREN_TICK_RE = _re.compile(r"(\))'([A-Za-z_]\w*)")
 
     # Range-operator patterns: the issue is that Python's tokenizer greedily
     # merges a digit adjacent to '.' into a float literal, so:
@@ -314,26 +315,22 @@ class Tokenizer:
 
     @staticmethod
     def _preprocess_tick_attributes(s):
-        """Replace Ada-style tick attributes (e.g. Type'First) with
-        Type__tick__First so that Python's tokenizer can handle them.
-        Only applies outside string literals."""
+        """Replace Ada-style tick (') with __TICK__ sentinel outside string literals.
+
+        x'Image      -> x __TICK__ Image
+        arr[i]'First -> arr[i] __TICK__ First
+        (expr)'Choice -> (expr) __TICK__ Choice
+
+        Python then tokenizes three separate NAME tokens; _eager_tokenize converts
+        NAME("__TICK__") into a TICK_TOKEN synthetic token.
+        """
         import re as _re2
-        # Split on double-quoted strings and comments only (single-quoted strings
-        # are NOT split here because word'word tick attributes look like string starts).
-        # Apply tick substitution only in code segments.
-        # String prefixes (b, f, r, u, rb, etc.) are handled by excluding them in _tick_sub.
         _DQ_CMT_RE = _re2.compile(r'("""[\s\S]*?"""|"(?:[^"\\]|\\.)*"|#[^\n]*)')
-        _STRING_PREFIXES = frozenset(['b','B','f','F','r','R','u','U',
-                                      'rb','rB','Rb','RB','br','bR','Br','BR',
-                                      'fr','fR','Fr','FR','rf','rF','Rf','RF'])
-        def _tick_sub(m):
-            return m.group(1) + '__tick__' + m.group(2)
         parts = _DQ_CMT_RE.split(s)
         for i in range(0, len(parts), 2):
-            parts[i] = Tokenizer._PAREN_TICK_RE.sub(
-                lambda m: f"__paren_tick_{m.group(2)}__({m.group(1)})", parts[i])
-            parts[i] = Tokenizer._SUBSCRIPT_TICK_RE.sub(r'\1__tick__\2', parts[i])
-            parts[i] = Tokenizer._TICK_RE.sub(_tick_sub, parts[i])
+            parts[i] = Tokenizer._PAREN_TICK_RE.sub(r'\1 __TICK__ \2', parts[i])
+            parts[i] = Tokenizer._SUBSCRIPT_TICK_RE.sub(r'\1 __TICK__ \2', parts[i])
+            parts[i] = Tokenizer._TICK_RE.sub(r'\1 __TICK__ \2', parts[i])
         return ''.join(parts)
 
     def __init__(self, s):
@@ -376,6 +373,10 @@ class Tokenizer:
                 self.tokens.append((RichNL(tok, [], is_blank=True), []))
             elif tok.type == tkn.NEWLINE:
                 self.tokens.append((RichNL(tok, [], is_blank=False), []))
+            elif tok.type == tkn.NAME and tok.string == "__TICK__":
+                # Convert __TICK__ sentinel to synthetic TICK_TOKEN
+                tick_tok = tkn.TokenInfo(TICK_TOKEN, "'", tok.start, tok.end, tok.line)
+                self.tokens.append((tick_tok, []))
             else:
                 self.tokens.append((tok, []))
             if tok.type == 0:  # ENDMARKER

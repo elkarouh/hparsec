@@ -640,6 +640,9 @@ RARROW = _op("->")
 ELLIPSIS = _op("...")
 COLONEQUAL = _op(":=")
 DOUBLEDOT = ignore(DOT + DOT)
+# Ada-style tick attribute separator (synthetic token emitted by Tokenizer)
+from hek_tokenize import TICK_TOKEN as _TICK_TOKEN
+TICK = ignore(filt(lambda tok: tok.type == _TICK_TOKEN, shift, name="'"))
 IDENTIFIER = filt(str.isidentifier, expect_type(tkn.NAME))
 # IDENTIFIER = expect_re(r"\w")
 NUMBER = expect_re(tkn.Number)
@@ -773,6 +776,7 @@ __all__ = [
     "ELLIPSIS",
     "COLONEQUAL",
     "DOUBLEDOT",
+    "TICK",
     # Semantic tokens
     "IDENTIFIER",
     "NUMBER",
