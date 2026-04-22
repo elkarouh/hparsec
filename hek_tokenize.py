@@ -127,6 +127,11 @@ _ENDMARKER = tkn.ENDMARKER
 _ENCODING  = tkn.ENCODING
 _ERRORTOKEN = tkn.ERRORTOKEN
 
+import token as _token_mod
+_FSTRING_START  = _token_mod.FSTRING_START
+_FSTRING_MIDDLE = _token_mod.FSTRING_MIDDLE
+_FSTRING_END    = _token_mod.FSTRING_END
+
 # ---------------------------------------------------------------------------
 # Exact-type mapping for operators (mirrors Python's tokenize)
 # ---------------------------------------------------------------------------
@@ -192,10 +197,10 @@ _WS_RE        = re.compile(r'[ \t]+')
 _NL_RE        = re.compile(r'\r?\n|\r')
 _NAME_RE      = re.compile(r'[A-Za-z_]\w*')
 _NUMBER_RE    = re.compile(
-    r'0[xX][0-9a-fA-F]+[lL]?'        # hex
-    r'|0[oO][0-7]+'                   # octal 0o
-    r'|0[bB][01]+'                    # binary
-    r'|(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?[jJ]?'  # decimal / float / complex
+    r'0[xX][0-9a-fA-F][0-9a-fA-F_]*[lL]?'   # hex
+    r'|0[oO][0-7][0-7_]*'                     # octal 0o
+    r'|0[bB][01][01_]*'                       # binary
+    r'|(?:\d[\d_]*\.?[\d_]*|\.[\d_]+)(?:[eE][+-]?[\d_]+)?[jJ]?'  # decimal / float / complex
 )
 _COMMENT_RE   = re.compile(r'#[^\r\n]*')
 
@@ -218,6 +223,114 @@ def _make_tok(typ, string, start, end, line):
     """Create a TokenInfo, setting exact_type correctly."""
     exact = _EXACT.get(string, typ)
     return tkn.TokenInfo(exact, string, start, end, line)
+
+
+def _split_fstring(s_str, start_lc, end_lc, line_txt):
+    """Split an f-string token into FSTRING_START/MIDDLE/END + OP tokens.
+
+    Given a complete f-string like f"hello {name}!", yields TokenInfo objects
+    matching what Python 3.12+'s tokenizer produces.
+    """
+    # Detect quote style and prefix
+    raw = s_str
+    pfx = ''
+    while raw and raw[0].lower() in 'frub':
+        pfx += raw[0]
+        raw = raw[1:]
+    # raw now starts with the quote
+    if raw.startswith('"""') or raw.startswith("'''"):
+        quote = raw[:3]
+    else:
+        quote = raw[0]
+    interior = raw[len(quote):-len(quote)]
+
+    start_tok = tkn.TokenInfo(_FSTRING_START, pfx + quote,
+                              start_lc, start_lc, line_txt)
+    end_tok   = tkn.TokenInfo(_FSTRING_END, quote,
+                              end_lc, end_lc, line_txt)
+
+    # Split interior into literal parts and {expr} parts
+    parts = []   # list of ('lit', text) or ('expr', text)
+    i = 0
+    buf = []
+    while i < len(interior):
+        c = interior[i]
+        if c == '\\':
+            buf.append(interior[i:i+2])
+            i += 2
+        elif c == '{':
+            if i + 1 < len(interior) and interior[i+1] == '{':
+                buf.append('{{')
+                i += 2
+            else:
+                if buf:
+                    parts.append(('lit', ''.join(buf)))
+                    buf = []
+                # find matching }
+                depth = 1
+                j = i + 1
+                while j < len(interior) and depth > 0:
+                    if interior[j] == '{':
+                        depth += 1
+                    elif interior[j] == '}':
+                        depth -= 1
+                    j += 1
+                parts.append(('expr', interior[i+1:j-1]))
+                i = j
+        elif c == '}':
+            if i + 1 < len(interior) and interior[i+1] == '}':
+                buf.append('}}')
+                i += 2
+            else:
+                buf.append(c)
+                i += 1
+        else:
+            buf.append(c)
+            i += 1
+    if buf:
+        parts.append(('lit', ''.join(buf)))
+
+    yield start_tok
+    for kind, text in parts:
+        if kind == 'lit':
+            if text:
+                yield tkn.TokenInfo(_FSTRING_MIDDLE, text, start_lc, start_lc, line_txt)
+        else:
+            # Split expr from optional format spec: {expr:spec} or {expr!conv:spec}
+            # Find ':' or '!' at depth 0 (not inside nested brackets)
+            expr_text = text
+            spec_text = None
+            conv_text = None
+            d = 0
+            for k, ch in enumerate(text):
+                if ch in ('(', '[', '{'): d += 1
+                elif ch in (')', ']', '}'): d -= 1
+                elif d == 0 and ch == '!' and k + 1 < len(text) and text[k+1] in 'rsa':
+                    conv_text = text[k:k+2]
+                    rest = text[k+2:]
+                    expr_text = text[:k]
+                    if rest.startswith(':'):
+                        spec_text = rest[1:]
+                    break
+                elif d == 0 and ch == ':':
+                    expr_text = text[:k]
+                    spec_text = text[k+1:]
+                    break
+            # Emit { expr_tokens [!conv] [:spec] }
+            yield tkn.TokenInfo(_OP, '{', start_lc, start_lc, line_txt)
+            for sub_tok in _lex_impl(expr_text + '\n'):
+                if sub_tok.type in (_ENCODING, _NEWLINE, _NL, _ENDMARKER, _INDENT, _DEDENT):
+                    continue
+                yield sub_tok
+            if conv_text:
+                yield tkn.TokenInfo(_OP, '!', start_lc, start_lc, line_txt)
+                yield tkn.TokenInfo(_NAME, conv_text[1], start_lc, start_lc, line_txt)
+            if spec_text is not None:
+                yield tkn.TokenInfo(_OP, ':', start_lc, start_lc, line_txt)
+                if spec_text:
+                    yield tkn.TokenInfo(_FSTRING_MIDDLE, spec_text, start_lc, start_lc, line_txt)
+            yield tkn.TokenInfo(_OP, '}', start_lc, start_lc, line_txt)
+    yield end_tok
 
 
 def _read_string(src, pos, line_no, col, lines):
@@ -625,6 +738,7 @@ def _lex_impl(source):
     last_type = _ENDMARKER
     prev_name = ''  # last NAME string seen
     prev_op = ''    # last OP string seen (for context checks)
+    line_has_stmt = False  # True if current line has real tokens (not just comments)
 
     yield tkn.TokenInfo(_ENCODING, 'utf-8', (0, 0), (0, 0), '')
 
@@ -722,12 +836,15 @@ def _lex_impl(source):
             nl_m = _NL_RE.match(src, i)
             nl_str = nl_m.group(0)
             end_lc = get_linecol(i + len(nl_str))
-            if bracket_depth > 0:
+            if bracket_depth > 0 or not line_has_stmt:
+                # NL for: inside brackets, blank lines, comment-only lines
                 yield tkn.TokenInfo(_NL, nl_str, start_lc, end_lc, line_txt)
                 last_type = _NL
             else:
                 yield tkn.TokenInfo(_NEWLINE, nl_str, start_lc, end_lc, line_txt)
                 last_type = _NEWLINE
+            line_has_stmt = False
+            if last_type == _NEWLINE:
                 # Peek ahead for dedents
                 next_i = i + len(nl_str)
                 if next_i < n:
@@ -753,6 +870,9 @@ def _lex_impl(source):
             i += len(cm_str)
             continue
 
+        # Any token below here is a real statement token (not comment/ws/nl)
+        line_has_stmt = True
+
         # ---- tick after ] or ) — must come before string handler ----
         if c == "'" and last_type == _OP and prev_op in (')', ']'):
             tick_m = re.match(r"'([A-Za-z_]\w*)", src[i:])
@@ -775,8 +895,15 @@ def _lex_impl(source):
                 s_str, new_i, _ = _read_string(src, i, start_lc[0], start_lc[1], lines)
                 if s_str is not None:
                     end_lc = get_linecol(new_i)
-                    yield tkn.TokenInfo(_STRING, s_str, start_lc, end_lc, line_txt)
-                    last_type = _STRING
+                    pfx_lower = s_str[:pfx_len].lower()
+                    if 'f' in pfx_lower:
+                        # f-string: split into FSTRING_START/MIDDLE/END tokens
+                        for ft in _split_fstring(s_str, start_lc, end_lc, line_txt):
+                            yield ft
+                        last_type = _FSTRING_END
+                    else:
+                        yield tkn.TokenInfo(_STRING, s_str, start_lc, end_lc, line_txt)
+                        last_type = _STRING
                     i = new_i
                     continue
 
@@ -920,6 +1047,19 @@ def _lex_impl(source):
                 bracket_depth = max(0, bracket_depth - 1)
             i += len(op_str)
             continue
+
+        # Backslash line continuation: skip '\' + newline, stay on same logical line
+        if c == '\\' and i + 1 < n and src[i + 1] in ('\n', '\r'):
+            nl_m = _NL_RE.match(src, i + 1)
+            i += 1 + len(nl_m.group(0))
+            at_line_start = False  # continuation — no indent processing on next char
+            continue
+
+        # Characters Python's tokenizer emits as OP (e.g. '?')
+        if c in '?`':
+            end_lc = get_linecol(i + 1)
+            yield tkn.TokenInfo(_OP, c, start_lc, end_lc, line_txt)
+            last_type = _OP; prev_op = c; line_has_stmt = True; i += 1; continue
 
         # Unknown character
         end_lc = get_linecol(i + 1)
