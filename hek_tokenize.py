@@ -624,6 +624,7 @@ def _lex_impl(source):
     bracket_depth = 0
     last_type = _ENDMARKER
     prev_name = ''  # last NAME string seen
+    prev_op = ''    # last OP string seen (for context checks)
 
     yield tkn.TokenInfo(_ENCODING, 'utf-8', (0, 0), (0, 0), '')
 
@@ -746,7 +747,7 @@ def _lex_impl(source):
             continue
 
         # ---- tick after ] or ) — must come before string handler ----
-        if c == "'" and last_type in (tkn.RPAR, tkn.RSQB):
+        if c == "'" and last_type == _OP and prev_op in (')', ']'):
             tick_m = re.match(r"'([A-Za-z_]\w*)", src[i:])
             if tick_m:
                 attr_str = tick_m.group(1)
@@ -863,16 +864,16 @@ def _lex_impl(source):
                 last_type = RANGE_EXCL_TOKEN; i += 3; continue
             if src[i:i+3] == '...':
                 end_lc = get_linecol(i + 3)
-                yield tkn.TokenInfo(tkn.ELLIPSIS, '...', start_lc, end_lc, line_txt)
-                last_type = tkn.ELLIPSIS; i += 3; continue
+                yield tkn.TokenInfo(_OP, '...', start_lc, end_lc, line_txt)
+                last_type = _OP; i += 3; continue
             if src[i:i+2] == '..':
                 end_lc = get_linecol(i + 2)
                 yield tkn.TokenInfo(RANGE_TOKEN, '..', start_lc, end_lc, line_txt)
                 last_type = RANGE_TOKEN; i += 2; continue
             # Single dot
             end_lc = get_linecol(i + 1)
-            yield tkn.TokenInfo(tkn.DOT, '.', start_lc, end_lc, line_txt)
-            last_type = tkn.DOT; i += 1; continue
+            yield tkn.TokenInfo(_OP, '.', start_lc, end_lc, line_txt)
+            last_type = _OP; i += 1; continue
 
         # Minus: bash file-test or bash cmp
         if c == '-':
@@ -887,7 +888,7 @@ def _lex_impl(source):
             ft_m = re.match(r'-([efdLrwxscbpS])(?=[\s\n\r]|$)', src[i:])
             if ft_m:
                 _in_ctx = (last_type == _NAME and prev_name in _FILE_TEST_CONTEXT) \
-                          or (last_type == tkn.LPAR)
+                          or last_type == _OP and prev_op == '('
                 if _in_ctx:
                     flag_char = ft_m.group(1)
                     end_lc = get_linecol(i + 2)
@@ -902,10 +903,10 @@ def _lex_impl(source):
         op_m = _OP_RE.match(src, i)
         if op_m:
             op_str = op_m.group(0)
-            exact = _EXACT.get(op_str, _OP)
             end_lc = get_linecol(i + len(op_str))
-            yield tkn.TokenInfo(exact, op_str, start_lc, end_lc, line_txt)
-            last_type = exact
+            yield tkn.TokenInfo(_OP, op_str, start_lc, end_lc, line_txt)
+            last_type = _OP
+            prev_op = op_str
             if op_str in ('(', '[', '{'):
                 bracket_depth += 1
             elif op_str in (')', ']', '}'):
