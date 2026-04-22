@@ -1,47 +1,53 @@
-import tokenize as tkn
-from textwrap import dedent
+"""hek_tokenize.py — Custom AdaScript tokenizer.
 
-# Synthetic token types (above Python's token range which tops out around 62).
-TICK_TOKEN      = 90   # Ada-style tick:  x'Image, arr[i]'First
-DOLLAR_TOKEN    = 91   # Bash dollar var: $#, $@, $0, $N, $NAME
-BASH_TEST_TOKEN = 92   # Bash file test:  -e, -f, -d, ...
-BASH_CMP_TOKEN  = 93   # Bash file cmp:   -nt, -ot
-RANGE_TOKEN     = 94   # Ada/Nim range:   lo .. hi
-RANGE_EXCL_TOKEN = 95  # exclusive range: lo ..< hi
+Replaces Python's built-in tokenize module with a hand-written single-pass
+lexer that handles AdaScript extensions (tick, dollar-vars, bash operators,
+range operators) inline without sentinel preprocessing.
 
-#################################### UTILS ########################################
-if __name__ == "__main__":
-    import platform
+Public API (unchanged):
+    Tokenizer(source)      — main class
+    RichNL                 — newline+comment bundle
+    TICK_TOKEN             — synthetic type constant
+    DOLLAR_TOKEN           — synthetic type constant
+    BASH_TEST_TOKEN        — synthetic type constant
+    BASH_CMP_TOKEN         — synthetic type constant
+    RANGE_TOKEN            — synthetic type constant
+    RANGE_EXCL_TOKEN       — synthetic type constant
+    tokenize_string(s)     — kept for compatibility (delegates to _lex)
+    set_current_tokenizer  — context tracker
+    get_multiline_brackets — context tracker
+"""
 
-    print(f"Python version: {platform.python_version()}")
+import re
+import tokenize as tkn  # for TokenInfo, tok_name, and token type constants only
 
+# ---------------------------------------------------------------------------
+# Synthetic token types (above Python's token range, which tops at ~69)
+# ---------------------------------------------------------------------------
+TICK_TOKEN       = 90   # Ada-style tick:  x'Image, arr[i]'First
+DOLLAR_TOKEN     = 91   # Bash dollar var: $#, $@, $0, $N, $NAME
+BASH_TEST_TOKEN  = 92   # Bash file test:  -e, -f, -d ...
+BASH_CMP_TOKEN   = 93   # Bash file cmp:   -nt, -ot
+RANGE_TOKEN      = 94   # Ada/Nim range:   lo .. hi
+RANGE_EXCL_TOKEN = 95   # exclusive range: lo ..< hi
 
-# import see; print(see.see(tkn.TokenInfo))
-# inst.exact_name= tkn.tok_name[tok.exact_type]
-# inst.name = tkn.tok_name[tok.type]
-def add_this_method_to(KLASS):
-    """Decorator to add a method to a class."""
-
-    def wrapper(f):
-        setattr(KLASS, f.__name__, f)
-
-    return wrapper
-
-
-@add_this_method_to(tkn.TokenInfo)
-def __eq__(self, val):  # WE ADD A METHOD TO AN EXISTING CLASS
+# ---------------------------------------------------------------------------
+# Monkey-patch TokenInfo so existing code can compare tok == "string"
+# ---------------------------------------------------------------------------
+def _ti_eq(self, val):
     return val == self.string
 
-
-@add_this_method_to(tkn.TokenInfo)
-def __str__(self):  # WE ADD A METHOD TO AN EXISTING CLASS
+def _ti_str(self):
     if self.exact_type == self.type:
         return f"Token({tkn.tok_name[self.type]!s}, {self.string!r})"
-    else:
-        return f"Token({tkn.tok_name[self.type]!s}, {self.string!r}, {tkn.tok_name[self.exact_type]})"
+    return f"Token({tkn.tok_name[self.type]!s}, {self.string!r}, {tkn.tok_name[self.exact_type]})"
 
+tkn.TokenInfo.__eq__ = _ti_eq
+tkn.TokenInfo.__str__ = _ti_str
 
-#############################################################################
+# ---------------------------------------------------------------------------
+# Pipe utility (unchanged)
+# ---------------------------------------------------------------------------
 class Pipe:
     def __init__(self, function):
         self.function = function
@@ -52,28 +58,17 @@ class Pipe:
     def __call__(self, *args, **kwargs):
         return Pipe(lambda x: self.function(x, *args, **kwargs))
 
-    __rrshift__ = __ror__  # >>
+    __rrshift__ = __ror__
 
     def __mul__(self, other):
         return Pipe(lambda x: x >> self | other)
 
 
-###############################################################################
-
-
+# ---------------------------------------------------------------------------
+# RichNL (unchanged)
+# ---------------------------------------------------------------------------
 class RichNL:
-    """A newline token enriched with any preceding comments.
-
-    This replaces the old approach of storing trivia by position.
-    Comments now travel naturally with the NL tokens in the parse tree.
-
-    Attributes:
-        nl_token: The original NL or NEWLINE token (for position info)
-        comments: List of (kind, text, indent) tuples for comments on this line
-        type: Always tkn.NL or tkn.NEWLINE so grammar rules match correctly
-        string: Empty string (NL doesn't contribute source text)
-        is_blank: True if this represents a blank line (no comment, just NL)
-    """
+    """A newline token enriched with any preceding comments."""
     string = ''
 
     def __init__(self, nl_token, comments=None, is_blank=False):
@@ -81,16 +76,15 @@ class RichNL:
         self.comments = comments if comments else []
         self.start = nl_token.start
         self.end = nl_token.end
-        self.type = nl_token.type  # Can be NL or NEWLINE
+        self.type = nl_token.type
         self.is_blank = is_blank
 
     def __repr__(self):
         if self.is_blank:
-            return f'RichNL(blank)'
+            return 'RichNL(blank)'
         return f'RichNL(comments={self.comments!r})'
 
     def to_lines(self):
-        """Return list of text lines this RichNL contributes: comment lines and/or a blank."""
         lines = []
         for kind, text, ind in self.comments:
             if kind == 'comment':
@@ -100,11 +94,9 @@ class RichNL:
         return lines
 
     def to_py(self):
-        """Render to a newline-joined string (used by emit_richnl and NL.to_py)."""
         return '\n'.join(self.to_lines())
 
     def inline_comment(self):
-        """Return the inline comment as '  # text', or '' if none."""
         for kind, text, ind in self.comments:
             if kind == 'comment':
                 return '  ' + text
@@ -112,291 +104,897 @@ class RichNL:
 
     @classmethod
     def extract_from(cls, node):
-        """Unwrap a Filter/NL parser node to get the inner RichNL, or return None."""
         if isinstance(node, cls):
             return node
         if hasattr(node, 'nodes') and node.nodes and isinstance(node.nodes[0], cls):
             return node.nodes[0]
         return None
 
-import io
+
+# ---------------------------------------------------------------------------
+# Token type constants (re-exported from token module for convenience)
+# ---------------------------------------------------------------------------
+_NAME      = tkn.NAME
+_NUMBER    = tkn.NUMBER
+_STRING    = tkn.STRING
+_NEWLINE   = tkn.NEWLINE
+_NL        = tkn.NL
+_INDENT    = tkn.INDENT
+_DEDENT    = tkn.DEDENT
+_COMMENT   = tkn.COMMENT
+_OP        = tkn.OP
+_ENDMARKER = tkn.ENDMARKER
+_ENCODING  = tkn.ENCODING
+_ERRORTOKEN = tkn.ERRORTOKEN
+
+# ---------------------------------------------------------------------------
+# Exact-type mapping for operators (mirrors Python's tokenize)
+# ---------------------------------------------------------------------------
+_EXACT = {
+    '(':  tkn.LPAR,   ')':  tkn.RPAR,
+    '[':  tkn.LSQB,   ']':  tkn.RSQB,
+    '{':  tkn.LBRACE, '}':  tkn.RBRACE,
+    ':':  tkn.COLON,  ',':  tkn.COMMA,
+    ';':  tkn.SEMI,   '+':  tkn.PLUS,
+    '-':  tkn.MINUS,  '*':  tkn.STAR,
+    '/':  tkn.SLASH,  '|':  tkn.VBAR,
+    '&':  tkn.AMPER,  '<':  tkn.LESS,
+    '>':  tkn.GREATER,'=':  tkn.EQUAL,
+    '.':  tkn.DOT,    '%':  tkn.PERCENT,
+    '~':  tkn.TILDE,  '^':  tkn.CIRCUMFLEX,
+    '@':  tkn.AT,     '!':  tkn.EXCLAMATION,
+    '==': tkn.EQEQUAL,'!=': tkn.NOTEQUAL,
+    '<=': tkn.LESSEQUAL,'>=':tkn.GREATEREQUAL,
+    '<<': tkn.LEFTSHIFT,'>>':tkn.RIGHTSHIFT,
+    '**': tkn.DOUBLESTAR,'//':tkn.DOUBLESLASH,
+    '+=': tkn.PLUSEQUAL,'-=':tkn.MINEQUAL,
+    '*=': tkn.STAREQUAL,'/=':tkn.SLASHEQUAL,
+    '%=': tkn.PERCENTEQUAL,'&=':tkn.AMPEREQUAL,
+    '|=': tkn.VBAREQUAL,'^=':tkn.CIRCUMFLEXEQUAL,
+    '<<=':tkn.LEFTSHIFTEQUAL,'>>=':tkn.RIGHTSHIFTEQUAL,
+    '**=':tkn.DOUBLESTAREQUAL,'//=':tkn.DOUBLESLASHEQUAL,
+    '@=': tkn.ATEQUAL,'->': tkn.RARROW,
+    '...':tkn.ELLIPSIS,':=':tkn.COLONEQUAL,
+}
+
+# Multi-char operators sorted longest-first for greedy matching
+_MULTICHAR_OPS = sorted(_EXACT.keys(), key=lambda s: -len(s))
+_MULTICHAR_OPS_RE = re.compile(
+    '|'.join(re.escape(op) for op in _MULTICHAR_OPS if len(op) > 1)
+    + r'|[()[\]{}:,;+\-*/%|&<>=.~^@!]'
+)
+
+# ---------------------------------------------------------------------------
+# Bash file-test context keywords (token immediately before must be one of these)
+# ---------------------------------------------------------------------------
+_FILE_TEST_CONTEXT = frozenset(('if', 'elif', 'while', 'and', 'or', 'not'))
+_FILE_TEST_FLAGS   = frozenset('efdLrwxscbpS')
+
+# ---------------------------------------------------------------------------
+# Tick-attribute detection patterns (applied on NAME tokens)
+# ---------------------------------------------------------------------------
+_TICK_CONTEXT = frozenset((
+    _NAME, _NUMBER,           # x'Image, 42'T
+    tkn.RPAR, tkn.RSQB,       # (e)'C, arr[i]'F
+))
+
+# ---------------------------------------------------------------------------
+# Core lexer: _lex(source) -> generator of TokenInfo
+#
+# Emits tokens in the same order and format as tokenize.tokenize() but:
+#   - Handles AdaScript extensions inline (no preprocessing)
+#   - Emits synthetic token types directly
+#   - No ENCODING token (not needed by Tokenizer)
+# ---------------------------------------------------------------------------
+
+# Regex fragments
+_WS_RE        = re.compile(r'[ \t]+')
+_NL_RE        = re.compile(r'\r?\n|\r')
+_NAME_RE      = re.compile(r'[A-Za-z_]\w*')
+_NUMBER_RE    = re.compile(
+    r'0[xX][0-9a-fA-F]+[lL]?'        # hex
+    r'|0[oO][0-7]+'                   # octal 0o
+    r'|0[bB][01]+'                    # binary
+    r'|(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?[jJ]?'  # decimal / float / complex
+)
+_COMMENT_RE   = re.compile(r'#[^\r\n]*')
+
+# String prefixes
+_STR_PREFIX_RE = re.compile(r'(?i)(f|b|r|u|fr|rf|br|rb)?(?=\"|\')')
+
+# Operators
+_OP_RE = re.compile(
+    r'\.\.\<'                        # ..<  (exclusive range — must be FIRST)
+    r'|\.\.\.'                       # ...  (ellipsis — before ..)
+    r'|\.\.'                         # ..   (inclusive range)
+    r'|<<=|>>=|\*\*=|//='            # 4-char compound ops
+    r'|<<|>>|\*\*|//|->|:='          # 2-char ops
+    r'|[+\-*/%|&^]=|[<>!=]='         # augmented assignment / comparison
+    r'|[(){}\[\]:,;.+\-*/%|&<>=~^@!]'  # single-char ops
+)
 
 
+def _make_tok(typ, string, start, end, line):
+    """Create a TokenInfo, setting exact_type correctly."""
+    exact = _EXACT.get(string, typ)
+    return tkn.TokenInfo(exact, string, start, end, line)
+
+
+def _read_string(src, pos, line_no, col, lines):
+    """Read a string literal starting at src[pos]. Return (string, new_pos, lines_consumed)."""
+    start_col = col
+    i = pos
+    # Detect prefix
+    prefix_match = _STR_PREFIX_RE.match(src, i)
+    prefix = ''
+    if prefix_match:
+        prefix = prefix_match.group(0)
+        i += len(prefix)
+
+    if src[i:i+3] in ('"""', "'''"):
+        delim = src[i:i+3]
+    elif src[i] in ('"', "'"):
+        delim = src[i]
+    else:
+        return None, pos, 0
+
+    i += len(delim)
+    result = [prefix + delim]
+    extra_lines = 0
+
+    while i < len(src):
+        c = src[i]
+        if c == '\\':
+            if i + 1 < len(src):
+                nc = src[i + 1]
+                result.append(src[i:i+2])
+                if nc == '\n':
+                    extra_lines += 1
+                i += 2
+            else:
+                result.append(c)
+                i += 1
+        elif src[i:i+len(delim)] == delim:
+            result.append(delim)
+            i += len(delim)
+            break
+        elif c == '\n':
+            if len(delim) == 1:
+                # Unterminated single-line string — stop at newline
+                break
+            result.append(c)
+            extra_lines += 1
+            i += 1
+        else:
+            result.append(c)
+            i += 1
+
+    return ''.join(result), i, extra_lines
+
+
+def _lex(source):
+    """Tokenize AdaScript/Python source, yielding TokenInfo objects.
+
+    Handles all standard Python tokens plus AdaScript extensions:
+      - '..' -> RANGE_TOKEN
+      - '..<' -> RANGE_EXCL_TOKEN
+      - x'Attr -> NAME x, TICK_TOKEN, NAME Attr
+      - $VAR / $0 / $# / $@ -> DOLLAR_TOKEN + NAME/NUMBER
+      - -e/-f/-d (in boolean context) -> BASH_TEST_TOKEN + NAME flag
+      - -nt / -ot (surrounded by whitespace) -> BASH_CMP_TOKEN
+    """
+    lines = source.splitlines(True)
+    if not lines:
+        lines = ['']
+
+    # Indentation tracking
+    indent_stack = [0]
+    # Track bracket depth to suppress INDENT/DEDENT/NEWLINE inside brackets
+    bracket_depth = 0
+    # Track the last non-whitespace/non-comment token type for context
+    last_type = _ENDMARKER
+
+    # Emit ENCODING first (expected by callers)
+    yield tkn.TokenInfo(_ENCODING, 'utf-8', (0, 0), (0, 0), '')
+
+    line_no = 0
+    pos = 0
+    # We process char-by-char using a flat source string + line index
+    src = source
+
+    # Build line start offsets for (line, col) calculation
+    line_starts = [0]
+    for ln in lines:
+        line_starts.append(line_starts[-1] + len(ln))
+
+    def get_linecol(offset):
+        # Binary search for line
+        lo, hi = 0, len(line_starts) - 1
+        while lo < hi:
+            mid = (lo + hi + 1) // 2
+            if line_starts[mid] <= offset:
+                lo = mid
+            else:
+                hi = mid - 1
+        ln = lo  # 0-based line index
+        col = offset - line_starts[ln]
+        return (ln + 1, col)  # 1-based line
+
+    def current_line_text(offset):
+        ln_idx, _ = get_linecol(offset)
+        if 1 <= ln_idx <= len(lines):
+            return lines[ln_idx - 1]
+        return ''
+
+    i = 0
+    n = len(src)
+
+    # pending_dedents: number of DEDENT tokens still to emit
+    pending_dedents = 0
+
+    while i <= n:
+        # ---- emit pending DEDENTs ----
+        while pending_dedents > 0:
+            lc = get_linecol(i)
+            line_txt = current_line_text(i)
+            yield tkn.TokenInfo(_DEDENT, '', lc, lc, line_txt)
+            pending_dedents -= 1
+
+        if i == n:
+            # End of source: emit NEWLINE if needed, then ENDMARKER
+            lc = get_linecol(i)
+            yield tkn.TokenInfo(_NEWLINE, '', lc, lc, '')
+            yield tkn.TokenInfo(_ENDMARKER, '', lc, lc, '')
+            break
+
+        c = src[i]
+        start_lc = get_linecol(i)
+        line_txt = current_line_text(i)
+
+        # ---- beginning of line: handle indentation ----
+        if start_lc[1] == 0 and c not in ('\n', '\r', '#'):
+            # Measure indent
+            ws_m = _WS_RE.match(src, i)
+            indent_str = ws_m.group(0) if ws_m else ''
+            indent = len(indent_str.expandtabs(8))  # tabs count as multiples of 8
+            i += len(indent_str)
+            if bracket_depth == 0:
+                prev_indent = indent_stack[-1]
+                if indent > prev_indent:
+                    indent_stack.append(indent)
+                    ind_end = get_linecol(i)
+                    yield tkn.TokenInfo(_INDENT, indent_str, start_lc, ind_end, line_txt)
+                elif indent < prev_indent:
+                    while indent_stack[-1] > indent:
+                        indent_stack.pop()
+                        yield tkn.TokenInfo(_DEDENT, '', start_lc, start_lc, line_txt)
+            continue  # re-enter loop to process actual token at new i
+
+        # ---- whitespace (mid-line) ----
+        if c in (' ', '\t'):
+            ws_m = _WS_RE.match(src, i)
+            i += len(ws_m.group(0))
+            continue
+
+        # ---- newline ----
+        if c in ('\n', '\r'):
+            nl_m = _NL_RE.match(src, i)
+            nl_str = nl_m.group(0)
+            end_lc = get_linecol(i + len(nl_str))
+            if bracket_depth > 0:
+                # Inside brackets: emit NL (continuation), not NEWLINE
+                yield tkn.TokenInfo(_NL, nl_str, start_lc, end_lc, line_txt)
+            else:
+                yield tkn.TokenInfo(_NEWLINE, nl_str, start_lc, end_lc, line_txt)
+                # Handle dedents for next line
+                next_i = i + len(nl_str)
+                # Peek at next line's indentation
+                if next_i < n:
+                    next_lc = get_linecol(next_i)
+                    if next_lc[1] == 0:
+                        ws2 = _WS_RE.match(src, next_i)
+                        next_ind_str = ws2.group(0) if ws2 else ''
+                        next_ind = len(next_ind_str.expandtabs(8))
+                        next_c = src[next_i + len(next_ind_str)] if next_i + len(next_ind_str) < n else ''
+                        if next_c not in ('\n', '\r', '#', ''):
+                            while len(indent_stack) > 1 and indent_stack[-1] > next_ind:
+                                indent_stack.pop()
+                                pending_dedents += 1
+            last_type = _NEWLINE
+            i += len(nl_str)
+            continue
+
+        # ---- comment ----
+        if c == '#':
+            cm_m = _COMMENT_RE.match(src, i)
+            cm_str = cm_m.group(0)
+            end_lc = get_linecol(i + len(cm_str))
+            yield tkn.TokenInfo(_COMMENT, cm_str, start_lc, end_lc, line_txt)
+            last_type = _COMMENT
+            i += len(cm_str)
+            continue
+
+        # ---- string literal ----
+        # Check for string prefix + quote
+        str_pfx_m = _STR_PREFIX_RE.match(src, i)
+        if str_pfx_m or (c in ('"', "'")):
+            pfx_len = len(str_pfx_m.group(0)) if str_pfx_m else 0
+            if i + pfx_len < n and src[i + pfx_len] in ('"', "'"):
+                s_str, new_i, _ = _read_string(src, i, start_lc[0], start_lc[1], lines)
+                if s_str is not None:
+                    end_lc = get_linecol(new_i)
+                    yield tkn.TokenInfo(_STRING, s_str, start_lc, end_lc, line_txt)
+                    last_type = _STRING
+                    i = new_i
+                    continue
+
+        # ---- number ----
+        if c.isdigit() or (c == '.' and i + 1 < n and src[i+1].isdigit()):
+            nm = _NUMBER_RE.match(src, i)
+            if nm:
+                num_str = nm.group(0)
+                end_lc = get_linecol(i + len(num_str))
+                yield tkn.TokenInfo(_NUMBER, num_str, start_lc, end_lc, line_txt)
+                last_type = _NUMBER
+                i += len(num_str)
+                continue
+
+        # ---- identifier / keyword ----
+        if c.isalpha() or c == '_':
+            nm = _NAME_RE.match(src, i)
+            name_str = nm.group(0)
+            end_lc = get_linecol(i + len(name_str))
+            yield tkn.TokenInfo(_NAME, name_str, start_lc, end_lc, line_txt)
+            last_type = _NAME
+            i += len(name_str)
+            # Check for tick immediately after name: x'Attr
+            if i < n and src[i] == "'":
+                # Only if followed by identifier (not end of string)
+                tick_m = re.match(r"'([A-Za-z_]\w*)", src, i)
+                if tick_m:
+                    tick_lc = get_linecol(i)
+                    tick_end = get_linecol(i + 1)
+                    attr_str = tick_m.group(1)
+                    attr_start = get_linecol(i + 1)
+                    attr_end = get_linecol(i + 1 + len(attr_str))
+                    yield tkn.TokenInfo(TICK_TOKEN, "'", tick_lc, tick_end, line_txt)
+                    yield tkn.TokenInfo(_NAME, attr_str, attr_start, attr_end, line_txt)
+                    last_type = _NAME
+                    i += 1 + len(attr_str)
+            continue
+
+        # ---- dollar variable: $#, $@, $0, $N, $NAME ----
+        if c == '$':
+            dol_lc = start_lc
+            dol_end = get_linecol(i + 1)
+            j = i + 1
+            if j < n:
+                nc = src[j]
+                if nc == '#':
+                    # $# -> DOLLAR_TOKEN + NAME("#")
+                    yield tkn.TokenInfo(DOLLAR_TOKEN, '$', dol_lc, dol_end, line_txt)
+                    h_lc = get_linecol(j)
+                    h_end = get_linecol(j + 1)
+                    yield tkn.TokenInfo(_NAME, '#', h_lc, h_end, line_txt)
+                    last_type = _NAME
+                    i = j + 1
+                    continue
+                elif nc == '@':
+                    # $@ -> DOLLAR_TOKEN + NAME("@")
+                    yield tkn.TokenInfo(DOLLAR_TOKEN, '$', dol_lc, dol_end, line_txt)
+                    at_lc = get_linecol(j)
+                    at_end = get_linecol(j + 1)
+                    yield tkn.TokenInfo(_NAME, '@', at_lc, at_end, line_txt)
+                    last_type = _NAME
+                    i = j + 1
+                    continue
+                elif nc.isdigit():
+                    # $0, $1 .. $N -> DOLLAR_TOKEN + NUMBER
+                    nm2 = re.match(r'\d+', src, j)
+                    num_s = nm2.group(0)
+                    yield tkn.TokenInfo(DOLLAR_TOKEN, '$', dol_lc, dol_end, line_txt)
+                    n_lc = get_linecol(j)
+                    n_end = get_linecol(j + len(num_s))
+                    yield tkn.TokenInfo(_NUMBER, num_s, n_lc, n_end, line_txt)
+                    last_type = _NUMBER
+                    i = j + len(num_s)
+                    continue
+                elif nc.isalpha() or nc == '_':
+                    # $NAME (uppercase env var) -> DOLLAR_TOKEN + NAME
+                    nm3 = _NAME_RE.match(src, j)
+                    env_s = nm3.group(0)
+                    yield tkn.TokenInfo(DOLLAR_TOKEN, '$', dol_lc, dol_end, line_txt)
+                    e_lc = get_linecol(j)
+                    e_end = get_linecol(j + len(env_s))
+                    yield tkn.TokenInfo(_NAME, env_s, e_lc, e_end, line_txt)
+                    last_type = _NAME
+                    i = j + len(env_s)
+                    continue
+            # Bare '$' with nothing following — emit as ERRORTOKEN
+            yield tkn.TokenInfo(_ERRORTOKEN, '$', dol_lc, dol_end, line_txt)
+            last_type = _ERRORTOKEN
+            i += 1
+            continue
+
+        # ---- operators (including range ops and tick after ] or )) ----
+        op_m = _OP_RE.match(src, i)
+        if op_m:
+            op_str = op_m.group(0)
+
+            # Range operators: '..' and '..<'
+            if op_str == '..<':
+                end_lc = get_linecol(i + 3)
+                yield tkn.TokenInfo(RANGE_EXCL_TOKEN, '..<', start_lc, end_lc, line_txt)
+                last_type = RANGE_EXCL_TOKEN
+                i += 3
+                continue
+            if op_str == '..':
+                end_lc = get_linecol(i + 2)
+                yield tkn.TokenInfo(RANGE_TOKEN, '..', start_lc, end_lc, line_txt)
+                last_type = RANGE_TOKEN
+                i += 2
+                continue
+
+            # Tick after ] or )
+            if op_str == "'" and last_type in (tkn.RPAR, tkn.RSQB):
+                tick_m = re.match(r"'([A-Za-z_]\w*)", src, i)
+                if tick_m:
+                    tick_end = get_linecol(i + 1)
+                    attr_str = tick_m.group(1)
+                    attr_start = get_linecol(i + 1)
+                    attr_end = get_linecol(i + 1 + len(attr_str))
+                    yield tkn.TokenInfo(TICK_TOKEN, "'", start_lc, tick_end, line_txt)
+                    yield tkn.TokenInfo(_NAME, attr_str, attr_start, attr_end, line_txt)
+                    last_type = _NAME
+                    i += 1 + len(attr_str)
+                    continue
+
+            # Minus: check for bash file-test (-e, -f, ...) or bash cmp (-nt, -ot)
+            if op_str == '-':
+                rest = src[i+1:]
+                # -nt / -ot (surrounded by whitespace — previous token must have space)
+                cmp_m = re.match(r'-(nt|ot)(?=\s|$)', src, i)
+                if cmp_m:
+                    op_val = cmp_m.group(0)  # '-nt' or '-ot'
+                    end_lc = get_linecol(i + len(op_val))
+                    yield tkn.TokenInfo(BASH_CMP_TOKEN, op_val, start_lc, end_lc, line_txt)
+                    last_type = BASH_CMP_TOKEN
+                    i += len(op_val)
+                    continue
+                # -e, -f, -d, etc. — only in boolean context
+                ft_m = re.match(r'-([efdLrwxscbpS])(?=\s)', src, i)
+                if ft_m:
+                    # Check context: is the previous token a boolean-context keyword or '('?
+                    _in_test_ctx = False
+                    if last_type == _NAME:
+                        # Find the previous NAME token string
+                        # We need to look backwards in what we've emitted — track prev_name
+                        _in_test_ctx = (_prev_name in _FILE_TEST_CONTEXT)
+                    elif last_type == tkn.LPAR:
+                        _in_test_ctx = True
+                    if _in_test_ctx:
+                        flag_char = ft_m.group(1)
+                        end_lc = get_linecol(i + 2)
+                        flag_lc = get_linecol(i + 1)
+                        flag_end = get_linecol(i + 2)
+                        yield tkn.TokenInfo(BASH_TEST_TOKEN, '-', start_lc, end_lc, line_txt)
+                        yield tkn.TokenInfo(_NAME, flag_char, flag_lc, flag_end, line_txt)
+                        last_type = _NAME
+                        i += 2
+                        continue
+
+            # Normal operator
+            exact = _EXACT.get(op_str, _OP)
+            end_lc = get_linecol(i + len(op_str))
+            yield tkn.TokenInfo(exact, op_str, start_lc, end_lc, line_txt)
+            last_type = exact
+            # Track bracket depth
+            if op_str in ('(', '[', '{'):
+                bracket_depth += 1
+            elif op_str in (')', ']', '}'):
+                bracket_depth = max(0, bracket_depth - 1)
+            i += len(op_str)
+            continue
+
+        # ---- unknown character ----
+        end_lc = get_linecol(i + 1)
+        yield tkn.TokenInfo(_ERRORTOKEN, c, start_lc, end_lc, line_txt)
+        last_type = _ERRORTOKEN
+        i += 1
+
+
+# The _lex function needs a _prev_name tracker — inject it properly:
+def _lex_tracked(source):
+    """Wrapper around _lex that tracks previous NAME string for bash-test context."""
+    prev_name = ''
+    # We need to inject _prev_name into _lex — reimplement the minus handler here
+    # by post-processing: easier to just track in a wrapper.
+    # Actually, we rebuild _lex inline with prev_name tracking via a closure.
+    # See _lex_impl below.
+    return _lex_impl(source)
+
+
+def _lex_impl(source):
+    """Full lexer with prev_name tracking for bash file-test context detection."""
+    lines = source.splitlines(True)
+    if not lines:
+        lines = ['']
+
+    indent_stack = [0]
+    bracket_depth = 0
+    last_type = _ENDMARKER
+    prev_name = ''  # last NAME string seen
+
+    yield tkn.TokenInfo(_ENCODING, 'utf-8', (0, 0), (0, 0), '')
+
+    src = source
+    n = len(src)
+
+    line_starts = [0]
+    for ln in lines:
+        line_starts.append(line_starts[-1] + len(ln))
+
+    def get_linecol(offset):
+        o = max(0, min(offset, n))
+        lo2, hi2 = 0, len(line_starts) - 1
+        while lo2 < hi2:
+            mid = (lo2 + hi2 + 1) // 2
+            if line_starts[mid] <= o:
+                lo2 = mid
+            else:
+                hi2 = mid - 1
+        col = o - line_starts[lo2]
+        return (lo2 + 1, col)
+
+    def current_line_text(offset):
+        ln_idx, _ = get_linecol(offset)
+        if 1 <= ln_idx <= len(lines):
+            return lines[ln_idx - 1]
+        return ''
+
+    pending_dedents = 0
+    i = 0
+    at_line_start = True  # True when we're at column 0 waiting for indent processing
+
+    while i <= n:
+        # emit pending DEDENTs
+        while pending_dedents > 0:
+            lc = get_linecol(i)
+            line_txt = current_line_text(i)
+            yield tkn.TokenInfo(_DEDENT, '', lc, lc, line_txt)
+            pending_dedents -= 1
+            last_type = _DEDENT
+
+        if i == n:
+            lc = get_linecol(i)
+            # Emit NEWLINE if the last token wasn't already a newline
+            if last_type not in (_NEWLINE, _NL, _DEDENT, _ENDMARKER, _ENCODING):
+                yield tkn.TokenInfo(_NEWLINE, '', lc, lc, '')
+            # Emit remaining dedents
+            while len(indent_stack) > 1:
+                indent_stack.pop()
+                yield tkn.TokenInfo(_DEDENT, '', lc, lc, '')
+            yield tkn.TokenInfo(_ENDMARKER, '', lc, lc, '')
+            break
+
+        c = src[i]
+        start_lc = get_linecol(i)
+        line_txt = current_line_text(i)
+
+        # ---- indentation at start of line ----
+        if at_line_start and c not in ('\n', '\r', '#'):
+            at_line_start = False
+            ws_m = _WS_RE.match(src, i)
+            indent_str = ws_m.group(0) if ws_m else ''
+            indent = len(indent_str.expandtabs(8))
+            i += len(indent_str)
+            if bracket_depth == 0:
+                prev_ind = indent_stack[-1]
+                if indent > prev_ind:
+                    indent_stack.append(indent)
+                    ind_end = get_linecol(i)
+                    yield tkn.TokenInfo(_INDENT, indent_str, start_lc, ind_end, line_txt)
+                    last_type = _INDENT
+                elif indent < prev_ind:
+                    while len(indent_stack) > 1 and indent_stack[-1] > indent:
+                        indent_stack.pop()
+                        yield tkn.TokenInfo(_DEDENT, '', start_lc, start_lc, line_txt)
+                        last_type = _DEDENT
+            continue
+
+        # ---- whitespace ----
+        if c in (' ', '\t'):
+            ws_m = _WS_RE.match(src, i)
+            i += len(ws_m.group(0))
+            continue
+
+        # ---- newline ----
+        if c in ('\n', '\r'):
+            at_line_start = True
+            nl_m = _NL_RE.match(src, i)
+            nl_str = nl_m.group(0)
+            end_lc = get_linecol(i + len(nl_str))
+            if bracket_depth > 0:
+                yield tkn.TokenInfo(_NL, nl_str, start_lc, end_lc, line_txt)
+                last_type = _NL
+            else:
+                yield tkn.TokenInfo(_NEWLINE, nl_str, start_lc, end_lc, line_txt)
+                last_type = _NEWLINE
+                # Peek ahead for dedents
+                next_i = i + len(nl_str)
+                if next_i < n:
+                    ws2 = _WS_RE.match(src, next_i)
+                    next_ind_str = ws2.group(0) if ws2 else ''
+                    next_ind = len(next_ind_str.expandtabs(8))
+                    ni2 = next_i + len(next_ind_str)
+                    next_c = src[ni2] if ni2 < n else ''
+                    if next_c not in ('\n', '\r', '#', ''):
+                        while len(indent_stack) > 1 and indent_stack[-1] > next_ind:
+                            indent_stack.pop()
+                            pending_dedents += 1
+            i += len(nl_str)
+            continue
+
+        # ---- comment ----
+        if c == '#':
+            cm_m = _COMMENT_RE.match(src, i)
+            cm_str = cm_m.group(0)
+            end_lc = get_linecol(i + len(cm_str))
+            yield tkn.TokenInfo(_COMMENT, cm_str, start_lc, end_lc, line_txt)
+            last_type = _COMMENT
+            i += len(cm_str)
+            continue
+
+        # ---- tick after ] or ) — must come before string handler ----
+        if c == "'" and last_type in (tkn.RPAR, tkn.RSQB):
+            tick_m = re.match(r"'([A-Za-z_]\w*)", src[i:])
+            if tick_m:
+                attr_str = tick_m.group(1)
+                tick_end = get_linecol(i + 1)
+                attr_start = get_linecol(i + 1)
+                attr_end = get_linecol(i + 1 + len(attr_str))
+                yield tkn.TokenInfo(TICK_TOKEN, "'", start_lc, tick_end, line_txt)
+                yield tkn.TokenInfo(_NAME, attr_str, attr_start, attr_end, line_txt)
+                prev_name = attr_str; last_type = _NAME
+                i += 1 + len(attr_str); continue
+
+        # ---- string literal ----
+        str_pfx_m = _STR_PREFIX_RE.match(src, i)
+        pfx_len = len(str_pfx_m.group(0)) if str_pfx_m else 0
+        if pfx_len > 0 or c in ('"', "'"):
+            qi = i + pfx_len
+            if qi < n and src[qi] in ('"', "'"):
+                s_str, new_i, _ = _read_string(src, i, start_lc[0], start_lc[1], lines)
+                if s_str is not None:
+                    end_lc = get_linecol(new_i)
+                    yield tkn.TokenInfo(_STRING, s_str, start_lc, end_lc, line_txt)
+                    last_type = _STRING
+                    i = new_i
+                    continue
+
+        # ---- number ----
+        if c.isdigit() or (c == '.' and i + 1 < n and src[i+1].isdigit()):
+            nm = _NUMBER_RE.match(src, i)
+            if nm:
+                num_str = nm.group(0)
+                # If number ends with '.' and the next char is also '.', we're at
+                # a range boundary like '1..10' — strip the trailing dot.
+                while num_str.endswith('.') and i + len(num_str) < n and src[i + len(num_str)] == '.':
+                    num_str = num_str[:-1]
+                end_lc = get_linecol(i + len(num_str))
+                yield tkn.TokenInfo(_NUMBER, num_str, start_lc, end_lc, line_txt)
+                last_type = _NUMBER
+                i += len(num_str)
+                continue
+
+        # ---- identifier / keyword ----
+        if c.isalpha() or c == '_':
+            nm = _NAME_RE.match(src, i)
+            name_str = nm.group(0)
+            end_lc = get_linecol(i + len(name_str))
+            yield tkn.TokenInfo(_NAME, name_str, start_lc, end_lc, line_txt)
+            prev_name = name_str
+            last_type = _NAME
+            i += len(name_str)
+            # Tick immediately after name: x'Attr
+            if i < n and src[i] == "'":
+                tick_m = re.match(r"'([A-Za-z_]\w*)", src[i:])
+                if tick_m:
+                    attr_str = tick_m.group(1)
+                    tick_lc = get_linecol(i)
+                    tick_end = get_linecol(i + 1)
+                    attr_start = get_linecol(i + 1)
+                    attr_end = get_linecol(i + 1 + len(attr_str))
+                    yield tkn.TokenInfo(TICK_TOKEN, "'", tick_lc, tick_end, line_txt)
+                    yield tkn.TokenInfo(_NAME, attr_str, attr_start, attr_end, line_txt)
+                    prev_name = attr_str
+                    last_type = _NAME
+                    i += 1 + len(attr_str)
+            continue
+
+        # ---- dollar variable ----
+        if c == '$':
+            dol_lc = start_lc
+            dol_end = get_linecol(i + 1)
+            j = i + 1
+            if j < n:
+                nc = src[j]
+                if nc == '#':
+                    yield tkn.TokenInfo(DOLLAR_TOKEN, '$', dol_lc, dol_end, line_txt)
+                    h_lc = get_linecol(j)
+                    h_end = get_linecol(j + 1)
+                    yield tkn.TokenInfo(_NAME, '#', h_lc, h_end, line_txt)
+                    prev_name = '#'; last_type = _NAME
+                    i = j + 1; continue
+                elif nc == '@':
+                    yield tkn.TokenInfo(DOLLAR_TOKEN, '$', dol_lc, dol_end, line_txt)
+                    at_lc = get_linecol(j)
+                    at_end = get_linecol(j + 1)
+                    yield tkn.TokenInfo(_NAME, '@', at_lc, at_end, line_txt)
+                    prev_name = '@'; last_type = _NAME
+                    i = j + 1; continue
+                elif nc.isdigit():
+                    nm2 = re.match(r'\d+', src[j:])
+                    num_s = nm2.group(0)
+                    yield tkn.TokenInfo(DOLLAR_TOKEN, '$', dol_lc, dol_end, line_txt)
+                    n_lc = get_linecol(j)
+                    n_end = get_linecol(j + len(num_s))
+                    yield tkn.TokenInfo(_NUMBER, num_s, n_lc, n_end, line_txt)
+                    last_type = _NUMBER
+                    i = j + len(num_s); continue
+                elif nc.isalpha() or nc == '_':
+                    nm3 = _NAME_RE.match(src, j)
+                    env_s = nm3.group(0)
+                    yield tkn.TokenInfo(DOLLAR_TOKEN, '$', dol_lc, dol_end, line_txt)
+                    e_lc = get_linecol(j)
+                    e_end = get_linecol(j + len(env_s))
+                    yield tkn.TokenInfo(_NAME, env_s, e_lc, e_end, line_txt)
+                    prev_name = env_s; last_type = _NAME
+                    i = j + len(env_s); continue
+            yield tkn.TokenInfo(_ERRORTOKEN, '$', dol_lc, dol_end, line_txt)
+            last_type = _ERRORTOKEN; i += 1; continue
+
+        # ---- operators ----
+        # Check range/ellipsis first (. is ambiguous with float)
+        if c == '.':
+            if src[i:i+3] == '..<':
+                end_lc = get_linecol(i + 3)
+                yield tkn.TokenInfo(RANGE_EXCL_TOKEN, '..<', start_lc, end_lc, line_txt)
+                last_type = RANGE_EXCL_TOKEN; i += 3; continue
+            if src[i:i+3] == '...':
+                end_lc = get_linecol(i + 3)
+                yield tkn.TokenInfo(tkn.ELLIPSIS, '...', start_lc, end_lc, line_txt)
+                last_type = tkn.ELLIPSIS; i += 3; continue
+            if src[i:i+2] == '..':
+                end_lc = get_linecol(i + 2)
+                yield tkn.TokenInfo(RANGE_TOKEN, '..', start_lc, end_lc, line_txt)
+                last_type = RANGE_TOKEN; i += 2; continue
+            # Single dot
+            end_lc = get_linecol(i + 1)
+            yield tkn.TokenInfo(tkn.DOT, '.', start_lc, end_lc, line_txt)
+            last_type = tkn.DOT; i += 1; continue
+
+        # Minus: bash file-test or bash cmp
+        if c == '-':
+            # -nt / -ot
+            cmp_m = re.match(r'-(nt|ot)(?=[\s\n\r]|$)', src[i:])
+            if cmp_m:
+                op_val = cmp_m.group(0)
+                end_lc = get_linecol(i + len(op_val))
+                yield tkn.TokenInfo(BASH_CMP_TOKEN, op_val, start_lc, end_lc, line_txt)
+                last_type = BASH_CMP_TOKEN; i += len(op_val); continue
+            # -e, -f, -d, etc. in boolean context
+            ft_m = re.match(r'-([efdLrwxscbpS])(?=[\s\n\r]|$)', src[i:])
+            if ft_m:
+                _in_ctx = (last_type == _NAME and prev_name in _FILE_TEST_CONTEXT) \
+                          or (last_type == tkn.LPAR)
+                if _in_ctx:
+                    flag_char = ft_m.group(1)
+                    end_lc = get_linecol(i + 2)
+                    flag_lc = get_linecol(i + 1)
+                    flag_end = get_linecol(i + 2)
+                    yield tkn.TokenInfo(BASH_TEST_TOKEN, '-', start_lc, end_lc, line_txt)
+                    yield tkn.TokenInfo(_NAME, flag_char, flag_lc, flag_end, line_txt)
+                    prev_name = flag_char; last_type = _NAME
+                    i += 2; continue
+
+        # General operator matching (longest match first)
+        op_m = _OP_RE.match(src, i)
+        if op_m:
+            op_str = op_m.group(0)
+            exact = _EXACT.get(op_str, _OP)
+            end_lc = get_linecol(i + len(op_str))
+            yield tkn.TokenInfo(exact, op_str, start_lc, end_lc, line_txt)
+            last_type = exact
+            if op_str in ('(', '[', '{'):
+                bracket_depth += 1
+            elif op_str in (')', ']', '}'):
+                bracket_depth = max(0, bracket_depth - 1)
+            i += len(op_str)
+            continue
+
+        # Unknown character
+        end_lc = get_linecol(i + 1)
+        yield tkn.TokenInfo(_ERRORTOKEN, c, start_lc, end_lc, line_txt)
+        last_type = _ERRORTOKEN; i += 1
+
+
+# ---------------------------------------------------------------------------
+# tokenize_string — kept for compatibility
+# ---------------------------------------------------------------------------
 def tokenize_string(s):
-    """Generator of tokens from the string"""
-    return tkn.tokenize(io.BytesIO(s.encode("utf-8")).readline)
+    """Tokenize a source string, returning a generator of TokenInfo."""
+    return _lex_impl(s)
 
 
-# NOTA: difference between NL and NEWLINE
-# NEWLINE is used at the end of a LOGICAL line ( which may consist of several physical lines)
-# NL is generated at the end of a PHYSICAL line, e.g:
-#   1.newlines that end lines that are continued after unclosed braces.
-#   2.newlines that end empty lines or lines that only have comments.
-
-
+# ---------------------------------------------------------------------------
+# Tokenizer class
+# ---------------------------------------------------------------------------
 class Tokenizer:
-    """An enhanced tokenizer that bundles comments with newline tokens as RichNL objects.
+    """Enhanced tokenizer that bundles comments with newlines as RichNL objects.
 
-    Handles three cases:
-    1. COMMENT + NL -> RichNL with comments (type=NL)
-    2. COMMENT + NEWLINE -> RichNL with comments (type=NEWLINE) for inline comments
-    3. Plain NL (blank lines) -> RichNL with is_blank=True (type=NL)
+    Replaces Python's tokenize module with a custom lexer (_lex_impl).
+    All synthetic tokens (TICK, DOLLAR, BASH_TEST, BASH_CMP, RANGE, RANGE_EXCL)
+    are emitted directly by the lexer with no preprocessing step.
     """
 
-    # Tick-attribute patterns: replace ' with __TICK__ sentinel so Python's tokenizer
-    # sees three separate NAME tokens (base, __TICK__, attr) instead of a string literal.
-    # __TICK__ is then converted to a TICK_TOKEN synthetic token in _eager_tokenize.
-    import re as _re
-    _TICK_RE = _re.compile(r"(\b[A-Za-z_]\w*)'([A-Za-z_]\w*)")
-    _SUBSCRIPT_TICK_RE = _re.compile(r"(\])'([A-Za-z_]\w*)")
-    _PAREN_TICK_RE = _re.compile(r"(\))'([A-Za-z_]\w*)")
-
-    # Range-operator patterns: the issue is that Python's tokenizer greedily
-    # merges a digit adjacent to '.' into a float literal, so:
-    #   '0..10'  ->  NUMBER('0.')  NUMBER('.10')   (broken)
-    #   'x..10'  ->  NAME('x')  OP('.')  NUMBER('.10')  (broken)
-    #   '0..y'   ->  NUMBER('0.')  OP('.')  NAME('y')   (broken)
-    # We insert a space on each side of '..' / '..<' when a digit is adjacent,
-    # before Python's tokenizer ever sees the source.
-    # Range operator patterns: replace '..' and '..<' with sentinels.
-    # Must match '..<' before '..' (longer first), and must not match '...'.
-    # Negative lookahead (?!\.) avoids matching '...' (ellipsis).
-    _RANGE_EXCL_RE = _re.compile(r'\.\.<')                  # '..<' -> __RANGE_EXCL__
-    _RANGE_INCL_RE = _re.compile(r'(?<!\.)\.\.(?![.<])')   # '..'  -> __RANGE__ (not '...' or '..<')
-
-    # Bashism patterns: rewrite bash-style argument/environment variables to
-    # safe identifier placeholders before Python's tokenizer sees them.
-    #
-    #   $#        -> __bash_argc__   (must come before $<digit> to beat '#' comment)
-    #   $@        -> __bash_args__
-    #   $0        -> __bash_arg0__
-    #   $1..$N    -> __bash_arg1__ .. __bash_argN__  (multi-digit supported)
-    #   $NAME     -> __bash_env_NAME__   (uppercase env var name)
-    #
-    # '$#' is the most dangerous: Python lexes '#' as a comment start, eating
-    # everything after '$' to end-of-line.  The regex replaces the whole '$#'
-    # before the tokenizer gets a chance to see it.
-    _BASH_ARGC_RE = _re.compile(r'\$#')
-    _BASH_ARGS_RE = _re.compile(r'\$@')
-    _BASH_ARG_RE  = _re.compile(r'\$([0-9]+)')
-    _BASH_ENV_RE  = _re.compile(r'\$([A-Z_][A-Z0-9_]*)')
-
-    # Bash file-test operators: '-e FILE', '-f FILE', etc.
-    # Must be preceded by a boolean-context keyword or '(' to avoid matching
-    # command-line flags like 'Csetup -e foo' inside shell: bodies.
-    _BASH_FILE_TEST_RE = _re.compile(r'(?:(?<=\bif\s)|(?<=\belif\s)|(?<=\bwhile\s)|(?<=\band\s)|(?<=\bor\s)|(?<=\bnot\s)|(?<=\())-([efdLrwxscbpS])(?=\s)')
-    # Bash file-comparison operators: FILE1 -nt FILE2 / FILE1 -ot FILE2
-    # Only match '-nt' and '-ot' surrounded by whitespace.
-    _BASH_FILE_NT_RE = _re.compile(r'(?<=\s)-nt(?=\s)')
-    _BASH_FILE_OT_RE = _re.compile(r'(?<=\s)-ot(?=\s)')
-
-    @staticmethod
-    def _preprocess_file_tests(s):
-        """Replace bash file-test and file-comparison operators with sentinels.
-
-        Mapping::
-
-            -e FILE  -> __BASH_TEST__ e FILE
-            -nt      -> __BASH_NT__
-            -ot      -> __BASH_OT__
-
-        _eager_tokenize converts the __BASH_*__ NAME tokens to synthetic tokens.
-        """
-        import re as _re2
-        _STR_RE = _re2.compile(r'("""[\s\S]*?"""|\'\'\'[\s\S]*?\'\'\'|"(?:[^"\\]|\\.)*"|\'(?:[^\'\\]|\\.)*\'|#[^\n]*)')
-        parts = _STR_RE.split(s)
-        for i in range(0, len(parts), 2):
-            parts[i] = Tokenizer._BASH_FILE_TEST_RE.sub(r'__BASH_TEST__ \1', parts[i])
-            parts[i] = Tokenizer._BASH_FILE_NT_RE.sub('__BASH_NT__', parts[i])
-            parts[i] = Tokenizer._BASH_FILE_OT_RE.sub('__BASH_OT__', parts[i])
-        return ''.join(parts)
-
-    @staticmethod
-    def _preprocess_bashisms(s):
-        """Replace bash dollar-variables with sentinels.
-
-        Mapping::
-
-            $#   -> __DOLLAR__ #
-            $@   -> __DOLLAR__ @
-            $0   -> __DOLLAR__ 0
-            $N   -> __DOLLAR__ N
-            $ENV -> __DOLLAR__ ENV
-
-        The __DOLLAR__ NAME sentinel is converted to DOLLAR_TOKEN in
-        _eager_tokenize; the following token carries the variable name/sigil.
-        '$#' must be replaced first to prevent '#' being lexed as a comment.
-        """
-        import re as _re_bash
-
-        def _substitute(text):
-            text = Tokenizer._BASH_ARGC_RE.sub('__DOLLAR__ __HASH__', text)
-            text = Tokenizer._BASH_ARGS_RE.sub('__DOLLAR__ __AT__', text)
-            text = Tokenizer._BASH_ARG_RE.sub(r'__DOLLAR__ \1', text)
-            text = Tokenizer._BASH_ENV_RE.sub(r'__DOLLAR__ \1', text)
-            return text
-
-        def _process_fstring(fstr):
-            out = []
-            depth = 0
-            i = 0
-            if fstr.startswith(('f"""', "f'''")):
-                prefix, i = fstr[:4], 4
-            else:
-                prefix, i = fstr[:2], 2
-            out.append(prefix)
-            while i < len(fstr):
-                c = fstr[i]
-                if c == '{' and i + 1 < len(fstr) and fstr[i + 1] == '{':
-                    out.append('{{'); i += 2; continue
-                if c == '}' and i + 1 < len(fstr) and fstr[i + 1] == '}':
-                    out.append('}}'); i += 2; continue
-                if c == '{':
-                    depth += 1; out.append(c); i += 1; continue
-                if c == '}' and depth > 0:
-                    depth -= 1; out.append(c); i += 1; continue
-                if depth > 0:
-                    j = i
-                    while i < len(fstr) and fstr[i] not in '{}':
-                        i += 1
-                    out.append(_substitute(fstr[j:i]))
-                else:
-                    out.append(c); i += 1
-            return ''.join(out)
-
-        string_re = _re_bash.compile(
-            r'(f"""[\s\S]*?"""|f\'\'\'[\s\S]*?\'\'\'|f"(?:[^"\\]|\\.)*"|f\'(?:[^\'\\]|\\.)*\'|'
-            r'"""[\s\S]*?"""|\'\'\'[\s\S]*?\'\'\'|"(?:[^"\\]|\\.)*"|\'(?:[^\'\\]|\\.)*\')'
-        )
-        parts = string_re.split(s)
-        out = []
-        for i, part in enumerate(parts):
-            if i % 2 == 1:
-                out.append(_process_fstring(part) if part.startswith('f') else part)
-            else:
-                out.append(_substitute(part))
-        return ''.join(out)
-
-    @staticmethod
-    def _preprocess_range_operators(s):
-        """Replace '..' and '..<' with __RANGE__/__RANGE_EXCL__ sentinels.
-
-        Eliminates all float-tokenizer ambiguity (e.g. '0..10' -> '0.__RANGE__10')
-        while keeping '...' (ellipsis) intact.  _eager_tokenize converts the
-        NAME sentinels to RANGE_TOKEN/RANGE_EXCL_TOKEN synthetic tokens.
-
-        Applied outside string literals only.
-        """
-        import re as _re2
-        _STR_CMT_RE = _re2.compile(
-            r'("""[\s\S]*?"""|\'\'\'[\s\S]*?\'\'\'|"(?:[^"\\]|\\.)*"|\'(?:[^\'\\]|\\.)*\'|#[^\n]*)'
-        )
-        parts = _STR_CMT_RE.split(s)
-        for i in range(0, len(parts), 2):
-            parts[i] = Tokenizer._RANGE_EXCL_RE.sub(' __RANGE_EXCL__ ', parts[i])
-            parts[i] = Tokenizer._RANGE_INCL_RE.sub(' __RANGE__ ', parts[i])
-        return ''.join(parts)
-
-    @staticmethod
-    def _preprocess_tick_attributes(s):
-        """Replace Ada-style tick (') with __TICK__ sentinel outside string literals.
-
-        x'Image      -> x __TICK__ Image
-        arr[i]'First -> arr[i] __TICK__ First
-        (expr)'Choice -> (expr) __TICK__ Choice
-
-        Python then tokenizes three separate NAME tokens; _eager_tokenize converts
-        NAME("__TICK__") into a TICK_TOKEN synthetic token.
-        """
-        import re as _re2
-        _DQ_CMT_RE = _re2.compile(r'("""[\s\S]*?"""|"(?:[^"\\]|\\.)*"|#[^\n]*)')
-        parts = _DQ_CMT_RE.split(s)
-        for i in range(0, len(parts), 2):
-            parts[i] = Tokenizer._PAREN_TICK_RE.sub(r'\1 __TICK__ \2', parts[i])
-            parts[i] = Tokenizer._SUBSCRIPT_TICK_RE.sub(r'\1 __TICK__ \2', parts[i])
-            parts[i] = Tokenizer._TICK_RE.sub(r'\1 __TICK__ \2', parts[i])
-        return ''.join(parts)
-
     def __init__(self, s):
-        s = self._preprocess_tick_attributes(s)
-        s = self._preprocess_range_operators(s)
-        s = self._preprocess_file_tests(s)
-        s = self._preprocess_bashisms(s)
-        self.tokengen = tokenize_string(s)
-        self.source_lines = s.splitlines(True)  # keep line endings for span extraction
-        self.tokens = []  # a list of 2-tuples (token, list_of_expected_but_failed_tokens)
-        self.pos = 0  # points to the next token, pos-1 points to the current token
-        self.memos = {}  # per-stream memoization cache
-        self._buffer = []  # Buffer for lookahead
-        self.multiline_brackets = {}  # (line,col) -> original source for multi-line bracket groups
-        self.farthest_pos = 0  # high-water mark for error reporting
-        self._eager_tokenize()  # pre-load all tokens, strip NLs inside brackets
+        self.source_lines = s.splitlines(True)
+        self.tokens = []
+        self.pos = 0
+        self.memos = {}
+        self._buffer = []
+        self.multiline_brackets = {}
+        self.farthest_pos = 0
+        self._raw_gen = _lex_impl(s)
+        self._eager_tokenize()
 
     def _eager_tokenize(self):
-        """Pre-load all tokens and strip RichNL tokens inside bracket contexts.
+        """Pre-load all tokens, bundle comments+NLs into RichNL, strip NLs inside brackets."""
+        raw_tokens = []
+        buf_idx = 0
 
-        Python emits NL (blank) tokens inside ( [ { for implicit line continuation.
-        These break the parser because it doesn't expect NL inside expressions.
-        We strip them here, once, before parsing begins.
-        """
-        # Read all raw tokens into self.tokens via get_new_token (without this method active)
-        while True:
-            tok = self._get_raw_token()
-            if tok is None:
+        # Collect all raw tokens
+        for tok in self._raw_gen:
+            raw_tokens.append(tok)
+            if tok.type == _ENDMARKER:
                 break
-            # Process into RichNL or plain token (same logic as get_new_token)
-            if tok.type == tkn.COMMENT:
-                next_tok = self._peek_raw_token()
-                if next_tok and next_tok.type in (tkn.NL, tkn.NEWLINE):
-                    next_tok = self._get_raw_token()
-                    rich_nl = RichNL(next_tok, [('comment', tok.string, tok.start[1])], is_blank=False)
-                    self.tokens.append((rich_nl, []))
+
+        # First pass: bundle COMMENT+NL into RichNL
+        bundled = []
+        j = 0
+        while j < len(raw_tokens):
+            tok = raw_tokens[j]
+            if tok.type == _COMMENT:
+                # Look ahead for NL/NEWLINE
+                if j + 1 < len(raw_tokens) and raw_tokens[j+1].type in (_NL, _NEWLINE):
+                    nl_tok = raw_tokens[j+1]
+                    rich = RichNL(nl_tok, [('comment', tok.string, tok.start[1])], is_blank=False)
+                    bundled.append((rich, []))
+                    j += 2
+                    continue
                 else:
-                    self.tokens.append((tok, []))
-            elif tok.type == tkn.NL:
-                self.tokens.append((RichNL(tok, [], is_blank=True), []))
-            elif tok.type == tkn.NEWLINE:
-                self.tokens.append((RichNL(tok, [], is_blank=False), []))
-            elif tok.type == tkn.NAME and tok.string == "__TICK__":
-                self.tokens.append((tkn.TokenInfo(TICK_TOKEN, "'", tok.start, tok.end, tok.line), []))
-            elif tok.type == tkn.NAME and tok.string == "__DOLLAR__":
-                self.tokens.append((tkn.TokenInfo(DOLLAR_TOKEN, "$", tok.start, tok.end, tok.line), []))
-            elif tok.type == tkn.NAME and tok.string == "__HASH__":
-                # $# — emitted as NAME("#") following DOLLAR_TOKEN
-                self.tokens.append((tkn.TokenInfo(tkn.NAME, "#", tok.start, tok.end, tok.line), []))
-            elif tok.type == tkn.NAME and tok.string == "__AT__":
-                # $@ — emitted as NAME("@") following DOLLAR_TOKEN
-                self.tokens.append((tkn.TokenInfo(tkn.NAME, "@", tok.start, tok.end, tok.line), []))
-            elif tok.type == tkn.NAME and tok.string == "__BASH_TEST__":
-                self.tokens.append((tkn.TokenInfo(BASH_TEST_TOKEN, "-", tok.start, tok.end, tok.line), []))
-            elif tok.type == tkn.NAME and tok.string == "__BASH_NT__":
-                self.tokens.append((tkn.TokenInfo(BASH_CMP_TOKEN, "-nt", tok.start, tok.end, tok.line), []))
-            elif tok.type == tkn.NAME and tok.string == "__BASH_OT__":
-                self.tokens.append((tkn.TokenInfo(BASH_CMP_TOKEN, "-ot", tok.start, tok.end, tok.line), []))
-            elif tok.type == tkn.NAME and tok.string == "__RANGE__":
-                self.tokens.append((tkn.TokenInfo(RANGE_TOKEN, "..", tok.start, tok.end, tok.line), []))
-            elif tok.type == tkn.NAME and tok.string == "__RANGE_EXCL__":
-                self.tokens.append((tkn.TokenInfo(RANGE_EXCL_TOKEN, "..<", tok.start, tok.end, tok.line), []))
+                    bundled.append((tok, []))
+            elif tok.type == _NL:
+                bundled.append((RichNL(tok, [], is_blank=True), []))
+            elif tok.type == _NEWLINE:
+                bundled.append((RichNL(tok, [], is_blank=False), []))
             else:
-                self.tokens.append((tok, []))
-            if tok.type == 0:  # ENDMARKER
-                break
+                bundled.append((tok, []))
+            j += 1
 
-        # Now strip RichNL tokens inside bracket depth > 0
-        # and capture original source text for multi-line bracket groups
-        bracket_stack = []  # stack of (open_tok, had_nl)
+        # Second pass: strip NLs inside brackets, track multiline bracket spans
+        bracket_stack = []
         depth = 0
         filtered = []
-        for tok, meta in self.tokens:
+        for tok, meta in bundled:
             if hasattr(tok, 'string') and not isinstance(tok, RichNL):
-                # Skip FSTRING_MIDDLE tokens: their string content is literal text
-                # (e.g. '(' in f"({x})"), not actual bracket tokens.
-                import token as _tok_mod
-                _is_fstring_middle = hasattr(tok, 'type') and tok.type == _tok_mod.FSTRING_MIDDLE
-                if not _is_fstring_middle and tok.string in ('(', '[', '{'):
+                import token as _tm
+                is_fmid = hasattr(tok, 'type') and tok.type == getattr(_tm, 'FSTRING_MIDDLE', -1)
+                if not is_fmid and tok.string in ('(', '[', '{'):
                     depth += 1
                     bracket_stack.append((tok, False))
-                elif not _is_fstring_middle and tok.string in (')', ']', '}'):
+                elif not is_fmid and tok.string in (')', ']', '}'):
                     depth = max(0, depth - 1)
                     if bracket_stack:
                         open_tok, had_nl = bracket_stack.pop()
@@ -406,46 +1004,28 @@ class Tokenizer:
             if depth > 0 and isinstance(tok, RichNL):
                 if bracket_stack:
                     bracket_stack[-1] = (bracket_stack[-1][0], True)
-                continue  # skip NLs inside brackets
+                continue
             filtered.append((tok, meta))
         self.tokens = filtered
 
     def _extract_source_span(self, open_tok, close_tok):
-        """Extract original source text from opening to closing bracket (inclusive)."""
-        start_line, start_col = open_tok.start  # 1-based line
-        end_line, end_col = close_tok.end        # 1-based line, end col is exclusive
+        start_line, start_col = open_tok.start
+        end_line, end_col = close_tok.end
         if start_line == end_line:
             return self.source_lines[start_line - 1][start_col:end_col]
         parts = [self.source_lines[start_line - 1][start_col:]]
-        for i in range(start_line, end_line - 1):
-            parts.append(self.source_lines[i])
+        for idx in range(start_line, end_line - 1):
+            parts.append(self.source_lines[idx])
         parts.append(self.source_lines[end_line - 1][:end_col])
         return ''.join(parts)
 
     def mark(self):
-        return self.pos  # points to the next token!
+        return self.pos
 
     def reset(self, pos):
-        self.pos = pos  # points to the next token!
-
-    def _get_raw_token(self):
-        """Get next raw token from the generator."""
-        if self._buffer:
-            return self._buffer.pop(0)
-        try:
-            return next(self.tokengen)
-        except StopIteration:
-            return None
-
-    def _peek_raw_token(self):
-        """Peek at next raw token without consuming."""
-        tok = self._get_raw_token()
-        if tok is not None:
-            self._buffer.append(tok)
-        return tok
+        self.pos = pos
 
     def get_new_token(self):
-        """Return the next token from the pre-loaded token list."""
         if self.pos < len(self.tokens):
             token = self.tokens[self.pos][0]
             if token is not None:
@@ -466,29 +1046,19 @@ class Tokenizer:
         return self.tokens[self.pos - 1][0]
 
     def get_text(self, pos):
-        """Return the text between given token position and current position."""
-        return " ".join(tk[0].string for tk in self.tokens[pos : self.pos])
+        return " ".join(tk[0].string for tk in self.tokens[pos:self.pos])
 
-    ############## ERROR HANDLING #########################
     def get_farthest_token(self):
-        """Return (token, expected_list) at the farthest position reached."""
         idx = min(self.farthest_pos, len(self.tokens) - 1)
         return self.tokens[idx]
 
     def format_error(self):
-        """Format a user-friendly error message from the farthest failure point.
-
-        Scans tokens near the farthest position to find the one with the most
-        expected-token annotations, giving the most informative error message.
-        """
-        # Find the token with the richest expected-token info near farthest_pos
         best_idx = min(self.farthest_pos, len(self.tokens) - 1)
         best_expected = self.tokens[best_idx][1]
-        # Search backwards from farthest_pos for the token with most expected info
-        for i in range(best_idx, max(best_idx - 3, -1), -1):
-            if i < len(self.tokens) and len(self.tokens[i][1]) > len(best_expected):
-                best_idx = i
-                best_expected = self.tokens[i][1]
+        for idx in range(best_idx, max(best_idx - 3, -1), -1):
+            if idx < len(self.tokens) and len(self.tokens[idx][1]) > len(best_expected):
+                best_idx = idx
+                best_expected = self.tokens[idx][1]
         tok = self.tokens[best_idx][0]
         line, col = tok.start if hasattr(tok, 'start') else (0, 0)
         got = repr(tok.string) if hasattr(tok, 'string') and tok.string else tok.__class__.__name__
@@ -499,7 +1069,6 @@ class Tokenizer:
         return msg
 
     def set_failed_token(self, expected_token_as_string):
-        # the current token is at position (self.pos-1)
         self.tokens[self.pos - 1][1].append(expected_token_as_string)
 
     def __iter__(self):
@@ -511,7 +1080,10 @@ class Tokenizer:
             raise StopIteration
         return tok
 
-# --- Module-level context for current tokenizer ---
+
+# ---------------------------------------------------------------------------
+# Module-level context tracker
+# ---------------------------------------------------------------------------
 _current_tokenizer = None
 
 def set_current_tokenizer(t):
@@ -523,23 +1095,27 @@ def get_multiline_brackets():
         return getattr(_current_tokenizer, 'multiline_brackets', {})
     return {}
 
-######################### HEK ADDITION ############################
+
+# ---------------------------------------------------------------------------
+# Debug helper
+# ---------------------------------------------------------------------------
 def test_tokenizer(source):
     mytokenizer = Tokenizer(source)
     prev_line_number = -1
     while True:
         token = mytokenizer.get_new_token()
         if token is None:
-            print("{:-^60s}".format(f"OUT"))
+            print("{:-^60s}".format("OUT"))
             break
-        line_number = token.start[0]
+        line_number = token.start[0] if hasattr(token, 'start') else 0
         if line_number > prev_line_number:
             print("{:*^60s}".format(f" LINE {line_number} "))
         print(repr(token))
-        if hasattr(token, 'type') and token.type == tkn.ENDMARKER:
-            print("{:-^60s}".format(f"OUT"))
+        if hasattr(token, 'type') and token.type == _ENDMARKER:
+            print("{:-^60s}".format("OUT"))
             break
         prev_line_number = line_number
+
 
 def _tok_seq(source):
     """Return list of (type, string) pairs for all non-whitespace tokens."""
@@ -547,17 +1123,21 @@ def _tok_seq(source):
     result = []
     while True:
         tok = t.get_new_token()
-        if tok is None or tok.type == tkn.ENDMARKER:
+        if tok is None or tok.type == _ENDMARKER:
             break
-        if tok.type in (tkn.ENCODING, tkn.NEWLINE, tkn.NL, tkn.INDENT, tkn.DEDENT):
+        if tok.type in (_ENCODING, _NEWLINE, _NL, _INDENT, _DEDENT):
             continue
         if hasattr(tok, 'type'):
             result.append((tok.type, tok.string))
     return result
 
 
+# ---------------------------------------------------------------------------
+# Unit tests
+# ---------------------------------------------------------------------------
 if __name__ == "__main__":
-    import unittest
+    import platform, unittest
+    print(f"Python version: {platform.python_version()}")
 
     class TestSyntheticTokens(unittest.TestCase):
 
@@ -632,7 +1212,6 @@ if __name__ == "__main__":
             self.assertIn((BASH_TEST_TOKEN, "-"), toks)
 
         def test_bash_test_not_in_arbitrary_context(self):
-            # '-e' not preceded by if/elif/while/and/or/not/( — should NOT become BASH_TEST
             toks = _tok_seq("x = func(-e, y)\n")
             self.assertNotIn(BASH_TEST_TOKEN, [t for t, _ in toks])
 
@@ -675,7 +1254,6 @@ if __name__ == "__main__":
             self.assertIn((RANGE_EXCL_TOKEN, "..<"), toks)
 
         def test_range_not_ellipsis(self):
-            # '...' must NOT become a range token
             toks = _tok_seq("x = ...\n")
             types = [t for t, _ in toks]
             self.assertNotIn(RANGE_TOKEN, types)
@@ -688,7 +1266,6 @@ if __name__ == "__main__":
             self.assertNotIn(RANGE_EXCL_TOKEN, types)
 
         def test_range_excl_not_matched_as_incl(self):
-            # '..<' must produce RANGE_EXCL_TOKEN, NOT RANGE_TOKEN + LT
             toks = _tok_seq("0..<5\n")
             types = [t for t, _ in toks]
             self.assertIn(RANGE_EXCL_TOKEN, types)
