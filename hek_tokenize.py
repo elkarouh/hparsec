@@ -688,6 +688,13 @@ def _lex_impl(source):
             ws_m = _WS_RE.match(src, i)
             indent_str = ws_m.group(0) if ws_m else ''
             indent = len(indent_str.expandtabs(8))
+            # Peek past whitespace: if this is a comment-only or blank line,
+            # skip INDENT/DEDENT entirely (Python's tokenizer does the same).
+            peek_i = i + len(indent_str)
+            peek_c = src[peek_i] if peek_i < n else ''
+            if peek_c in ('\n', '\r', '#'):
+                i = peek_i  # skip the leading whitespace; let comment/NL handler fire
+                continue
             i += len(indent_str)
             if bracket_depth == 0:
                 prev_ind = indent_stack[-1]
