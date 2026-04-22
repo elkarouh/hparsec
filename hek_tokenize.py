@@ -161,8 +161,8 @@ class Tokenizer:
     # Range operator patterns: replace '..' and '..<' with sentinels.
     # Must match '..<' before '..' (longer first), and must not match '...'.
     # Negative lookahead (?!\.) avoids matching '...' (ellipsis).
-    _RANGE_EXCL_RE = _re.compile(r'\.\.<')           # '..<' -> __RANGE_EXCL__
-    _RANGE_INCL_RE = _re.compile(r'\.\.(?![\.<])')   # '..'  -> __RANGE__ (not '...' or '..<')
+    _RANGE_EXCL_RE = _re.compile(r'\.\.<')                  # '..<' -> __RANGE_EXCL__
+    _RANGE_INCL_RE = _re.compile(r'(?<!\.)\.\.(?![.<])')   # '..'  -> __RANGE__ (not '...' or '..<')
 
     # Bashism patterns: rewrite bash-style argument/environment variables to
     # safe identifier placeholders before Python's tokenizer sees them.
@@ -541,34 +541,157 @@ def test_tokenizer(source):
             break
         prev_line_number = line_number
 
+def _tok_seq(source):
+    """Return list of (type, string) pairs for all non-whitespace tokens."""
+    t = Tokenizer(source)
+    result = []
+    while True:
+        tok = t.get_new_token()
+        if tok is None or tok.type == tkn.ENDMARKER:
+            break
+        if tok.type in (tkn.ENCODING, tkn.NEWLINE, tkn.NL, tkn.INDENT, tkn.DEDENT):
+            continue
+        if hasattr(tok, 'type'):
+            result.append((tok.type, tok.string))
+    return result
+
+
 if __name__ == "__main__":
-    # Test cases for the three issues
+    import unittest
 
-    print("="*60)
-    print("TEST 1: Blank lines between statements")
-    print("="*60)
-    pysrc1 = """x = 1
+    class TestSyntheticTokens(unittest.TestCase):
 
-y = 2
-"""
-    test_tokenizer(pysrc1)
+        # ------------------------------------------------------------------ TICK
+        def test_tick_bare_name(self):
+            toks = _tok_seq("x'Image\n")
+            self.assertIn((TICK_TOKEN, "'"), toks)
+            types = [t for t, _ in toks]
+            tick_idx = types.index(TICK_TOKEN)
+            self.assertEqual(toks[tick_idx + 1][1], "Image")
 
-    print("\n" + "="*60)
-    print("TEST 2: Inline comments")
-    print("="*60)
-    pysrc2 = """x = 1  # inline
-y = 2
-"""
-    test_tokenizer(pysrc2)
+        def test_tick_subscript(self):
+            toks = _tok_seq("arr[i]'First\n")
+            self.assertIn((TICK_TOKEN, "'"), toks)
 
-    print("\n" + "="*60)
-    print("TEST 3: Multiple blank lines")
-    print("="*60)
-    pysrc3 = """# header
+        def test_tick_paren(self):
+            toks = _tok_seq("(expr)'Choice\n")
+            self.assertIn((TICK_TOKEN, "'"), toks)
 
-import os
+        def test_tick_inside_string_untouched(self):
+            toks = _tok_seq("s = \"it's fine\"\n")
+            self.assertNotIn(TICK_TOKEN, [t for t, _ in toks])
 
-def f():
-    pass
-"""
-    test_tokenizer(pysrc3)
+        # ------------------------------------------------------------------ DOLLAR
+        def test_dollar_zero(self):
+            toks = _tok_seq("$0\n")
+            self.assertIn((DOLLAR_TOKEN, "$"), toks)
+            strings = [s for _, s in toks]
+            self.assertIn("0", strings)
+
+        def test_dollar_positional(self):
+            toks = _tok_seq("$1\n")
+            self.assertIn((DOLLAR_TOKEN, "$"), toks)
+            strings = [s for _, s in toks]
+            self.assertIn("1", strings)
+
+        def test_dollar_at(self):
+            toks = _tok_seq("$@\n")
+            self.assertIn((DOLLAR_TOKEN, "$"), toks)
+            strings = [s for _, s in toks]
+            self.assertIn("@", strings)
+
+        def test_dollar_hash(self):
+            toks = _tok_seq("$#\n")
+            self.assertIn((DOLLAR_TOKEN, "$"), toks)
+            strings = [s for _, s in toks]
+            self.assertIn("#", strings)
+
+        def test_dollar_env(self):
+            toks = _tok_seq("$HOME\n")
+            self.assertIn((DOLLAR_TOKEN, "$"), toks)
+            strings = [s for _, s in toks]
+            self.assertIn("HOME", strings)
+
+        def test_dollar_inside_string_untouched(self):
+            toks = _tok_seq('"hello $1 world"\n')
+            self.assertNotIn(DOLLAR_TOKEN, [t for t, _ in toks])
+
+        # ------------------------------------------------------------------ BASH_TEST
+        def test_bash_test_e(self):
+            toks = _tok_seq("if -e path:\n    pass\n")
+            self.assertIn((BASH_TEST_TOKEN, "-"), toks)
+            strings = [s for _, s in toks]
+            self.assertIn("e", strings)
+
+        def test_bash_test_d(self):
+            toks = _tok_seq("if -d path:\n    pass\n")
+            self.assertIn((BASH_TEST_TOKEN, "-"), toks)
+
+        def test_bash_test_f(self):
+            toks = _tok_seq("if -f path:\n    pass\n")
+            self.assertIn((BASH_TEST_TOKEN, "-"), toks)
+
+        def test_bash_test_not_in_arbitrary_context(self):
+            # '-e' not preceded by if/elif/while/and/or/not/( — should NOT become BASH_TEST
+            toks = _tok_seq("x = func(-e, y)\n")
+            self.assertNotIn(BASH_TEST_TOKEN, [t for t, _ in toks])
+
+        # ------------------------------------------------------------------ BASH_CMP
+        def test_bash_cmp_nt(self):
+            toks = _tok_seq("f1 -nt f2\n")
+            self.assertIn((BASH_CMP_TOKEN, "-nt"), toks)
+
+        def test_bash_cmp_ot(self):
+            toks = _tok_seq("f1 -ot f2\n")
+            self.assertIn((BASH_CMP_TOKEN, "-ot"), toks)
+
+        def test_bash_cmp_inside_string_untouched(self):
+            toks = _tok_seq('"file -nt other"\n')
+            self.assertNotIn(BASH_CMP_TOKEN, [t for t, _ in toks])
+
+        # ------------------------------------------------------------------ RANGE
+        def test_range_incl_name_name(self):
+            toks = _tok_seq("x..y\n")
+            self.assertIn((RANGE_TOKEN, ".."), toks)
+
+        def test_range_incl_digit_digit(self):
+            toks = _tok_seq("1..10\n")
+            self.assertIn((RANGE_TOKEN, ".."), toks)
+
+        def test_range_incl_digit_name(self):
+            toks = _tok_seq("0..n\n")
+            self.assertIn((RANGE_TOKEN, ".."), toks)
+
+        def test_range_incl_name_digit(self):
+            toks = _tok_seq("lo..10\n")
+            self.assertIn((RANGE_TOKEN, ".."), toks)
+
+        def test_range_excl_name_name(self):
+            toks = _tok_seq("x..<y\n")
+            self.assertIn((RANGE_EXCL_TOKEN, "..<"), toks)
+
+        def test_range_excl_digit_digit(self):
+            toks = _tok_seq("0..<10\n")
+            self.assertIn((RANGE_EXCL_TOKEN, "..<"), toks)
+
+        def test_range_not_ellipsis(self):
+            # '...' must NOT become a range token
+            toks = _tok_seq("x = ...\n")
+            types = [t for t, _ in toks]
+            self.assertNotIn(RANGE_TOKEN, types)
+            self.assertNotIn(RANGE_EXCL_TOKEN, types)
+
+        def test_range_inside_string_untouched(self):
+            toks = _tok_seq('"1..10"\n')
+            types = [t for t, _ in toks]
+            self.assertNotIn(RANGE_TOKEN, types)
+            self.assertNotIn(RANGE_EXCL_TOKEN, types)
+
+        def test_range_excl_not_matched_as_incl(self):
+            # '..<' must produce RANGE_EXCL_TOKEN, NOT RANGE_TOKEN + LT
+            toks = _tok_seq("0..<5\n")
+            types = [t for t, _ in toks]
+            self.assertIn(RANGE_EXCL_TOKEN, types)
+            self.assertNotIn(RANGE_TOKEN, types)
+
+    unittest.main(verbosity=2)
