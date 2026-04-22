@@ -6,6 +6,8 @@ TICK_TOKEN      = 90   # Ada-style tick:  x'Image, arr[i]'First
 DOLLAR_TOKEN    = 91   # Bash dollar var: $#, $@, $0, $N, $NAME
 BASH_TEST_TOKEN = 92   # Bash file test:  -e, -f, -d, ...
 BASH_CMP_TOKEN  = 93   # Bash file cmp:   -nt, -ot
+RANGE_TOKEN     = 94   # Ada/Nim range:   lo .. hi
+RANGE_EXCL_TOKEN = 95  # exclusive range: lo ..< hi
 
 #################################### UTILS ########################################
 if __name__ == "__main__":
@@ -156,10 +158,11 @@ class Tokenizer:
     #   '0..y'   ->  NUMBER('0.')  OP('.')  NAME('y')   (broken)
     # We insert a space on each side of '..' / '..<' when a digit is adjacent,
     # before Python's tokenizer ever sees the source.
-    #   Pass 1:  digit immediately before '..' -> insert space between them
-    #   Pass 2:  digit immediately after  '..' -> insert space between them
-    _RANGE_LEFT_RE  = _re.compile(r'(\d)(\.\.<?)')   # '0..'  -> '0 ..'
-    _RANGE_RIGHT_RE = _re.compile(r'(\.\.<?)(\d)')   # '..10' -> '.. 10'
+    # Range operator patterns: replace '..' and '..<' with sentinels.
+    # Must match '..<' before '..' (longer first), and must not match '...'.
+    # Negative lookahead (?!\.) avoids matching '...' (ellipsis).
+    _RANGE_EXCL_RE = _re.compile(r'\.\.<')           # '..<' -> __RANGE_EXCL__
+    _RANGE_INCL_RE = _re.compile(r'\.\.(?![\.<])')   # '..'  -> __RANGE__ (not '...' or '..<')
 
     # Bashism patterns: rewrite bash-style argument/environment variables to
     # safe identifier placeholders before Python's tokenizer sees them.
@@ -276,21 +279,23 @@ class Tokenizer:
 
     @staticmethod
     def _preprocess_range_operators(s):
-        """Insert spaces around '..' and '..<' when a digit is directly adjacent.
+        """Replace '..' and '..<' with __RANGE__/__RANGE_EXCL__ sentinels.
 
-        Python's tokenizer merges digits and dots into floats (e.g. '0.' and
-        '.10'), which breaks range literals written without spaces.  Two regex
-        passes cover all problem combinations::
+        Eliminates all float-tokenizer ambiguity (e.g. '0..10' -> '0.__RANGE__10')
+        while keeping '...' (ellipsis) intact.  _eager_tokenize converts the
+        NAME sentinels to RANGE_TOKEN/RANGE_EXCL_TOKEN synthetic tokens.
 
-            0..10   -> 0 .. 10
-            0..<10  -> 0 ..< 10
-            x..10   -> x.. 10
-            0..y    -> 0 ..y    (right side fine: '..y' = OP OP NAME)
-            x..y    -> x..y     (both sides fine already)
+        Applied outside string literals only.
         """
-        s = Tokenizer._RANGE_LEFT_RE.sub(r'\1 \2', s)
-        s = Tokenizer._RANGE_RIGHT_RE.sub(r'\1 \2', s)
-        return s
+        import re as _re2
+        _STR_CMT_RE = _re2.compile(
+            r'("""[\s\S]*?"""|\'\'\'[\s\S]*?\'\'\'|"(?:[^"\\]|\\.)*"|\'(?:[^\'\\]|\\.)*\'|#[^\n]*)'
+        )
+        parts = _STR_CMT_RE.split(s)
+        for i in range(0, len(parts), 2):
+            parts[i] = Tokenizer._RANGE_EXCL_RE.sub(' __RANGE_EXCL__ ', parts[i])
+            parts[i] = Tokenizer._RANGE_INCL_RE.sub(' __RANGE__ ', parts[i])
+        return ''.join(parts)
 
     @staticmethod
     def _preprocess_tick_attributes(s):
@@ -368,6 +373,10 @@ class Tokenizer:
                 self.tokens.append((tkn.TokenInfo(BASH_CMP_TOKEN, "-nt", tok.start, tok.end, tok.line), []))
             elif tok.type == tkn.NAME and tok.string == "__BASH_OT__":
                 self.tokens.append((tkn.TokenInfo(BASH_CMP_TOKEN, "-ot", tok.start, tok.end, tok.line), []))
+            elif tok.type == tkn.NAME and tok.string == "__RANGE__":
+                self.tokens.append((tkn.TokenInfo(RANGE_TOKEN, "..", tok.start, tok.end, tok.line), []))
+            elif tok.type == tkn.NAME and tok.string == "__RANGE_EXCL__":
+                self.tokens.append((tkn.TokenInfo(RANGE_EXCL_TOKEN, "..<", tok.start, tok.end, tok.line), []))
             else:
                 self.tokens.append((tok, []))
             if tok.type == 0:  # ENDMARKER
