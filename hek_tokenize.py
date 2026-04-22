@@ -1,9 +1,11 @@
 import tokenize as tkn
 from textwrap import dedent
 
-# Synthetic token type for Ada-style tick attributes (e.g. x'Image, arr[i]'First).
-# Chosen above Python's token range (which tops out around 62).
-TICK_TOKEN = 90
+# Synthetic token types (above Python's token range which tops out around 62).
+TICK_TOKEN      = 90   # Ada-style tick:  x'Image, arr[i]'First
+DOLLAR_TOKEN    = 91   # Bash dollar var: $#, $@, $0, $N, $NAME
+BASH_TEST_TOKEN = 92   # Bash file test:  -e, -f, -d, ...
+BASH_CMP_TOKEN  = 93   # Bash file cmp:   -nt, -ot
 
 #################################### UTILS ########################################
 if __name__ == "__main__":
@@ -187,70 +189,54 @@ class Tokenizer:
 
     @staticmethod
     def _preprocess_file_tests(s):
-        """Replace bash file-test operators with safe identifier placeholders.
+        """Replace bash file-test and file-comparison operators with sentinels.
 
         Mapping::
 
-            -e FILE  -> __bash_test_e__ FILE
-            -f FILE  -> __bash_test_f__ FILE
-            -d FILE  -> __bash_test_d__ FILE
-            -L FILE  -> __bash_test_L__ FILE
-            -r FILE  -> __bash_test_r__ FILE
-            -w FILE  -> __bash_test_w__ FILE
-            -x FILE  -> __bash_test_x__ FILE
-            -s FILE  -> __bash_test_s__ FILE
-            -c FILE  -> __bash_test_c__ FILE
-            -b FILE  -> __bash_test_b__ FILE
-            -p FILE  -> __bash_test_p__ FILE
-            -S FILE  -> __bash_test_S__ FILE
-            -nt      -> __bash_nt__
-            -ot      -> __bash_ot__
+            -e FILE  -> __BASH_TEST__ e FILE
+            -nt      -> __BASH_NT__
+            -ot      -> __BASH_OT__
+
+        _eager_tokenize converts the __BASH_*__ NAME tokens to synthetic tokens.
         """
         import re as _re2
-        # Split into alternating non-string / string-literal+comment segments and only
-        # apply substitutions outside strings and comments.
         _STR_RE = _re2.compile(r'("""[\s\S]*?"""|\'\'\'[\s\S]*?\'\'\'|"(?:[^"\\]|\\.)*"|\'(?:[^\'\\]|\\.)*\'|#[^\n]*)')
         parts = _STR_RE.split(s)
-        for i in range(0, len(parts), 2):  # even indices are outside strings
-            parts[i] = Tokenizer._BASH_FILE_TEST_RE.sub(r'__bash_test_\1__', parts[i])
-            parts[i] = Tokenizer._BASH_FILE_NT_RE.sub('__bash_nt__', parts[i])
-            parts[i] = Tokenizer._BASH_FILE_OT_RE.sub('__bash_ot__', parts[i])
+        for i in range(0, len(parts), 2):
+            parts[i] = Tokenizer._BASH_FILE_TEST_RE.sub(r'__BASH_TEST__ \1', parts[i])
+            parts[i] = Tokenizer._BASH_FILE_NT_RE.sub('__BASH_NT__', parts[i])
+            parts[i] = Tokenizer._BASH_FILE_OT_RE.sub('__BASH_OT__', parts[i])
         return ''.join(parts)
 
     @staticmethod
     def _preprocess_bashisms(s):
-        """Replace bash-style special variables with safe identifier placeholders.
-
-        The substitutions are reversed in to_py() / to_nim() on the IDENTIFIER
-        nodes that carry these placeholder strings.
+        """Replace bash dollar-variables with sentinels.
 
         Mapping::
 
-            $#        -> __bash_argc__
-            $@        -> __bash_args__
-            $0        -> __bash_arg0__
-            $1 .. $9  -> __bash_arg1__ .. __bash_arg9__
-            $NAME     -> __bash_env_NAME__   (all-caps env var names)
+            $#   -> __DOLLAR__ #
+            $@   -> __DOLLAR__ @
+            $0   -> __DOLLAR__ 0
+            $N   -> __DOLLAR__ N
+            $ENV -> __DOLLAR__ ENV
 
-        The order of substitutions matters: ``$#`` must be replaced first
-        because Python's tokenizer would otherwise consume ``#`` and
-        everything following it as a comment.
+        The __DOLLAR__ NAME sentinel is converted to DOLLAR_TOKEN in
+        _eager_tokenize; the following token carries the variable name/sigil.
+        '$#' must be replaced first to prevent '#' being lexed as a comment.
         """
         import re as _re_bash
 
         def _substitute(text):
-            text = Tokenizer._BASH_ARGC_RE.sub('__bash_argc__', text)
-            text = Tokenizer._BASH_ARGS_RE.sub('__bash_args__', text)
-            text = Tokenizer._BASH_ARG_RE.sub(r'__bash_arg\1__', text)
-            text = Tokenizer._BASH_ENV_RE.sub(r'__bash_env_\1__', text)
+            text = Tokenizer._BASH_ARGC_RE.sub('__DOLLAR__ __HASH__', text)
+            text = Tokenizer._BASH_ARGS_RE.sub('__DOLLAR__ __AT__', text)
+            text = Tokenizer._BASH_ARG_RE.sub(r'__DOLLAR__ \1', text)
+            text = Tokenizer._BASH_ENV_RE.sub(r'__DOLLAR__ \1', text)
             return text
 
         def _process_fstring(fstr):
-            # Substitute inside {expr} placeholders but leave bare text alone.
             out = []
             depth = 0
             i = 0
-            # skip opening quote(s): f" or f' or f""" or f'''
             if fstr.startswith(('f"""', "f'''")):
                 prefix, i = fstr[:4], 4
             else:
@@ -263,22 +249,18 @@ class Tokenizer:
                 if c == '}' and i + 1 < len(fstr) and fstr[i + 1] == '}':
                     out.append('}}'); i += 2; continue
                 if c == '{':
-                    depth += 1
-                    out.append(c); i += 1; continue
+                    depth += 1; out.append(c); i += 1; continue
                 if c == '}' and depth > 0:
-                    depth -= 1
-                    out.append(c); i += 1; continue
+                    depth -= 1; out.append(c); i += 1; continue
                 if depth > 0:
-                    # inside a placeholder expression — collect and substitute
                     j = i
-                    while i < len(fstr) and not (fstr[i] in '{}'):
+                    while i < len(fstr) and fstr[i] not in '{}':
                         i += 1
                     out.append(_substitute(fstr[j:i]))
                 else:
                     out.append(c); i += 1
             return ''.join(out)
 
-        # Split on string literals (f-strings and plain strings).
         string_re = _re_bash.compile(
             r'(f"""[\s\S]*?"""|f\'\'\'[\s\S]*?\'\'\'|f"(?:[^"\\]|\\.)*"|f\'(?:[^\'\\]|\\.)*\'|'
             r'"""[\s\S]*?"""|\'\'\'[\s\S]*?\'\'\'|"(?:[^"\\]|\\.)*"|\'(?:[^\'\\]|\\.)*\')'
@@ -286,11 +268,8 @@ class Tokenizer:
         parts = string_re.split(s)
         out = []
         for i, part in enumerate(parts):
-            if i % 2 == 1:  # inside a string literal
-                if part.startswith('f'):
-                    out.append(_process_fstring(part))
-                else:
-                    out.append(part)  # plain string — leave $ unchanged
+            if i % 2 == 1:
+                out.append(_process_fstring(part) if part.startswith('f') else part)
             else:
                 out.append(_substitute(part))
         return ''.join(out)
@@ -374,9 +353,21 @@ class Tokenizer:
             elif tok.type == tkn.NEWLINE:
                 self.tokens.append((RichNL(tok, [], is_blank=False), []))
             elif tok.type == tkn.NAME and tok.string == "__TICK__":
-                # Convert __TICK__ sentinel to synthetic TICK_TOKEN
-                tick_tok = tkn.TokenInfo(TICK_TOKEN, "'", tok.start, tok.end, tok.line)
-                self.tokens.append((tick_tok, []))
+                self.tokens.append((tkn.TokenInfo(TICK_TOKEN, "'", tok.start, tok.end, tok.line), []))
+            elif tok.type == tkn.NAME and tok.string == "__DOLLAR__":
+                self.tokens.append((tkn.TokenInfo(DOLLAR_TOKEN, "$", tok.start, tok.end, tok.line), []))
+            elif tok.type == tkn.NAME and tok.string == "__HASH__":
+                # $# — emitted as NAME("#") following DOLLAR_TOKEN
+                self.tokens.append((tkn.TokenInfo(tkn.NAME, "#", tok.start, tok.end, tok.line), []))
+            elif tok.type == tkn.NAME and tok.string == "__AT__":
+                # $@ — emitted as NAME("@") following DOLLAR_TOKEN
+                self.tokens.append((tkn.TokenInfo(tkn.NAME, "@", tok.start, tok.end, tok.line), []))
+            elif tok.type == tkn.NAME and tok.string == "__BASH_TEST__":
+                self.tokens.append((tkn.TokenInfo(BASH_TEST_TOKEN, "-", tok.start, tok.end, tok.line), []))
+            elif tok.type == tkn.NAME and tok.string == "__BASH_NT__":
+                self.tokens.append((tkn.TokenInfo(BASH_CMP_TOKEN, "-nt", tok.start, tok.end, tok.line), []))
+            elif tok.type == tkn.NAME and tok.string == "__BASH_OT__":
+                self.tokens.append((tkn.TokenInfo(BASH_CMP_TOKEN, "-ot", tok.start, tok.end, tok.line), []))
             else:
                 self.tokens.append((tok, []))
             if tok.type == 0:  # ENDMARKER

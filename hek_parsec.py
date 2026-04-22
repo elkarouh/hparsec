@@ -641,8 +641,12 @@ ELLIPSIS = _op("...")
 COLONEQUAL = _op(":=")
 DOUBLEDOT = ignore(DOT + DOT)
 # Ada-style tick attribute separator (synthetic token emitted by Tokenizer)
-from hek_tokenize import TICK_TOKEN as _TICK_TOKEN
-TICK = ignore(filt(lambda tok: tok.type == _TICK_TOKEN, shift, name="'"))
+from hek_tokenize import TICK_TOKEN as _TICK_TOKEN, DOLLAR_TOKEN as _DOLLAR_TOKEN, \
+    BASH_TEST_TOKEN as _BASH_TEST_TOKEN, BASH_CMP_TOKEN as _BASH_CMP_TOKEN
+TICK      = ignore(filt(lambda tok: tok.type == _TICK_TOKEN,      shift, name="'"))
+DOLLAR    = ignore(filt(lambda tok: tok.type == _DOLLAR_TOKEN,    shift, name="$"))
+BASH_TEST = filt(lambda tok: tok.type == _BASH_TEST_TOKEN, shift, name="bash_test")
+BASH_CMP  = fmap(lambda tok: tok.string, filt(lambda tok: tok.type == _BASH_CMP_TOKEN, shift, name="bash_cmp"))
 IDENTIFIER = filt(str.isidentifier, expect_type(tkn.NAME))
 # IDENTIFIER = expect_re(r"\w")
 NUMBER = expect_re(tkn.Number)
@@ -777,6 +781,9 @@ __all__ = [
     "COLONEQUAL",
     "DOUBLEDOT",
     "TICK",
+    "DOLLAR",
+    "BASH_TEST",
+    "BASH_CMP",
     # Semantic tokens
     "IDENTIFIER",
     "NUMBER",
