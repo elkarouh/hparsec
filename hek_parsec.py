@@ -152,6 +152,7 @@ class ParserState:
     DEBUG = False
     memos: dict = {}
     symbol_table = SymbolTable()
+    proc_param_types: dict = {}
 
     @classmethod
     def reset(cls):
