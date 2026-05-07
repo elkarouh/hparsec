@@ -152,6 +152,7 @@ class ParserState:
     DEBUG = False
     memos: dict = {}
     symbol_table = SymbolTable()
+    symbol_table.push_scope("<module>")
     proc_param_types: dict = {}
 
     @classmethod
@@ -159,6 +160,7 @@ class ParserState:
         """Clear core parser state between parses."""
         cls.memos.clear()
         cls.symbol_table = SymbolTable()
+        cls.symbol_table.push_scope("<module>")
 
 
 G = ParserState  # backward compat alias
