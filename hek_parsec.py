@@ -645,7 +645,10 @@ COLONEQUAL = _op(":=")
 # Synthetic token terminals (emitted by Tokenizer._eager_tokenize)
 from hek_tokenize import TICK_TOKEN as _TICK_TOKEN, DOLLAR_TOKEN as _DOLLAR_TOKEN, \
     BASH_TEST_TOKEN as _BASH_TEST_TOKEN, BASH_CMP_TOKEN as _BASH_CMP_TOKEN, \
-    RANGE_TOKEN as _RANGE_TOKEN, RANGE_EXCL_TOKEN as _RANGE_EXCL_TOKEN
+    RANGE_TOKEN as _RANGE_TOKEN, RANGE_EXCL_TOKEN as _RANGE_EXCL_TOKEN, \
+    EQTILDE_TOKEN as _EQTILDE_TOKEN, NEQTILDE_TOKEN as _NEQTILDE_TOKEN, \
+    REGEX_TOKEN as _REGEX_TOKEN, CAPTURE_TOKEN as _CAPTURE_TOKEN, \
+    NAMED_CAPTURE_TOKEN as _NAMED_CAPTURE_TOKEN
 TICK          = ignore(filt(lambda tok: tok.type == _TICK_TOKEN,       shift, name="'"))
 DOLLAR        = ignore(filt(lambda tok: tok.type == _DOLLAR_TOKEN,     shift, name="$"))
 BASH_TEST     = filt(lambda tok: tok.type == _BASH_TEST_TOKEN,  shift, name="bash_test")
@@ -653,6 +656,11 @@ BASH_CMP      = fmap(lambda tok: tok.string, filt(lambda tok: tok.type == _BASH_
 RANGE_OP      = fmap(lambda tok: tok.string, filt(lambda tok: tok.type == _RANGE_TOKEN,      shift, name=".."))
 RANGE_EXCL_OP = fmap(lambda tok: tok.string, filt(lambda tok: tok.type == _RANGE_EXCL_TOKEN, shift, name="..<"))
 DOUBLEDOT = RANGE_OP  # kept for backward compat (used in type declarations)
+EQTILDE       = fmap(lambda tok: tok.string, filt(lambda tok: tok.type == _EQTILDE_TOKEN,       shift, name="=~"))
+NEQTILDE      = fmap(lambda tok: tok.string, filt(lambda tok: tok.type == _NEQTILDE_TOKEN,      shift, name="!~"))
+REGEX_LIT     = fmap(lambda tok: tok.string, filt(lambda tok: tok.type == _REGEX_TOKEN,         shift, name="regex_lit"))
+CAPTURE       = fmap(lambda tok: tok.string, filt(lambda tok: tok.type == _CAPTURE_TOKEN,       shift, name="capture"))
+NAMED_CAPTURE = fmap(lambda tok: tok.string, filt(lambda tok: tok.type == _NAMED_CAPTURE_TOKEN, shift, name="named_capture"))
 IDENTIFIER = filt(str.isidentifier, expect_type(tkn.NAME))
 # IDENTIFIER = expect_re(r"\w")
 NUMBER = expect_re(tkn.Number)
