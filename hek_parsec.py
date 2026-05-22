@@ -648,7 +648,8 @@ from hek_tokenize import TICK_TOKEN as _TICK_TOKEN, DOLLAR_TOKEN as _DOLLAR_TOKE
     RANGE_TOKEN as _RANGE_TOKEN, RANGE_EXCL_TOKEN as _RANGE_EXCL_TOKEN, \
     EQTILDE_TOKEN as _EQTILDE_TOKEN, NEQTILDE_TOKEN as _NEQTILDE_TOKEN, \
     REGEX_TOKEN as _REGEX_TOKEN, CAPTURE_TOKEN as _CAPTURE_TOKEN, \
-    NAMED_CAPTURE_TOKEN as _NAMED_CAPTURE_TOKEN
+    NAMED_CAPTURE_TOKEN as _NAMED_CAPTURE_TOKEN, \
+    SUBST_TOKEN as _SUBST_TOKEN
 TICK          = ignore(filt(lambda tok: tok.type == _TICK_TOKEN,       shift, name="'"))
 DOLLAR        = ignore(filt(lambda tok: tok.type == _DOLLAR_TOKEN,     shift, name="$"))
 BASH_TEST     = filt(lambda tok: tok.type == _BASH_TEST_TOKEN,  shift, name="bash_test")
@@ -661,6 +662,7 @@ NEQTILDE      = fmap(lambda tok: tok.string, filt(lambda tok: tok.type == _NEQTI
 REGEX_LIT     = fmap(lambda tok: tok.string, filt(lambda tok: tok.type == _REGEX_TOKEN,         shift, name="regex_lit"))
 CAPTURE       = fmap(lambda tok: tok.string, filt(lambda tok: tok.type == _CAPTURE_TOKEN,       shift, name="capture"))
 NAMED_CAPTURE = fmap(lambda tok: tok.string, filt(lambda tok: tok.type == _NAMED_CAPTURE_TOKEN, shift, name="named_capture"))
+SUBST         = fmap(lambda tok: tok.string, filt(lambda tok: tok.type == _SUBST_TOKEN,         shift, name="subst"))
 IDENTIFIER = filt(str.isidentifier, expect_type(tkn.NAME))
 # IDENTIFIER = expect_re(r"\w")
 NUMBER = expect_re(tkn.Number)

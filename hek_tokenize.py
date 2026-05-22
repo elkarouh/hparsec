@@ -35,6 +35,7 @@ NEQTILDE_TOKEN      = 97   # Perl non-match:  !~
 REGEX_TOKEN         = 98   # Perl regex lit:  /pattern/flags
 CAPTURE_TOKEN       = 99   # Regex capture:   $+1, $+2, ...
 NAMED_CAPTURE_TOKEN = 100  # Named capture:   $+{name}
+SUBST_TOKEN         = 101  # Perl substitution: s/pattern/replacement/flags
 
 # ---------------------------------------------------------------------------
 # Monkey-patch TokenInfo so existing code can compare tok == "string"
@@ -944,6 +945,31 @@ def _lex_impl(source):
         if c.isalpha() or c == '_':
             nm = _NAME_RE.match(src, i)
             name_str = nm.group(0)
+
+            # s/pattern/replacement/flags — substitution literal
+            # Triggered only when 's' is immediately followed by '/' (no space).
+            if name_str == 's' and i + 1 < n and src[i + 1] == '/':
+                j = i + 2          # start of pattern
+                while j < n and src[j] not in '\r\n':
+                    if src[j] == '\\': j += 2
+                    elif src[j] == '/': break
+                    else: j += 1
+                if j < n and src[j] == '/':
+                    j += 1         # skip delimiter, start of replacement
+                    while j < n and src[j] not in '\r\n':
+                        if src[j] == '\\': j += 2
+                        elif src[j] == '/': break
+                        else: j += 1
+                    if j < n and src[j] == '/':
+                        j += 1     # skip delimiter, collect flags
+                        while j < n and src[j] in 'imsxg':
+                            j += 1
+                        subst_str = src[i:j]
+                        end_lc = get_linecol(j)
+                        yield tkn.TokenInfo(SUBST_TOKEN, subst_str, start_lc, end_lc, line_txt)
+                        last_type = SUBST_TOKEN
+                        i = j; continue
+
             end_lc = get_linecol(i + len(name_str))
             yield tkn.TokenInfo(_NAME, name_str, start_lc, end_lc, line_txt)
             prev_name = name_str
