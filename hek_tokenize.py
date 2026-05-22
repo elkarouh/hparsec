@@ -24,12 +24,17 @@ import tokenize as tkn  # for TokenInfo, tok_name, and token type constants only
 # ---------------------------------------------------------------------------
 # Synthetic token types (above Python's token range, which tops at ~69)
 # ---------------------------------------------------------------------------
-TICK_TOKEN       = 90   # Ada-style tick:  x'Image, arr[i]'First
-DOLLAR_TOKEN     = 91   # Bash dollar var: $#, $@, $0, $N, $NAME
-BASH_TEST_TOKEN  = 92   # Bash file test:  -e, -f, -d ...
-BASH_CMP_TOKEN   = 93   # Bash file cmp:   -nt, -ot
-RANGE_TOKEN      = 94   # Ada/Nim range:   lo .. hi
-RANGE_EXCL_TOKEN = 95   # exclusive range: lo ..< hi
+TICK_TOKEN          = 90   # Ada-style tick:  x'Image, arr[i]'First
+DOLLAR_TOKEN        = 91   # Bash dollar var: $#, $@, $0, $N, $NAME
+BASH_TEST_TOKEN     = 92   # Bash file test:  -e, -f, -d ...
+BASH_CMP_TOKEN      = 93   # Bash file cmp:   -nt, -ot
+RANGE_TOKEN         = 94   # Ada/Nim range:   lo .. hi
+RANGE_EXCL_TOKEN    = 95   # exclusive range: lo ..< hi
+EQTILDE_TOKEN       = 96   # Perl match op:   =~
+NEQTILDE_TOKEN      = 97   # Perl non-match:  !~
+REGEX_TOKEN         = 98   # Perl regex lit:  /pattern/flags
+CAPTURE_TOKEN       = 99   # Regex capture:   $+1, $+2, ...
+NAMED_CAPTURE_TOKEN = 100  # Named capture:   $+{name}
 
 # ---------------------------------------------------------------------------
 # Monkey-patch TokenInfo so existing code can compare tok == "string"
@@ -173,6 +178,19 @@ _MULTICHAR_OPS_RE = re.compile(
 # Bash file-test context keywords (token immediately before must be one of these)
 # ---------------------------------------------------------------------------
 _FILE_TEST_CONTEXT = frozenset(('if', 'elif', 'while', 'and', 'or', 'not'))
+
+# Keywords after which a bare / starts a regex literal (not division)
+_REGEX_START_KEYWORDS = frozenset((
+    'return', 'if', 'elif', 'while', 'and', 'or', 'not', 'in',
+    'print', 'yield', 'lambda', 'case', 'when',
+))
+# Operator strings after which a bare / starts a regex literal
+_REGEX_START_OPS = frozenset((
+    '=', '(', '[', ',', ':', ';',
+    '+', '-', '*', '**', '%', '|', '&', '^', '~', '!',
+    '==', '!=', '<', '>', '<=', '>=', '<<', '>>',
+    '+=', '-=', '*=', '%=', '|=', '&=', '^=',
+))
 _FILE_TEST_FLAGS   = frozenset('efdLrwxscbpS')
 
 # ---------------------------------------------------------------------------
@@ -954,7 +972,29 @@ def _lex_impl(source):
             j = i + 1
             if j < n:
                 nc = src[j]
-                if nc == '#':
+                if nc == '+':
+                    # $+N  — positional regex capture group
+                    # $+{name}  — named regex capture group
+                    j2 = j + 1
+                    if j2 < n and src[j2].isdigit():
+                        nm2 = re.match(r'\d+', src[j2:])
+                        num_s = nm2.group(0)
+                        cap_str = src[i:j2 + len(num_s)]
+                        end_lc = get_linecol(j2 + len(num_s))
+                        yield tkn.TokenInfo(CAPTURE_TOKEN, cap_str, dol_lc, end_lc, line_txt)
+                        last_type = CAPTURE_TOKEN
+                        i = j2 + len(num_s); continue
+                    elif j2 < n and src[j2] == '{':
+                        close = src.find('}', j2 + 1)
+                        if close > j2:
+                            cap_name = src[j2 + 1:close]
+                            if re.match(r'^[A-Za-z_]\w*$', cap_name):
+                                cap_str = src[i:close + 1]
+                                end_lc = get_linecol(close + 1)
+                                yield tkn.TokenInfo(NAMED_CAPTURE_TOKEN, cap_str, dol_lc, end_lc, line_txt)
+                                last_type = NAMED_CAPTURE_TOKEN
+                                i = close + 1; continue
+                elif nc == '#':
                     yield tkn.TokenInfo(DOLLAR_TOKEN, '$', dol_lc, dol_end, line_txt)
                     h_lc = get_linecol(j)
                     h_end = get_linecol(j + 1)
@@ -1032,6 +1072,46 @@ def _lex_impl(source):
                     yield tkn.TokenInfo(_NAME, flag_char, flag_lc, flag_end, line_txt)
                     prev_name = flag_char; last_type = _NAME
                     i += 2; continue
+
+        # =~ and !~ — Perl-style match / non-match operators
+        if c in ('=', '!') and i + 1 < n and src[i + 1] == '~':
+            op_str = src[i:i + 2]
+            end_lc = get_linecol(i + 2)
+            tok_type = EQTILDE_TOKEN if c == '=' else NEQTILDE_TOKEN
+            yield tkn.TokenInfo(tok_type, op_str, start_lc, end_lc, line_txt)
+            last_type = tok_type; prev_op = op_str
+            i += 2; continue
+
+        # / — regex literal or division (context-sensitive, like JavaScript/Perl)
+        if c == '/' and src[i:i + 2] not in ('//', '/='):
+            _slash_is_regex = (
+                last_type in (_ENDMARKER, _ENCODING, _NEWLINE, _NL, _INDENT, _DEDENT,
+                              EQTILDE_TOKEN, NEQTILDE_TOKEN, RANGE_TOKEN, RANGE_EXCL_TOKEN)
+                or (last_type == _OP and prev_op in _REGEX_START_OPS)
+                or (last_type == _NAME and prev_name in _REGEX_START_KEYWORDS)
+            )
+            if _slash_is_regex:
+                j = i + 1
+                while j < n:
+                    if src[j] == '\\':
+                        j += 2          # skip escaped char
+                    elif src[j] == '/':
+                        break           # closing delimiter
+                    elif src[j] in '\r\n':
+                        j = i           # unterminated — fall through to division
+                        break
+                    else:
+                        j += 1
+                if j > i and j < n and src[j] == '/':
+                    # collect flags: i, m, s, x, g
+                    k = j + 1
+                    while k < n and src[k] in 'imsxg':
+                        k += 1
+                    regex_str = src[i:k]
+                    end_lc = get_linecol(k)
+                    yield tkn.TokenInfo(REGEX_TOKEN, regex_str, start_lc, end_lc, line_txt)
+                    last_type = REGEX_TOKEN
+                    i = k; continue
 
         # General operator matching (longest match first)
         op_m = _OP_RE.match(src, i)
