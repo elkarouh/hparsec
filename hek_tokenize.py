@@ -30,8 +30,6 @@ BASH_TEST_TOKEN     = 92   # Bash file test:  -e, -f, -d ...
 BASH_CMP_TOKEN      = 93   # Bash file cmp:   -nt, -ot
 RANGE_TOKEN         = 94   # Ada/Nim range:   lo .. hi
 RANGE_EXCL_TOKEN    = 95   # exclusive range: lo ..< hi
-EQTILDE_TOKEN       = 96   # Perl match op:   =~
-NEQTILDE_TOKEN      = 97   # Perl non-match:  !~
 REGEX_TOKEN         = 98   # Perl regex lit:  /pattern/flags
 CAPTURE_TOKEN       = 99   # Regex capture:   $+1, $+2, ...
 NAMED_CAPTURE_TOKEN = 100  # Named capture:   $+{name}
@@ -1099,20 +1097,11 @@ def _lex_impl(source):
                     prev_name = flag_char; last_type = _NAME
                     i += 2; continue
 
-        # =~ and !~ — Perl-style match / non-match operators
-        if c in ('=', '!') and i + 1 < n and src[i + 1] == '~':
-            op_str = src[i:i + 2]
-            end_lc = get_linecol(i + 2)
-            tok_type = EQTILDE_TOKEN if c == '=' else NEQTILDE_TOKEN
-            yield tkn.TokenInfo(tok_type, op_str, start_lc, end_lc, line_txt)
-            last_type = tok_type; prev_op = op_str
-            i += 2; continue
-
         # / — regex literal or division (context-sensitive, like JavaScript/Perl)
         if c == '/' and src[i:i + 2] not in ('//', '/='):
             _slash_is_regex = (
                 last_type in (_ENDMARKER, _ENCODING, _NEWLINE, _NL, _INDENT, _DEDENT,
-                              EQTILDE_TOKEN, NEQTILDE_TOKEN, RANGE_TOKEN, RANGE_EXCL_TOKEN)
+                              RANGE_TOKEN, RANGE_EXCL_TOKEN)
                 or (last_type == _OP and prev_op in _REGEX_START_OPS)
                 or (last_type == _NAME and prev_name in _REGEX_START_KEYWORDS)
             )
