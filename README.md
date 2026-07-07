@@ -120,6 +120,41 @@ Backend-specific state (imports, type maps, pragmas, etc.) should be
 initialised by the backend after calling `ParserState.reset()` — not stored
 here.
 
+**The state is process-global and mutable.** All grammar rules and output
+methods read and write it through the class, so only one translation unit
+can be "live" at a time. Historically this made nested translations —
+transpiling an imported dependency in the middle of transpiling the main
+file — silently corrupt the outer unit's state: whatever `reset()` and field
+writes the inner unit performed were still in effect when control returned
+to the outer unit. Callers worked around it with careful call ordering and
+module-level stash variables, which is fragile and easy to get wrong.
+
+`snapshot()` / `restore()` / `scoped()` exist to make nested use safe:
+
+```python
+with ParserState.scoped():        # save every data field
+    ParserState.reset()
+    translate(dependency_source)  # inner unit mutates freely
+# outer unit's state is restored here, even on exception
+```
+
+- `snapshot()` captures **all** data attributes on the class — core fields
+  and any backend fields added since — copying dicts/sets/lists one level
+  deep so in-place mutations inside the scope don't leak out.
+- `restore(snap)` puts the captured values back and deletes fields that
+  were added after the snapshot.
+- `scoped()` is the context-manager form of the pair and is exception-safe.
+
+Any code that triggers a translation while another translation is in
+progress **must** wrap the inner one in `scoped()`.
+
+Remaining limitations (accepted by design for a single-threaded CLI):
+the state is still a global, so translations cannot run concurrently, and
+two units cannot be interleaved except through `scoped()` nesting. Making
+the state an explicit object passed through every rule and output method
+would lift that, at the cost of touching every call site in the grammar
+and both backends.
+
 ### `RichNL` (in `hek_tokenize`)
 A newline token enriched with any preceding inline comments. Allows comments
 to travel naturally with the parse tree so backends can reproduce them in
