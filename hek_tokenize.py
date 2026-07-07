@@ -131,6 +131,14 @@ _ENDMARKER = tkn.ENDMARKER
 _ENCODING  = tkn.ENCODING
 _ERRORTOKEN = tkn.ERRORTOKEN
 
+import sys as _sys
+if _sys.version_info < (3, 12):
+    raise SystemExit(
+        f"hparsec requires Python 3.12+ (running {_sys.version.split()[0]}): "
+        "the tokenizer relies on the FSTRING_START/MIDDLE/END tokens "
+        "introduced in 3.12."
+    )
+
 import token as _token_mod
 _FSTRING_START  = _token_mod.FSTRING_START
 _FSTRING_MIDDLE = _token_mod.FSTRING_MIDDLE
