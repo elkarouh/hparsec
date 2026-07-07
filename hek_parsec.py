@@ -147,6 +147,15 @@ class ParserState:
     Backend-specific state (imports, type maps, pragmas, etc.) is managed by
     each backend, not here.  Backends call reset() then initialise their own
     fields.
+
+    The state is process-global, so translating one unit inside the
+    translation of another (dependency transpiles, prepasses) would clobber
+    the outer unit's state.  Wrap any nested translation in ``scoped()``::
+
+        with ParserState.scoped():
+            ParserState.reset()
+            translate(dep_code)
+        # outer unit's state is restored here
     """
 
     DEBUG = False
@@ -161,6 +170,60 @@ class ParserState:
         cls.memos.clear()
         cls.symbol_table = SymbolTable()
         cls.symbol_table.push_scope("<module>")
+
+    @classmethod
+    def _data_attrs(cls):
+        """Names of the plain data attributes that make up the state."""
+        return [
+            k for k, v in vars(cls).items()
+            if not k.startswith("__")
+            and not callable(v)
+            and not isinstance(v, (classmethod, staticmethod, property))
+        ]
+
+    @classmethod
+    def snapshot(cls):
+        """Capture the current state (core + backend fields).
+
+        Containers are copied one level deep so in-place mutations inside a
+        nested translation don't leak into the captured state.
+        """
+        import copy
+        snap = {}
+        for k in cls._data_attrs():
+            v = vars(cls)[k]
+            if isinstance(v, (dict, set, list)):
+                v = copy.copy(v)
+            snap[k] = v
+        return snap
+
+    @classmethod
+    def restore(cls, snap):
+        """Restore a snapshot(): drop fields added since, put back old values."""
+        for k in cls._data_attrs():
+            if k not in snap:
+                delattr(cls, k)
+        for k, v in snap.items():
+            setattr(cls, k, v)
+
+    @classmethod
+    def scoped(cls):
+        """Context manager: save the state on entry, restore it on exit.
+
+        Makes nested translations re-entrant — the inner unit may reset()
+        and mutate freely without corrupting the outer unit's state.
+        """
+        from contextlib import contextmanager
+
+        @contextmanager
+        def _scope():
+            snap = cls.snapshot()
+            try:
+                yield cls
+            finally:
+                cls.restore(snap)
+
+        return _scope()
 
 
 G = ParserState  # backward compat alias
