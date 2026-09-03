@@ -176,7 +176,9 @@ _MULTICHAR_OPS_RE = re.compile(
 # ---------------------------------------------------------------------------
 # Bash file-test context keywords (token immediately before must be one of these)
 # ---------------------------------------------------------------------------
-_FILE_TEST_CONTEXT = frozenset(('if', 'elif', 'while', 'and', 'or', 'not'))
+_FILE_TEST_CONTEXT = frozenset(('if', 'elif', 'while', 'and', 'or', 'not', 'return'))
+_FILE_TEST_STMT_START = frozenset((_NEWLINE, _NL, _INDENT, _DEDENT))
+_FILE_TEST_OPS = frozenset(('(', '=', ',', '['))
 
 # Keywords after which a bare / starts a regex literal (not division)
 _REGEX_START_KEYWORDS = frozenset((
@@ -1086,7 +1088,8 @@ def _lex_impl(source):
             ft_m = re.match(r'-([efdLrwxscbpS])(?=[\s\n\r]|$)', src[i:])
             if ft_m:
                 _in_ctx = (last_type == _NAME and prev_name in _FILE_TEST_CONTEXT) \
-                          or last_type == _OP and prev_op == '('
+                          or (last_type == _OP and prev_op in _FILE_TEST_OPS) \
+                          or last_type in _FILE_TEST_STMT_START
                 if _in_ctx:
                     flag_char = ft_m.group(1)
                     end_lc = get_linecol(i + 2)
