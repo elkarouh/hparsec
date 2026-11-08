@@ -4,9 +4,9 @@ import re
 from hek_parsec import (
     Grammar,
     ParserState,
+    Terminals,
     expect_type,
     filt,
-    ignore,
     literal,
     nothing,
 )
@@ -83,16 +83,7 @@ def tokenize(source):
 
 
 # ============================================================
-# 2. Token parser helpers
-# ============================================================
-
-def op(symbol):
-    """Match and ignore an operator or keyword token."""
-    return ignore(literal(symbol))
-
-
-# ============================================================
-# 3. Terminals
+# 2. Terminals
 # ============================================================
 
 number = expect_type(TOKEN_TYPES["NUMBER"])
@@ -106,32 +97,29 @@ identifier = filt(
     expect_type(TOKEN_TYPES["IDENT"]),
 )
 
-# Ignored operator tokens, (consumed but not kept in the AST)
-# by convention, we use UPPERCASE 
-EQ    = op("=")
-NE    = op("/=")
-LT    = op("<")
-GT    = op(">")
-LE    = op("<=")
-GE    = op(">=")
+class Terminals(Terminals):
+    # Ignored operators & delimiters (UPPERCASE = automatically ignored)
+    EQ         = "="
+    NE         = "/="
+    LT         = "<"
+    GT         = ">"
+    LE         = "<="
+    GE         = ">="
+    LPAREN     = "("
+    RPAREN     = ")"
+    COMMA      = ","
+    AND        = "and"
+    OR         = "or"
+    COMPARE_OP = NE | LE | GE | EQ | LT | GT
 
-LPAREN = op("(")
-RPAREN = op(")")
-COMMA  = op(",")
-AND    = op("and")
-OR     = op("or")
-
-COMPARE_OP = NE | LE | GE | EQ | LT | GT
-
-# Visible operator tokens (kept in the AST for evaluate() dispatch)
-# These use literal() without ignore() so evaluate() can read self.nodes[1].node.
-add_op  = literal("+") | literal("-")
-mul_op  = literal("*") | literal("/") | literal("mod")
-unary_op = literal("+") | literal("-") | literal("not")
+    # Visible operator tokens (lowercase = kept in AST for evaluate)
+    add_op     = literal("+") | literal("-")
+    mul_op     = literal("*") | literal("/") | literal("mod")
+    unary_op   = literal("+") | literal("-") | literal("not")
 
 
 # ============================================================
-# 4. Grammar (avoids left-recursivity and therefore faster)
+# 3. Grammar (avoids left-recursivity and therefore faster)
 # ============================================================
 
 class ExpressionGrammar(Grammar):
@@ -215,7 +203,7 @@ class ExpressionGrammar(Grammar):
 
 
 # ============================================================
-# 5. Public entry point
+# 4. Public entry point
 # ============================================================
 
 def parse_expression(source):
@@ -246,7 +234,7 @@ def evaluate_expression(source):
 
 
 # ============================================================
-# 6. Tests
+# 5. Tests
 # ============================================================
 
 if __name__ == "__main__":

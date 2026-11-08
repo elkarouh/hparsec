@@ -985,6 +985,55 @@ def expect_re(regex):
     )
     return parser
 
+class TerminalsNamespace(dict):
+    """Namespace mapping for Terminals class body execution.
+
+    Enforces the convention:
+      - UPPERCASE attributes: automatically wrapped in ignore() (ignored terminals).
+        Strings assigned to UPPERCASE are converted to ignore(literal(s)).
+      - lowercase attributes: kept visible in the AST (strings converted to literal(s)).
+    """
+
+    def __setitem__(self, key, value):
+        if key.isupper() and not key.startswith('_'):
+            if isinstance(value, str):
+                value = ignore(literal(value))
+            elif hasattr(value, 'parse') and getattr(value, '__name__', '') != 'ignore_parser':
+                value = ignore(value)
+        elif not key.startswith('_') and isinstance(value, str):
+            value = literal(value)
+        super().__setitem__(key, value)
+
+
+class TerminalsMeta(type):
+    """Metaclass that enables declarative terminal definitions."""
+
+    @classmethod
+    def __prepare__(metacls, name, bases, **kwds):
+        return TerminalsNamespace()
+
+    def __new__(metacls, name, bases, namespace, **kwds):
+        cls = super().__new__(metacls, name, bases, dict(namespace))
+        # Export all non-private terminals to the caller's module globals
+        g = calling_module_namespace()
+        for k, v in namespace.items():
+            if not k.startswith('_'):
+                g[k] = v
+        return cls
+
+
+class Terminals(metaclass=TerminalsMeta):
+    """Base class for declarative terminal definitions.
+
+    Convention:
+      - UPPERCASE names are automatically ignored (never appear in the AST).
+        Strings are automatically converted to ignore(literal(s)).
+      - lowercase names remain visible in the AST.
+      - All defined terminals are automatically exported to module globals.
+    """
+    pass
+
+
 
 ###############################################################################
 # Lazy-loaded legacy tokens and adapters for tokenize / hek_tokenize
@@ -1170,6 +1219,8 @@ __all__ = [
     "ParserMeta",
     "Grammar",
     "GrammarMeta",
+    "Terminals",
+    "TerminalsMeta",
     # Parsing context & Left Recursion
     "apply_parsing_context",
     "LR",
