@@ -65,10 +65,39 @@ def calling_module_namespace():
 
 
 def method(KLASS: type) -> Callable:
-    """Decorator to add a method to a class."""
+    """Decorator to add a method to a class.
+
+    When KLASS is a Choice_Parser (e.g. the result of ``A | B``), a
+    Choice_Parser is never directly instantiated as an AST node — the
+    matching sub-parser's instance always is.  So the decorator
+    automatically distributes the method to every Sequence_Parser
+    alternative inside KLASS.parsers.
+
+    This lets you keep the grammar natural::
+
+        additive = (additive + add_op + multiplicative) | multiplicative
+
+        @method(additive)          # attaches to the Sequence_Parser binary case
+        def evaluate(self):        # self.nodes == [lhs, op, rhs]
+            ...
+
+    instead of needing a named intermediate ``_additive_binary``.
+    If no Sequence_Parser alternatives are found the method falls back
+    to being set on KLASS itself.
+    """
 
     def wrapper(f):
-        setattr(KLASS, f.__name__, f)
+        # For a Choice_Parser, distribute to its Sequence_Parser alternatives,
+        # since the Choice_Parser class itself is never the AST node.
+        if hasattr(KLASS, "parsers") and any(
+            p.__name__ == "Sequence_Parser" for p in KLASS.parsers
+        ):
+            targets = [p for p in KLASS.parsers if p.__name__ == "Sequence_Parser"]
+        else:
+            targets = [KLASS]
+
+        for target in targets:
+            setattr(target, f.__name__, f)
 
     # give a name to the assigned class !!!
     g = calling_module_namespace()

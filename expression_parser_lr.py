@@ -181,19 +181,24 @@ comparison = (
 
 # additive = additive ('+' | '-') multiplicative | multiplicative
 # add_op is VISIBLE so evaluate() can read nodes[1].node.
-# _additive_binary is named so @method can be attached to it.
-_additive_binary = additive + add_op + multiplicative
-additive = _additive_binary | multiplicative
+additive = (
+    (additive + add_op + multiplicative)
+    | multiplicative
+)
 
 # multiplicative = multiplicative ('*' | '/' | 'mod') unary | unary
 # mul_op is VISIBLE so evaluate() can read nodes[1].node.
-_multiplicative_binary = multiplicative + mul_op + unary
-multiplicative = _multiplicative_binary | unary
+multiplicative = (
+    (multiplicative + mul_op + unary)
+    | unary
+)
 
 # unary is right-recursive by nature; keep it that way.
 # unary_op is VISIBLE so evaluate() can dispatch on nodes[0].node.
-_unary_prefix = unary_op + primary
-unary = _unary_prefix | primary
+unary = (
+    (unary_op + primary)
+    | primary
+)
 
 group = LPAREN + expression + RPAREN
 
@@ -223,10 +228,10 @@ argument_list = (
 # ============================================================
 # 6. AST Evaluation Methods (via @method)
 #
-# Binary arithmetic rules (_additive_binary, _multiplicative_binary,
-# _unary_prefix) are named Sequence_Parser classes.  @method attaches
-# evaluate() directly to those classes so it is called on the actual
-# AST node returned by Choice_Parser.
+# For Choice_Parser rules (additive, multiplicative, unary),
+# @method automatically distributes to the Sequence_Parser binary
+# alternative — the only case that gets instantiated as an AST node.
+# The passthrough / base case delegates through Parser.evaluate().
 # ============================================================
 
 @method(number)
@@ -234,9 +239,9 @@ def evaluate(self):
     val = float(self.node)
     return int(val) if val.is_integer() else val
 
-@method(_additive_binary)
+@method(additive)
 def evaluate(self):
-    # nodes = [lhs, op_literal, rhs]
+    # nodes = [lhs, op_literal, rhs]  (binary case only)
     lhs = self.nodes[0].evaluate()
     opr = self.nodes[1].node   # '+' or '-'
     rhs = self.nodes[2].evaluate()
@@ -246,9 +251,9 @@ def evaluate(self):
         return lhs - rhs
     raise ValueError(f"Unknown additive op: {opr!r}")
 
-@method(_multiplicative_binary)
+@method(multiplicative)
 def evaluate(self):
-    # nodes = [lhs, op_literal, rhs]
+    # nodes = [lhs, op_literal, rhs]  (binary case only)
     lhs = self.nodes[0].evaluate()
     opr = self.nodes[1].node   # '*', '/', or 'mod'
     rhs = self.nodes[2].evaluate()
@@ -260,9 +265,9 @@ def evaluate(self):
         return lhs % rhs
     raise ValueError(f"Unknown multiplicative op: {opr!r}")
 
-@method(_unary_prefix)
+@method(unary)
 def evaluate(self):
-    # nodes = [op_literal, operand]
+    # nodes = [op_literal, operand]  (prefix case only)
     opr     = self.nodes[0].node   # '+' or '-'
     operand = self.nodes[1].evaluate()
     if opr == "+":
