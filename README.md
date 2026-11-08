@@ -86,6 +86,22 @@ paren    = LPAREN + expr + RPAREN
 expr     = NUMBER | paren | ...
 ```
 
+### Left recursion
+`hparsec` natively supports direct and indirect left-recursive grammars using
+packrat parsing with fixed-point seed growing (Warth et al.'s algorithm).
+Rules can be written with natural left recursion and left-associativity without
+triggering recursion limits or requiring manual grammar transformations:
+
+```python
+expr = forward("expr")
+term = forward("term")
+
+expr = (expr + PLUS + term) | (expr + MINUS + term) | term
+term = NUMBER
+
+# "10 - 4 - 2" parses left-associatively as ((10 - 4) - 2)
+```
+
 ### `filt(predicate, parser)`
 Wraps a parser so it only succeeds when the matched token satisfies a
 predicate. Used for context-sensitive matching:

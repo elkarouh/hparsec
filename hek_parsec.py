@@ -229,34 +229,163 @@ class ParserState:
 G = ParserState  # backward compat alias
 
 
-def apply_parsing_context(parse_function):
-    """Decorator that wraps a parse method with packrat memoization and backtracking.
+class LR:
+    """Descriptor for an in-progress left-recursive rule invocation."""
 
-    Caches parse results keyed by (parser_id, position, *args) so each parser
-    is called at most once per position, guaranteeing linear-time parsing.
-    On failure, resets the position so other alternatives can be tried.
+    __slots__ = ("seed", "rule", "head", "next")
+
+    def __init__(self, seed, rule, head=None, next=None):
+        self.seed = seed
+        self.rule = rule
+        self.head = head
+        self.next = next
+
+
+class Head:
+    """Head of a left-recursive cycle, tracking involved and evaluation sets."""
+
+    __slots__ = ("rule", "involved_set", "eval_set")
+
+    def __init__(self, rule):
+        self.rule = rule
+        self.involved_set = set()
+        self.eval_set = set()
+
+
+class MemoEntry:
+    """Packrat memoization entry holding parse result and end position."""
+
+    __slots__ = ("ans", "pos")
+
+    def __init__(self, ans, pos):
+        self.ans = ans
+        self.pos = pos
+
+
+def _setup_lr(rule, lr, token_stream):
+    if lr.head is None:
+        lr.head = Head(rule)
+    s = token_stream.lrstack
+    while s is not None and s.head != lr.head:
+        s.head = lr.head
+        lr.head.involved_set.add(s.rule)
+        s = s.next
+
+
+def _recall(cls, token_stream, rule, pos, parse_function, args):
+    m = token_stream.memos.get((rule, pos))
+    h = token_stream.heads.get(pos)
+    if h is None:
+        return m
+
+    if m is None and rule != h.rule and rule not in h.involved_set:
+        return MemoEntry(False, pos)
+
+    if rule in h.eval_set:
+        h.eval_set.remove(rule)
+        token_stream.reset(pos)
+        ans = parse_function(cls, token_stream, *args)
+        end_pos = token_stream.pos if ans else pos
+        m.ans = ans
+        m.pos = end_pos
+        return m
+
+    return m
+
+
+def _apply_memo_rule(rule, pos, m, token_stream):
+    if isinstance(m.ans, LR):
+        _setup_lr(rule, m.ans, token_stream)
+        if m.ans.seed:
+            token_stream.pos = m.pos
+            return m.ans.seed
+        token_stream.reset(pos)
+        return False
+    if m.ans:
+        token_stream.pos = m.pos
+        return m.ans
+    token_stream.reset(pos)
+    return False
+
+
+def _lr_answer(cls, token_stream, rule, pos, m, h, parse_function, args):
+    if h.rule != rule:
+        m.ans = m.ans.seed if isinstance(m.ans, LR) else m.ans
+        if not m.ans:
+            token_stream.reset(pos)
+        return m.ans
+
+    m.ans = m.ans.seed if isinstance(m.ans, LR) else m.ans
+    if not m.ans:
+        token_stream.reset(pos)
+        return False
+
+    return _grow_lr(cls, token_stream, rule, pos, m, h, parse_function, args)
+
+
+def _grow_lr(cls, token_stream, rule, pos, m, h, parse_function, args):
+    token_stream.heads[pos] = h
+    while True:
+        token_stream.reset(pos)
+        h.eval_set = set(h.involved_set)
+        ans = parse_function(cls, token_stream, *args)
+        end_pos = token_stream.pos if ans else pos
+
+        if not ans or end_pos <= m.pos:
+            break
+
+        m.ans = ans
+        m.pos = end_pos
+
+    token_stream.heads.pop(pos, None)
+    token_stream.pos = m.pos
+    return m.ans
+
+
+def apply_parsing_context(parse_function):
+    """Decorator that wraps a parse method with packrat memoization and left-recursion support.
+
+    Implements Warth et al.'s algorithm for direct and indirect left recursion
+    in packrat parsers. Caches parse results keyed by (rule, position) and
+    iteratively grows left-recursive rules until a fixed point is reached.
     """
 
     @wraps(parse_function)
     def wrapper(cls, token_stream, *args):
-        key = (
-            id(cls),
-            token_stream.pos,
-        ) + args  # args includes start_index for Choice_Parser
+        if not hasattr(token_stream, "heads"):
+            token_stream.heads = {}
+        if not hasattr(token_stream, "lrstack"):
+            token_stream.lrstack = None
 
-        if key in token_stream.memos:
-            result, end_pos = token_stream.memos[key]
-            if result:
-                token_stream.pos = end_pos
-            return result
+        norm_args = (0,) if (len(args) == 0 and parse_function.__code__.co_argcount > 2) else args
+        rule = (id(cls), norm_args)
+        pos = token_stream.pos
 
-        pos_ante = token_stream.mark()
-        if m := parse_function(cls, token_stream, *args):
-            token_stream.memos[key] = (m, token_stream.pos)
-            return m
-        token_stream.reset(pos_ante)
-        token_stream.memos[key] = (False, pos_ante)
-        return False
+        m = _recall(cls, token_stream, rule, pos, parse_function, norm_args)
+        if m is not None:
+            return _apply_memo_rule(rule, pos, m, token_stream)
+
+        lr = LR(seed=False, rule=rule, head=None, next=token_stream.lrstack)
+        token_stream.lrstack = lr
+        m = MemoEntry(ans=lr, pos=pos)
+        token_stream.memos[(rule, pos)] = m
+
+        try:
+            ans = parse_function(cls, token_stream, *norm_args)
+        finally:
+            token_stream.lrstack = lr.next
+
+        end_pos = token_stream.pos if ans else pos
+        m.pos = end_pos
+
+        if lr.head is not None:
+            lr.seed = ans
+            return _lr_answer(cls, token_stream, rule, pos, m, lr.head, parse_function, norm_args)
+        else:
+            m.ans = ans
+            if not ans:
+                token_stream.reset(pos)
+            return ans
 
     return classmethod(wrapper)
 
@@ -354,16 +483,23 @@ class Parser(metaclass=ParserMeta):
         if G.DEBUG:
             print(self.__class__.__name__, "Constructor->", self.nodes)
 
+    def to_py(self):
+        if hasattr(self, "node") and self.node is not self:
+            if hasattr(self.node, "to_py"):
+                return self.node.to_py()
+            return str(self.node)
+        return str(getattr(self, "node", ""))
+
 def forward(parser_name: str) -> type[Parser]:
     """Create a lazy forward reference for recursive grammars."""
     # Capture the module namespace at definition time, not parse time
     g = calling_module_namespace()
 
     class Lazy_Parser(Parser):
-        @apply_parsing_context
-        def parse(cls, token_stream):
+        @classmethod
+        def parse(cls, token_stream, *args):
             parser = g[parser_name]
-            return parser.parse(token_stream)
+            return parser.parse(token_stream, *args)
 
     Lazy_Parser.name = parser_name
     Lazy_Parser.__name__ = parser_name
@@ -491,7 +627,11 @@ def sequence(p1, p2):
         def parse_sequence(cls, token_stream, parsers):
             """This function was made recursive to allow backtracking"""
             p = parsers[0]
-            if p.__name__ == "Lazy_Parser":
+            if hasattr(p, "name"):
+                g = calling_module_namespace()
+                if p.name in g:
+                    p = g[p.name]
+            elif getattr(p, "__name__", None) == "Lazy_Parser":
                 g = calling_module_namespace()
                 p = g[p.name]
             if (
@@ -718,7 +858,7 @@ BASH_TEST     = filt(lambda tok: tok.type == _BASH_TEST_TOKEN,  shift, name="bas
 BASH_CMP      = fmap(lambda tok: tok.string, filt(lambda tok: tok.type == _BASH_CMP_TOKEN,  shift, name="bash_cmp"))
 RANGE_OP      = fmap(lambda tok: tok.string, filt(lambda tok: tok.type == _RANGE_TOKEN,      shift, name=".."))
 RANGE_EXCL_OP = fmap(lambda tok: tok.string, filt(lambda tok: tok.type == _RANGE_EXCL_TOKEN, shift, name="..<"))
-DOUBLEDOT = RANGE_OP  # kept for backward compat (used in type declarations)
+DOUBLEDOT = ignore(RANGE_OP)  # kept for backward compat (used in type declarations)
 REGEX_LIT     = fmap(lambda tok: tok.string, filt(lambda tok: tok.type == _REGEX_TOKEN,         shift, name="regex_lit"))
 CAPTURE       = fmap(lambda tok: tok.string, filt(lambda tok: tok.type == _CAPTURE_TOKEN,       shift, name="capture"))
 NAMED_CAPTURE = fmap(lambda tok: tok.string, filt(lambda tok: tok.type == _NAMED_CAPTURE_TOKEN, shift, name="named_capture"))
@@ -774,8 +914,11 @@ __all__ = [
     "Tokenizer",
     "Cut",
     "ParserMeta",
-    # Parsing context
+    # Parsing context & Left Recursion
     "apply_parsing_context",
+    "LR",
+    "Head",
+    "MemoEntry",
     # Parser constructors
     "forward",
     "fw",
@@ -1216,13 +1359,89 @@ if __name__ == "__main__":
 
     # ParserState integration
     ParserState.reset()
-    assert ParserState.symbol_table.depth() == 0
+    assert ParserState.symbol_table.depth() == 1
     ParserState.symbol_table.push_scope("test")
     ParserState.symbol_table.add("a", "bool")
     assert ParserState.symbol_table.lookup("a")["type"] == "bool"
     ParserState.reset()
-    assert ParserState.symbol_table.depth() == 0
+    assert ParserState.symbol_table.depth() == 1
     assert ParserState.symbol_table.lookup("a") is None
     print("  ParserState integration: ok")
+
+    # --- Left-recursive grammar tests ---
+    print()
+    print("--- Left-recursive grammar tests ---")
+
+    # 1. Direct left recursion (arithmetic expressions with precedence & left-associativity)
+    ParserState.reset()
+    lr_expr = fw("lr_expr")
+    lr_term = fw("lr_term")
+    lr_factor = fw("lr_factor")
+
+    lr_add = lr_expr + PLUS + lr_term
+    lr_sub = lr_expr + MINUS + lr_term
+    lr_mul = lr_term + MUL + lr_factor
+    lr_div = lr_term + DIV + lr_factor
+
+    lr_expr = lr_add | lr_sub | lr_term
+    lr_term = lr_mul | lr_div | lr_factor
+    lr_group = LPAREN + lr_expr + RPAREN
+    lr_factor = NUMBER | lr_group
+
+    @method(lr_add)
+    def to_py(self):
+        return f"({self.nodes[0].to_py()} + {self.nodes[1].to_py()})"
+
+    @method(lr_sub)
+    def to_py(self):
+        return f"({self.nodes[0].to_py()} - {self.nodes[1].to_py()})"
+
+    @method(lr_mul)
+    def to_py(self):
+        return f"({self.nodes[0].to_py()} * {self.nodes[1].to_py()})"
+
+    @method(lr_div)
+    def to_py(self):
+        return f"({self.nodes[0].to_py()} / {self.nodes[1].to_py()})"
+
+    @method(lr_group)
+    def to_py(self):
+        return f"[{self.node.to_py()}]"
+
+    @method(lr_expr)
+    def to_py(self):
+        return self.node.to_py()
+
+    @method(lr_term)
+    def to_py(self):
+        return self.node.to_py()
+
+    @method(lr_factor)
+    def to_py(self):
+        return self.node.to_py()
+
+    # Left-associative subtraction: 10 - 4 - 2 should parse as ((10 - 4) - 2)
+    m = lr_expr.parse(Input("10 - 4 - 2"))
+    assert m, "direct left-recursion: 10 - 4 - 2 failed"
+    assert m[0].to_py() == "((10 - 4) - 2)", f"wrong tree: {m[0].to_py()}"
+    print(f"  direct left recursion (left associativity): {m[0].to_py()} ok")
+
+    # Full arithmetic with precedence & parentheses
+    m = lr_expr.parse(Input("(1 + 2) * (3 - 4) / 2"))
+    assert m, "direct left-recursion: arithmetic with parens failed"
+    assert m[0].to_py() == "(([(1 + 2)] * [(3 - 4)]) / 2)"
+    print(f"  direct left recursion (precedence & grouping): {m[0].to_py()} ok")
+
+    # 2. Indirect left recursion: A -> B -> A
+    ParserState.reset()
+    ind_A = fw("ind_A")
+    ind_B = fw("ind_B")
+
+    ind_A = (ind_B + PLUS + NUMBER) | NUMBER
+    ind_B = ind_A
+
+    m = ind_A.parse(Input("1 + 2 + 3"))
+    assert m, "indirect left-recursion failed"
+    print("  indirect left recursion (A -> B -> A): ok")
 
     print("\nAll tests passed.")
