@@ -2,9 +2,13 @@
 import re
 
 from hek_parsec import (
-    Parser, ParserState, fw, filt, fmap, ignore, shift,
-    expect, expect_type, literal, nothing,
-    sequence, choice,
+    ParserState,
+    expect_type,
+    filt,
+    fw,
+    ignore,
+    literal,
+    nothing,
 )
 
 # ============================================================
