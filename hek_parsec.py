@@ -35,7 +35,6 @@ import tokenize as tkn
 from functools import wraps
 from typing import Callable
 
-from hek_tokenize import Tokenizer
 
 ##################################################################################################
 
@@ -394,7 +393,7 @@ def apply_parsing_context(parse_function):
 class Cut(Exception):
     """Raised by fail/cut to abort parsing with an error message."""
 
-    def __init__(self, token_stream: Tokenizer):
+    def __init__(self, token_stream):
         super().__init__(token_stream.format_error())
 
 
@@ -711,8 +710,14 @@ cut = nothing | fail
 
 
 #############################################################################
-def Input(string: str) -> Tokenizer:
-    """Create a token stream from a source string, ready for parsing."""
+def Input(string: str):
+    """Create a token stream using hek_tokenize (loaded on demand).
+
+    This is a convenience adapter. The parser combinators themselves accept
+    any compatible token stream and do not depend on hek_tokenize.
+    """
+    from hek_tokenize import Tokenizer
+
     gen = Tokenizer(string)
     next(gen)  # skip the encoding token
     return gen
@@ -845,13 +850,18 @@ DOT = _op(".")
 RARROW = _op("->")
 ELLIPSIS = _op("...")
 COLONEQUAL = _op(":=")
-# Synthetic token terminals (emitted by Tokenizer._eager_tokenize)
-from hek_tokenize import TICK_TOKEN as _TICK_TOKEN, DOLLAR_TOKEN as _DOLLAR_TOKEN, \
-    BASH_TEST_TOKEN as _BASH_TEST_TOKEN, BASH_CMP_TOKEN as _BASH_CMP_TOKEN, \
-    RANGE_TOKEN as _RANGE_TOKEN, RANGE_EXCL_TOKEN as _RANGE_EXCL_TOKEN, \
-    REGEX_TOKEN as _REGEX_TOKEN, CAPTURE_TOKEN as _CAPTURE_TOKEN, \
-    NAMED_CAPTURE_TOKEN as _NAMED_CAPTURE_TOKEN, \
-    SUBST_TOKEN as _SUBST_TOKEN
+# Synthetic token type numbers reserved by hek_tokenize.  Keep these values
+# here so grammars can define terminals without importing the lexer.
+_TICK_TOKEN          = 90
+_DOLLAR_TOKEN        = 91
+_BASH_TEST_TOKEN     = 92
+_BASH_CMP_TOKEN      = 93
+_RANGE_TOKEN         = 94
+_RANGE_EXCL_TOKEN    = 95
+_REGEX_TOKEN         = 98
+_CAPTURE_TOKEN       = 99
+_NAMED_CAPTURE_TOKEN = 100
+_SUBST_TOKEN         = 101
 TICK          = ignore(filt(lambda tok: tok.type == _TICK_TOKEN,       shift, name="'"))
 DOLLAR        = ignore(filt(lambda tok: tok.type == _DOLLAR_TOKEN,     shift, name="$"))
 BASH_TEST     = filt(lambda tok: tok.type == _BASH_TEST_TOKEN,  shift, name="bash_test")
@@ -904,6 +914,14 @@ def to_py(self):
     return self.node
 
 
+def __getattr__(name):
+    """Load the legacy Tokenizer export only when explicitly requested."""
+    if name == "Tokenizer":
+        from hek_tokenize import Tokenizer
+        return Tokenizer
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
 ###############################################################################
 # Public API
 __all__ = [
@@ -911,7 +929,6 @@ __all__ = [
     "Parser",
     "ParserState",
     "G",
-    "Tokenizer",
     "Cut",
     "ParserMeta",
     # Parsing context & Left Recursion
@@ -1020,6 +1037,9 @@ __all__ = [
 ########################################################################################################################
 ##########################################
 if __name__ == "__main__":
+    # The tokenizer is needed only by this test harness (and Input()).
+    from hek_tokenize import Tokenizer
+
     # THE ADASCRIPT_GRAMMAR
     keyvalue = IDENTIFIER + EQUAL + NUMBER + SEMICOLON
     keyvalues = keyvalue[1:]
