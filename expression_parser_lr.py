@@ -107,7 +107,8 @@ identifier = filt(
     expect_type(TOKEN_TYPES["IDENT"]),
 )
 
-# Ignored operator tokens (consumed but not kept in the AST)
+# Ignored operator tokens, (consumed but not kept in the AST)
+# by convention, we use UPPERCASE 
 EQ    = op("=")
 NE    = op("/=")
 LT    = op("<")
@@ -117,6 +118,9 @@ GE    = op(">=")
 
 LPAREN = op("(")
 RPAREN = op(")")
+COMMA  = op(",")
+AND    = op("and")
+OR     = op("or")
 
 compare_op = NE | LE | GE | EQ | LT | GT
 
@@ -160,70 +164,19 @@ argument_list = fw("argument_list")
 # ============================================================
 
 expression = logical_or
-
-# logical_or  = logical_or OR logical_and | logical_and
-logical_or = (
-    (logical_or + op("or") + logical_and)
-    | logical_and
-)
-
-# logical_and = logical_and AND comparison | comparison
-logical_and = (
-    (logical_and + op("and") + comparison)
-    | comparison
-)
-
+logical_or = (logical_or + OR + logical_and) | logical_and
+logical_and = (logical_and + AND + comparison) | comparison
 # comparison is non-associative: only one optional RHS allowed.
 # Written without left-recursion to enforce that.
-comparison = (
-    additive + ((compare_op + additive) | nothing)
-)
-
-# additive = additive ('+' | '-') multiplicative | multiplicative
-# add_op is VISIBLE so evaluate() can read nodes[1].node.
-additive = (
-    (additive + add_op + multiplicative)
-    | multiplicative
-)
-
-# multiplicative = multiplicative ('*' | '/' | 'mod') unary | unary
-# mul_op is VISIBLE so evaluate() can read nodes[1].node.
-multiplicative = (
-    (multiplicative + mul_op + unary)
-    | unary
-)
-
+comparison = additive + ((compare_op + additive) | nothing)
+additive = (additive + add_op + multiplicative) | multiplicative
+multiplicative = (multiplicative + mul_op + unary) | unary
 # unary is right-recursive by nature; keep it that way.
-# unary_op is VISIBLE so evaluate() can dispatch on nodes[0].node.
-unary = (
-    (unary_op + primary)
-    | primary
-)
-
+unary = (unary_op + primary) | primary
 group = LPAREN + expression + RPAREN
-
-primary = (
-    number
-    | string
-    | boolean
-    | function_call
-    | identifier
-    | group
-)
-
-function_call = (
-    identifier
-    + op("(")
-    + (argument_list | nothing)
-    + op(")")
-)
-
-# argument_list = argument_list COMMA expression | expression
-argument_list = (
-    (argument_list + op(",") + expression)
-    | expression
-)
-
+primary = number | string | boolean | function_call | identifier | group
+function_call = identifier + LPAREN + (argument_list | nothing) + RPAREN
+argument_list = (argument_list + COMMA + expression) | expression
 
 # ============================================================
 # 6. AST Evaluation Methods (via @method)
