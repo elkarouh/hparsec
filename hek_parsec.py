@@ -270,6 +270,63 @@ class MemoEntry:
         self.pos = pos
 
 
+class TokenStream:
+    """Built-in token stream cursor for sequences of tokens or characters.
+
+    Accepts any sequence (list, tuple, str) or custom iterable of tokens.
+    Provides cursor navigation, position tracking, and packrat memo/LR storage.
+    """
+
+    def __init__(self, tokens):
+        if isinstance(tokens, (list, tuple)):
+            self.tokens = list(tokens)
+        elif isinstance(tokens, str):
+            self.tokens = list(tokens)
+        elif hasattr(tokens, "__iter__"):
+            self.tokens = list(tokens)
+        else:
+            self.tokens = [tokens]
+        self.pos = 0
+        self.memos = {}
+        self.heads = {}
+        self.lrstack = None
+        self.failed_token = None
+
+    def __iter__(self):
+        return iter(self.tokens)
+
+    def __len__(self):
+        return len(self.tokens)
+
+    def __getitem__(self, idx):
+        return self.tokens[idx]
+
+    def get_new_token(self):
+        if self.pos >= len(self.tokens):
+            return None
+        tok = self.tokens[self.pos]
+        self.pos += 1
+        return tok
+
+    def mark(self):
+        return self.pos
+
+    def reset(self, pos):
+        self.pos = pos
+
+    def set_failed_token(self, value):
+        self.failed_token = value
+
+    def format_error(self):
+        if self.failed_token is not None:
+            return f"Failed at token {self.failed_token!r} (position {self.pos})"
+        if 0 <= self.pos < len(self.tokens):
+            tok = self.tokens[self.pos]
+            tok_str = getattr(tok, "string", str(tok))
+            return f"Unexpected token {tok_str!r} at position {self.pos}"
+        return f"Unexpected end of input at position {self.pos}"
+
+
 def _setup_lr(rule, lr, token_stream):
     if lr.head is None:
         lr.head = Head(rule)
@@ -360,7 +417,9 @@ def apply_parsing_context(parse_function):
 
     @wraps(parse_function)
     def wrapper(cls, token_stream, *args):
-        if not hasattr(token_stream, "heads"):
+        if not hasattr(token_stream, "get_new_token"):
+            token_stream = TokenStream(token_stream)
+        elif not hasattr(token_stream, "heads"):
             token_stream.heads = {}
         if not hasattr(token_stream, "lrstack"):
             token_stream.lrstack = None
@@ -955,6 +1014,7 @@ __all__ = [
     # Core classes
     "Parser",
     "ParserState",
+    "TokenStream",
     "G",
     "Cut",
     "ParserMeta",

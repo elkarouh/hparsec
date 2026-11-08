@@ -42,69 +42,40 @@ TOKEN_TYPES = {
     "OP":     4,
 }
 
-class TokenStream:
-    """Minimal token stream compatible with hek_parsec."""
+def tokenize(source):
+    tokens = []
+    line = 1
+    column = 0
 
-    def __init__(self, source):
-        self.tokens = []
-        self.pos = 0
-        self.memos = {}
-        self.heads = {}
-        self.lrstack = None
-        self.failed_token = None
+    for match in TOKEN_RE.finditer(source):
+        kind = match.lastgroup
+        value = match.group()
 
-        line = 1
-        column = 0
+        if kind == "SKIP":
+            newlines = value.count("\n")
+            if newlines:
+                line += newlines
+                column = len(value.rsplit("\n", 1)[-1])
+            else:
+                column += len(value)
+            continue
 
-        for match in TOKEN_RE.finditer(source):
-            kind = match.lastgroup
-            value = match.group()
-
-            if kind == "SKIP":
-                newlines = value.count("\n")
-                if newlines:
-                    line += newlines
-                    column = len(value.rsplit("\n", 1)[-1])
-                else:
-                    column += len(value)
-                continue
-
-            if kind is None:
-                raise SyntaxError(
-                    f"Invalid token at line {line}, column {column}"
-                )
-
-            start = (line, column)
-            end   = (line, column + len(value))
-            self.tokens.append(
-                Token(TOKEN_TYPES[kind], value, start, end, source)
+        if kind is None:
+            raise SyntaxError(
+                f"Invalid token at line {line}, column {column}"
             )
-            column += len(value)
 
-        # Reject any character not covered by the spec.
-        consumed = "".join(m.group() for m in TOKEN_RE.finditer(source))
-        if consumed != source:
-            raise SyntaxError("Invalid character in expression")
+        start = (line, column)
+        end   = (line, column + len(value))
+        tokens.append(Token(TOKEN_TYPES[kind], value, start, end, source))
+        column += len(value)
 
-    def __iter__(self):   return iter(self.tokens)
-    def __len__(self):    return len(self.tokens)
+    # Reject any character not covered by the spec.
+    consumed = "".join(m.group() for m in TOKEN_RE.finditer(source))
+    if consumed != source:
+        raise SyntaxError("Invalid character in expression")
 
-    def get_new_token(self):
-        if self.pos >= len(self.tokens):
-            return None
-        token = self.tokens[self.pos]
-        self.pos += 1
-        return token
-
-    def reset(self, pos):       self.pos = pos
-    def mark(self):             return self.pos
-    def set_failed_token(self, value): self.failed_token = value
-    def format_error(self):
-        return f"Unexpected token at position {self.pos}"
-
-
-def Input(source):
-    return TokenStream(source)
+    return tokens
 
 
 # ============================================================
@@ -264,8 +235,8 @@ argument_list = (
 def parse_expression(source):
     ParserState.reset()
 
-    stream = Input(source)
-    result = expression.parse(stream)
+    tokens = tokenize(source)
+    result = expression.parse(tokens)
 
     if not result:
         raise SyntaxError(f"Invalid expression: {source}")
