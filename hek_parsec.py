@@ -601,7 +601,8 @@ def forward(parser_name: str) -> type[Parser]:
     class Lazy_Parser(Parser):
         @classmethod
         def parse(cls, token_stream, *args):
-            parser = g[parser_name]
+            ns = getattr(cls, "namespace", g)
+            parser = ns[parser_name]
             return parser.parse(token_stream, *args)
 
     Lazy_Parser.name = parser_name
@@ -611,6 +612,58 @@ def forward(parser_name: str) -> type[Parser]:
 
 
 fw = forward  # alias
+
+
+class GrammarNamespace(dict):
+    """Namespace mapping for Grammar class body execution.
+
+    Intercepts attribute lookups during class definition: if an attribute is not
+    yet defined in the class body or in outer globals/builtins, it automatically
+    generates a lazy forward reference (Parser) pointing to that attribute name.
+    """
+
+    def __init__(self, outer_globals):
+        super().__init__()
+        self.outer_globals = outer_globals
+
+    def __missing__(self, key):
+        if key in self.outer_globals:
+            return self.outer_globals[key]
+        import builtins
+        if hasattr(builtins, key):
+            return getattr(builtins, key)
+        lazy = forward(key)
+        lazy.namespace = self.outer_globals
+        self[key] = lazy
+        return lazy
+
+
+class GrammarMeta(type):
+    """Metaclass that enables declarative grammars without explicit forward declarations."""
+
+    @classmethod
+    def __prepare__(metacls, name, bases, **kwds):
+        return GrammarNamespace(calling_module_namespace())
+
+    def __new__(metacls, name, bases, namespace, **kwds):
+        cls = super().__new__(metacls, name, bases, dict(namespace))
+        # Export all non-private rules to the outer module namespace
+        # so they can be referenced directly and decorated with @method
+        if isinstance(namespace, GrammarNamespace):
+            g = namespace.outer_globals
+            for k, v in namespace.items():
+                if not k.startswith("_"):
+                    g[k] = v
+        return cls
+
+
+class Grammar(metaclass=GrammarMeta):
+    """Base class for declarative grammars.
+
+    Rules defined inside a subclass of Grammar do not require any `fw()` or `forward()`
+    declarations — undefined rule references are resolved automatically.
+    """
+    pass
 
 
 class shift(Parser):
@@ -1057,6 +1110,8 @@ __all__ = [
     "G",
     "Cut",
     "ParserMeta",
+    "Grammar",
+    "GrammarMeta",
     # Parsing context & Left Recursion
     "apply_parsing_context",
     "LR",
@@ -1590,5 +1645,16 @@ if __name__ == "__main__":
     m = ind_A.parse(Input("1 + 2 + 3"))
     assert m, "indirect left-recursion failed"
     print("  indirect left recursion (A -> B -> A): ok")
+
+    # 3. Grammar declarative class (zero forward declarations)
+    ParserState.reset()
+
+    class AutoGrammar(Grammar):
+        auto_expr = (auto_expr + PLUS + auto_term) | auto_term
+        auto_term = (auto_term + MUL + NUMBER) | NUMBER
+
+    m = auto_expr.parse(Input("1 + 2 * 3"))
+    assert m, "Grammar class parse failed"
+    print("  Grammar class (zero forward declarations): ok")
 
     print("\nAll tests passed.")

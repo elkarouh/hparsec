@@ -2,10 +2,10 @@
 import re
 
 from hek_parsec import (
+    Grammar,
     ParserState,
     expect_type,
     filt,
-    fw,
     ignore,
     literal,
     method,
@@ -132,50 +132,34 @@ unary_op = literal("+") | literal("-") | literal("not")
 
 
 # ============================================================
-# 4. Forward declarations
-# ============================================================
-
-expression    = fw("expression")
-logical_or    = fw("logical_or")
-logical_and   = fw("logical_and")
-comparison    = fw("comparison")
-additive      = fw("additive")
-multiplicative = fw("multiplicative")
-unary         = fw("unary")
-primary       = fw("primary")
-function_call = fw("function_call")
-argument_list = fw("argument_list")
-
-# ============================================================
-# 5. Left-recursive grammar
+# 4. Left-recursive grammar
 #
 # Every binary-operator level is written as a **direct** left recursion in a single Choice_Parser:
 #
-#   additive = additive add_op multiplicative   <- LR case
-#            | multiplicative                   <- base case
+#   additive = (additive + add_op + multiplicative) | multiplicative
 #
-# The binary operators are kept VISIBLE (not ignored) so that
-# the @method evaluate() can dispatch on self.nodes[1].node.
-#
-# hek_parsec resolves LR via the Warth/Erdweg/Rompf seed-growing algorithm, so no stack overflow occurs.
+# Subclassing Grammar automatically resolves mutually recursive and forward
+# rule references without any explicit fw() declarations.
 # ============================================================
 
-expression = logical_or
-logical_or = (logical_or + OR + logical_and) | logical_and
-logical_and = (logical_and + AND + comparison) | comparison
-# comparison is non-associative: only one optional RHS allowed.
-# Written without left-recursion to enforce that.
-comparison = additive + ((COMPARE_OP + additive) | nothing)
-additive = (additive + add_op + multiplicative) | multiplicative
-multiplicative = (multiplicative + mul_op + unary) | unary
-unary = (unary_op + primary) | primary # unary is right-recursive by nature
-group = LPAREN + expression + RPAREN
-primary = number | string | boolean | function_call | identifier | group
-function_call = identifier + LPAREN + (argument_list | nothing) + RPAREN
-argument_list = (argument_list + COMMA + expression) | expression
+class ExpressionGrammar(Grammar):
+    expression = logical_or
+    logical_or = (logical_or + OR + logical_and) | logical_and
+    logical_and = (logical_and + AND + comparison) | comparison
+    # comparison is non-associative: only one optional RHS allowed.
+    # Written without left-recursion to enforce that.
+    comparison = additive + ((COMPARE_OP + additive) | nothing)
+    additive = (additive + add_op + multiplicative) | multiplicative
+    multiplicative = (multiplicative + mul_op + unary) | unary
+    unary = (unary_op + primary) | primary # unary is right-recursive by nature
+    group = LPAREN + expression + RPAREN
+    primary = number | string | boolean | function_call | identifier | group
+    function_call = identifier + LPAREN + (argument_list | nothing) + RPAREN
+    argument_list = (argument_list + COMMA + expression) | expression
+
 
 # ============================================================
-# 6. AST Evaluation Methods (via @method)
+# 5. AST Evaluation Methods (via @method)
 #
 # For Choice_Parser rules (additive, multiplicative, unary),
 # @method automatically distributes to the Sequence_Parser binary
@@ -239,7 +223,7 @@ def evaluate(self):
 
 
 # ============================================================
-# 7. Public entry point
+# 6. Public entry point
 # ============================================================
 
 def parse_expression(source):
@@ -270,7 +254,7 @@ def evaluate_expression(source):
 
 
 # ============================================================
-# 8. Tests
+# 7. Tests
 # ============================================================
 
 if __name__ == "__main__":
