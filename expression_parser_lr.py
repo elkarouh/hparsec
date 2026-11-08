@@ -122,7 +122,7 @@ COMMA  = op(",")
 AND    = op("and")
 OR     = op("or")
 
-compare_op = NE | LE | GE | EQ | LT | GT
+COMPARE_OP = NE | LE | GE | EQ | LT | GT
 
 # Visible operator tokens (kept in the AST for evaluate() dispatch)
 # These use literal() without ignore() so evaluate() can read self.nodes[1].node.
@@ -146,12 +146,10 @@ primary       = fw("primary")
 function_call = fw("function_call")
 argument_list = fw("argument_list")
 
-
 # ============================================================
 # 5. Left-recursive grammar
 #
-# Every binary-operator level is written as a **direct** left
-# recursion in a single Choice_Parser:
+# Every binary-operator level is written as a **direct** left recursion in a single Choice_Parser:
 #
 #   additive = additive add_op multiplicative   <- LR case
 #            | multiplicative                   <- base case
@@ -159,8 +157,7 @@ argument_list = fw("argument_list")
 # The binary operators are kept VISIBLE (not ignored) so that
 # the @method evaluate() can dispatch on self.nodes[1].node.
 #
-# hek_parsec resolves LR via the Warth/Erdweg/Rompf seed-growing
-# algorithm, so no stack overflow occurs.
+# hek_parsec resolves LR via the Warth/Erdweg/Rompf seed-growing algorithm, so no stack overflow occurs.
 # ============================================================
 
 expression = logical_or
@@ -168,11 +165,10 @@ logical_or = (logical_or + OR + logical_and) | logical_and
 logical_and = (logical_and + AND + comparison) | comparison
 # comparison is non-associative: only one optional RHS allowed.
 # Written without left-recursion to enforce that.
-comparison = additive + ((compare_op + additive) | nothing)
+comparison = additive + ((COMPARE_OP + additive) | nothing)
 additive = (additive + add_op + multiplicative) | multiplicative
 multiplicative = (multiplicative + mul_op + unary) | unary
-# unary is right-recursive by nature; keep it that way.
-unary = (unary_op + primary) | primary
+unary = (unary_op + primary) | primary # unary is right-recursive by nature
 group = LPAREN + expression + RPAREN
 primary = number | string | boolean | function_call | identifier | group
 function_call = identifier + LPAREN + (argument_list | nothing) + RPAREN

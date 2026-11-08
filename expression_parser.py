@@ -151,41 +151,19 @@ argument_list = fw("argument_list")
 
 
 # ============================================================
-# 5. Grammar
+# 5. Grammar (avoids left-recursivity and therefore faster)
 # ============================================================
 
 expression = logical_or
-
 logical_or = logical_and + (OR + logical_and)[:]
-
 logical_and = comparison + (AND + comparison)[:]
-
 comparison = additive + ((compare_op + additive) | nothing)
-
 additive = multiplicative + (add_op + multiplicative)[:]
-
 multiplicative = unary + (mul_op + unary)[:]
-
 unary = (unary_op + primary) | primary
-
-primary = (
-    number
-    | string
-    | boolean
-    | function_call
-    | identifier
-    | (LPAREN + expression + RPAREN)
-)
-
-function_call = (
-    identifier
-    + LPAREN
-    + (argument_list | nothing)
-    + RPAREN
-)
-
+primary = number | string | boolean | function_call | identifier | (LPAREN + expression + RPAREN)
+function_call =  identifier + LPAREN + (argument_list | nothing) + RPAREN
 argument_list = expression + (COMMA + expression)[:]
-
 
 # ============================================================
 # 6. Public entry point
