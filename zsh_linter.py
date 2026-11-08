@@ -10,7 +10,7 @@ from hek_parsec import (
 )
 
 # ============================================================
-# 1. Zsh Tokenizer with Line/Column Tracking
+# 1. Enhanced Zsh Tokenizer
 # ============================================================
 
 class Token:
@@ -26,6 +26,7 @@ class Token:
 
 TOKEN_SPEC = [
     ("COMMENT",    r"#[^\n]*"),
+    ("BACKTICK",   r"`[^`]*`"),
     ("VAR_EXP",    r"\$\{[A-Za-z_][A-Za-z0-9_]*\}|\$[A-Za-z_][A-Za-z0-9_]*"),
     ("STRING",     r'"(?:[^"\\]|\\.)*"|\'(?:[^\'\\]|\\.)*\''),
     ("IDENT",      r"[A-Za-z_][A-Za-z0-9_]*"),
@@ -41,12 +42,13 @@ TOKEN_RE = re.compile(
 
 TOKEN_TYPES = {
     "COMMENT": 1,
-    "VAR_EXP": 2,
-    "STRING": 3,
-    "IDENT": 4,
-    "NUMBER": 5,
-    "OP": 6,
-    "NEWLINE": 7,
+    "BACKTICK": 2,
+    "VAR_EXP": 3,
+    "STRING": 4,
+    "IDENT": 5,
+    "NUMBER": 6,
+    "OP": 7,
+    "NEWLINE": 8,
 }
 
 def tokenize_zsh(source):
@@ -83,16 +85,20 @@ def tokenize_zsh(source):
 
 
 # ============================================================
-# 2. Terminals (Using expect_type_node to preserve Token objects)
+# 2. Terminals
 # ============================================================
 
 number = expect_type_node(TOKEN_TYPES["NUMBER"])
 string = expect_type_node(TOKEN_TYPES["STRING"])
 var_exp = expect_type_node(TOKEN_TYPES["VAR_EXP"])
+backtick = expect_type_node(TOKEN_TYPES["BACKTICK"])
 comment = expect_type_node(TOKEN_TYPES["COMMENT"])
 newline = expect_type_node(TOKEN_TYPES["NEWLINE"])
 
-reserved = {"if", "fi", "for", "do", "done", "case", "esac", "while", "local", "typeset", "declare"}
+l_bracket = filt(lambda tok: tok.string == "[", expect_type_node(TOKEN_TYPES["OP"]), name="[")
+r_bracket = filt(lambda tok: tok.string == "]", expect_type_node(TOKEN_TYPES["OP"]), name="]")
+
+reserved = {"if", "fi", "for", "do", "done", "case", "esac", "while", "local", "typeset", "declare", "function"}
 
 identifier = filt(
     lambda tok: tok.string not in reserved,
@@ -105,20 +111,48 @@ class Terminals(Terminals):
     LPAREN = "("
     RPAREN = ")"
 
-    argument = var_exp | string | number | identifier
+    argument = backtick | var_exp | string | number | identifier
     statement_sep = newline | SEMICOL
 
 
 # ============================================================
-# 3. Grammar & Style Checker Rules
+# 3. Helper for Checking Expression/Argument Issues
+# ============================================================
+
+def check_argument_issues(arg_node):
+    issues = []
+    arg_list = arg_node.nodes if hasattr(arg_node, "nodes") else [arg_node]
+    for arg in arg_list:
+        arg_token = arg.node if hasattr(arg, "node") else arg
+        val = arg_token.string if hasattr(arg_token, "string") else str(arg_token)
+        
+        if isinstance(val, str):
+            if val.startswith("$") and not val.startswith("${"):
+                issues.append({
+                    "rule": "ZSH002",
+                    "message": f"Unquoted variable expansion '{val}' detected. Risk of word splitting and globbing.",
+                    "token": arg_token
+                })
+            elif val.startswith("`") and val.endswith("`"):
+                issues.append({
+                    "rule": "ZSH003",
+                    "message": "Prefer modern '$(...)' command substitution over legacy backticks.",
+                    "token": arg_token
+                })
+    return issues
+
+
+# ============================================================
+# 4. Grammar & Expanded Style Linting Rules
 # ============================================================
 
 class ZshStyleGrammar(Grammar):
     script = statement[:]
-    statement = (comment | declaration | assignment | command) + statement_sep[:]
+    statement = (comment | declaration | assignment | test_construct | command) + statement_sep[:]
 
     declaration = literal("local") + identifier + ASSIGN + argument
     assignment = identifier + ASSIGN + argument
+    test_construct = l_bracket + argument[:] + r_bracket
     command = identifier + argument[:]
 
     # --------------------------------------------------------
@@ -132,7 +166,6 @@ class ZshStyleGrammar(Grammar):
             cmd_token = cmd_parser.node if hasattr(cmd_parser, "node") else cmd_parser
             cmd_name = cmd_token.string if hasattr(cmd_token, "string") else str(cmd_token)
             
-            # Rule ZSH001: Prefer native 'print' or 'printf' over legacy 'echo'
             if cmd_name == "echo":
                 issues.append({
                     "rule": "ZSH001",
@@ -140,29 +173,33 @@ class ZshStyleGrammar(Grammar):
                     "token": cmd_token
                 })
 
-            # Rule ZSH002: Detect unquoted variable expansions ($var instead of "$var")
             if len(self.nodes) > 1 and self.nodes[1] is not None:
-                args_node = self.nodes[1]
-                arg_list = args_node.nodes if hasattr(args_node, "nodes") else [args_node]
-                
-                for arg in arg_list:
-                    arg_token = arg.node if hasattr(arg, "node") else arg
-                    val = arg_token.string if hasattr(arg_token, "string") else str(arg_token)
-                    if isinstance(val, str) and val.startswith("$") and not val.startswith("${"):
-                        issues.append({
-                            "rule": "ZSH002",
-                            "message": f"Unquoted variable expansion '{val}' detected. Risk of word splitting and globbing.",
-                            "token": arg_token
-                        })
+                issues.extend(check_argument_issues(self.nodes[1]))
             return issues
 
     class assignment:
         def lint(self):
-            return []
+            issues = []
+            if len(self.nodes) > 1 and self.nodes[1] is not None:
+                issues.extend(check_argument_issues(self.nodes[1]))
+            return issues
 
     class declaration:
         def lint(self):
-            return []
+            issues = []
+            if len(self.nodes) > 2 and self.nodes[2] is not None:
+                issues.extend(check_argument_issues(self.nodes[2]))
+            return issues
+
+    class test_construct:
+        def lint(self):
+            open_bracket = self.nodes[0]
+            tok = open_bracket.node if hasattr(open_bracket, "node") else open_bracket
+            return [{
+                "rule": "ZSH004",
+                "message": "Prefer enhanced '[[ ... ]]'' over legacy POSIX '[ ... ]' test construct in zsh.",
+                "token": tok
+            }]
 
     class comment:
         def lint(self):
@@ -186,7 +223,7 @@ class ZshStyleGrammar(Grammar):
 
 
 # ============================================================
-# 4. Public Entry Point
+# 5. Public Entry Point
 # ============================================================
 
 def lint_zsh_code(source):
@@ -210,18 +247,17 @@ def lint_zsh_code(source):
 
 
 # ============================================================
-# 5. Tests
+# 6. Extended Tests
 # ============================================================
 
 if __name__ == "__main__":
     test_scripts = [
-        ('Clean script', 'print "Hello World"\nlocal my_var="test"\n'),
-        ('Echo usage (ZSH001)', 'echo "Hello World"\n'),
-        ('Unquoted variable (ZSH002)', 'print $USER_INPUT\n'),
-        ('Multiple issues', 'echo $PATH\nprint "ok"\necho $USER\n'),
+        ('Backtick assignment check (ZSH003)', 'res=`pwd`\n'),
+        ('Legacy test check (ZSH004)', '[ $x -eq 1 ]\n'),
+        ('Multiple common errors', 'echo `date`\n[ -f $FILE ]\necho $USER\n'),
     ]
 
-    print("--- Running Zsh Style Linter Tests ---")
+    print("--- Running Expanded Zsh Style Linter Tests ---")
     for name, code in test_scripts:
         print(f"\nTest Case: [{name}]")
         print(f"Code:\n{code.strip()}")
