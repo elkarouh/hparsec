@@ -86,57 +86,47 @@ def tokenize(source):
 # 2. Token parser helpers
 # ============================================================
 
-def keyword(word):
-    return literal(word)
-
-def operator(value):
-    return literal(value)
-
-def token_type(ty):
-    return expect_type(ty)
-
-
-def ignored(p):
-    return ignore(p)
+def op(symbol):
+    """Match and ignore an operator or keyword token."""
+    return ignore(literal(symbol))
 
 
 # ============================================================
 # 3. Terminals
 # ============================================================
 
-number = token_type(TOKEN_TYPES["NUMBER"])
-string = token_type(TOKEN_TYPES["STRING"])
-
-boolean = keyword("true") | keyword("false")
+number = expect_type(TOKEN_TYPES["NUMBER"])
+string = expect_type(TOKEN_TYPES["STRING"])
+boolean = literal("true") | literal("false")
 
 reserved = {"and", "or", "not", "mod", "true", "false"}
 
 identifier = filt(
     lambda value: value not in reserved,
-    token_type(TOKEN_TYPES["IDENT"]),
+    expect_type(TOKEN_TYPES["IDENT"]),
 )
 
-# Operators
-OR = ignored(keyword("or"))
-AND = ignored(keyword("and"))
-NOT = ignored(keyword("not"))
-MOD = ignored(keyword("mod"))
+# Operators & keywords (matched and ignored from AST)
+OR = op("or")
+AND = op("and")
+NOT = op("not")
+MOD = op("mod")
 
-PLUS = ignored(operator("+"))
-MINUS = ignored(operator("-"))
-MUL = ignored(operator("*"))
-DIV = ignored(operator("/"))
+PLUS = op("+")
+MINUS = op("-")
+MUL = op("*")
+DIV = op("/")
 
-EQ = ignored(operator("="))
-NE = ignored(operator("/="))
-LT = ignored(operator("<"))
-GT = ignored(operator(">"))
-LE = ignored(operator("<="))
-GE = ignored(operator(">="))
+EQ = op("=")
+NE = op("/=")
+LT = op("<")
+GT = op(">")
+LE = op("<=")
+GE = op(">=")
 
-LPAREN = ignored(operator("("))
-RPAREN = ignored(operator(")"))
-COMMA = ignored(operator(","))
+LPAREN = op("(")
+RPAREN = op(")")
+COMMA = op(",")
 
 compare_op = NE | LE | GE | EQ | LT | GT
 add_op = PLUS | MINUS

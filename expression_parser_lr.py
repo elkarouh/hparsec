@@ -8,6 +8,7 @@ from hek_parsec import (
     fw,
     ignore,
     literal,
+    method,
     nothing,
 )
 
@@ -86,60 +87,44 @@ def tokenize(source):
 # 2. Token parser helpers
 # ============================================================
 
-def keyword(word):
-    return literal(word)
-
-def operator(value):
-    return literal(value)
-
-def token_type(ty):
-    return expect_type(ty)
-
-def ignored(p):
-    return ignore(p)
+def op(symbol):
+    """Match and ignore an operator or keyword token."""
+    return ignore(literal(symbol))
 
 
 # ============================================================
 # 3. Terminals
 # ============================================================
 
-number  = token_type(TOKEN_TYPES["NUMBER"])
-string  = token_type(TOKEN_TYPES["STRING"])
-boolean = keyword("true") | keyword("false")
+number  = expect_type(TOKEN_TYPES["NUMBER"])
+string  = expect_type(TOKEN_TYPES["STRING"])
+boolean = literal("true") | literal("false")
 
 reserved = {"and", "or", "not", "mod", "true", "false"}
 
 identifier = filt(
     lambda value: value not in reserved,
-    token_type(TOKEN_TYPES["IDENT"]),
+    expect_type(TOKEN_TYPES["IDENT"]),
 )
 
-# Operator tokens (all consumed but not kept in the AST)
-OR    = ignored(keyword("or"))
-AND   = ignored(keyword("and"))
-NOT   = ignored(keyword("not"))
-MOD   = ignored(keyword("mod"))
+# Ignored operator tokens (consumed but not kept in the AST)
+EQ    = op("=")
+NE    = op("/=")
+LT    = op("<")
+GT    = op(">")
+LE    = op("<=")
+GE    = op(">=")
 
-PLUS  = ignored(operator("+"))
-MINUS = ignored(operator("-"))
-MUL   = ignored(operator("*"))
-DIV   = ignored(operator("/"))
-
-EQ    = ignored(operator("="))
-NE    = ignored(operator("/="))
-LT    = ignored(operator("<"))
-GT    = ignored(operator(">"))
-LE    = ignored(operator("<="))
-GE    = ignored(operator(">="))
-
-LPAREN = ignored(operator("("))
-RPAREN = ignored(operator(")"))
-COMMA  = ignored(operator(","))
+LPAREN = op("(")
+RPAREN = op(")")
 
 compare_op = NE | LE | GE | EQ | LT | GT
-add_op     = PLUS | MINUS
-mul_op     = MUL | DIV | MOD
-unary_op   = PLUS | MINUS | NOT
+
+# Visible operator tokens (kept in the AST for evaluate() dispatch)
+# These use literal() without ignore() so evaluate() can read self.nodes[1].node.
+add_op  = literal("+") | literal("-")
+mul_op  = literal("*") | literal("/") | literal("mod")
+unary_op = literal("+") | literal("-") | literal("not")
 
 
 # ============================================================
@@ -161,27 +146,30 @@ argument_list = fw("argument_list")
 # ============================================================
 # 5. Left-recursive grammar
 #
-# Every binary-operator level is written as a direct left
-# recursion instead of a "base + repetition" loop:
+# Every binary-operator level is written as a **direct** left
+# recursion in a single Choice_Parser:
 #
-#   additive = additive add_op multiplicative   <- left-recursive case
+#   additive = additive add_op multiplicative   <- LR case
 #            | multiplicative                   <- base case
 #
-# hek_parsec resolves these via the Warth/Erdweg/Rompf
-# seed-growing algorithm, so no stack overflow occurs.
+# The binary operators are kept VISIBLE (not ignored) so that
+# the @method evaluate() can dispatch on self.nodes[1].node.
+#
+# hek_parsec resolves LR via the Warth/Erdweg/Rompf seed-growing
+# algorithm, so no stack overflow occurs.
 # ============================================================
 
 expression = logical_or
 
 # logical_or  = logical_or OR logical_and | logical_and
 logical_or = (
-    (logical_or + OR + logical_and)
+    (logical_or + op("or") + logical_and)
     | logical_and
 )
 
 # logical_and = logical_and AND comparison | comparison
 logical_and = (
-    (logical_and + AND + comparison)
+    (logical_and + op("and") + comparison)
     | comparison
 )
 
@@ -191,23 +179,23 @@ comparison = (
     additive + ((compare_op + additive) | nothing)
 )
 
-# additive = additive add_op multiplicative | multiplicative
-additive = (
-    (additive + add_op + multiplicative)
-    | multiplicative
-)
+# additive = additive ('+' | '-') multiplicative | multiplicative
+# add_op is VISIBLE so evaluate() can read nodes[1].node.
+# _additive_binary is named so @method can be attached to it.
+_additive_binary = additive + add_op + multiplicative
+additive = _additive_binary | multiplicative
 
-# multiplicative = multiplicative mul_op unary | unary
-multiplicative = (
-    (multiplicative + mul_op + unary)
-    | unary
-)
+# multiplicative = multiplicative ('*' | '/' | 'mod') unary | unary
+# mul_op is VISIBLE so evaluate() can read nodes[1].node.
+_multiplicative_binary = multiplicative + mul_op + unary
+multiplicative = _multiplicative_binary | unary
 
 # unary is right-recursive by nature; keep it that way.
-unary = (
-    (unary_op + primary)
-    | primary
-)
+# unary_op is VISIBLE so evaluate() can dispatch on nodes[0].node.
+_unary_prefix = unary_op + primary
+unary = _unary_prefix | primary
+
+group = LPAREN + expression + RPAREN
 
 primary = (
     number
@@ -215,25 +203,89 @@ primary = (
     | boolean
     | function_call
     | identifier
-    | (LPAREN + expression + RPAREN)
+    | group
 )
 
 function_call = (
     identifier
-    + LPAREN
+    + op("(")
     + (argument_list | nothing)
-    + RPAREN
+    + op(")")
 )
 
 # argument_list = argument_list COMMA expression | expression
 argument_list = (
-    (argument_list + COMMA + expression)
+    (argument_list + op(",") + expression)
     | expression
 )
 
 
 # ============================================================
-# 6. Public entry point
+# 6. AST Evaluation Methods (via @method)
+#
+# Binary arithmetic rules (_additive_binary, _multiplicative_binary,
+# _unary_prefix) are named Sequence_Parser classes.  @method attaches
+# evaluate() directly to those classes so it is called on the actual
+# AST node returned by Choice_Parser.
+# ============================================================
+
+@method(number)
+def evaluate(self):
+    val = float(self.node)
+    return int(val) if val.is_integer() else val
+
+@method(_additive_binary)
+def evaluate(self):
+    # nodes = [lhs, op_literal, rhs]
+    lhs = self.nodes[0].evaluate()
+    opr = self.nodes[1].node   # '+' or '-'
+    rhs = self.nodes[2].evaluate()
+    if opr == "+":
+        return lhs + rhs
+    if opr == "-":
+        return lhs - rhs
+    raise ValueError(f"Unknown additive op: {opr!r}")
+
+@method(_multiplicative_binary)
+def evaluate(self):
+    # nodes = [lhs, op_literal, rhs]
+    lhs = self.nodes[0].evaluate()
+    opr = self.nodes[1].node   # '*', '/', or 'mod'
+    rhs = self.nodes[2].evaluate()
+    if opr == "*":
+        return lhs * rhs
+    if opr == "/":
+        return lhs / rhs
+    if opr == "mod":
+        return lhs % rhs
+    raise ValueError(f"Unknown multiplicative op: {opr!r}")
+
+@method(_unary_prefix)
+def evaluate(self):
+    # nodes = [op_literal, operand]
+    opr     = self.nodes[0].node   # '+' or '-'
+    operand = self.nodes[1].evaluate()
+    if opr == "+":
+        return +operand
+    if opr == "-":
+        return -operand
+    raise ValueError(f"Cannot evaluate 'not' in arithmetic context")
+
+@method(group)
+def evaluate(self):
+    return self.node.evaluate()
+
+@method(identifier)
+def evaluate(self):
+    raise ValueError(f"Cannot evaluate non-arithmetic identifier: {self.node}")
+
+@method(function_call)
+def evaluate(self):
+    raise ValueError(f"Cannot evaluate non-arithmetic function call: {self.nodes[0].node}")
+
+
+# ============================================================
+# 7. Public entry point
 # ============================================================
 
 def parse_expression(source):
@@ -257,8 +309,14 @@ def parse_expression(source):
     return ast
 
 
+def evaluate_expression(source):
+    """Parse and evaluate a pure arithmetic expression."""
+    ast = parse_expression(source)
+    return ast.evaluate()
+
+
 # ============================================================
-# 7. Tests
+# 8. Tests
 # ============================================================
 
 if __name__ == "__main__":
@@ -282,10 +340,28 @@ if __name__ == "__main__":
         "foo(1, 2, 3, 4, 5)",
     ]
 
+    print("--- Parsing Tests ---")
     for source in tests:
         try:
             ast = parse_expression(source)
             print("OK:", source)
-            print(ast)
         except Exception as exc:
             print("ERROR:", source, exc)
+
+    print("\n--- Arithmetic Evaluation Tests (via @method) ---")
+    arithmetic_tests = [
+        ("1 + 2 * 3", 7),
+        ("(1 + 2) * 3", 9),
+        ("10 - 4 - 2", 4),
+        ("8 / 4 / 2", 1.0),
+        ("20 / 2 * 5", 50.0),
+        ("-5 * +3", -15),
+        ("14 mod 4", 2),
+        ("((2 + 3) * (4 - 1)) / 3", 5.0),
+        ("100 - 50 + 25 - 10", 65),
+    ]
+
+    for expr_str, expected in arithmetic_tests:
+        val = evaluate_expression(expr_str)
+        assert val == expected, f"Expected {expected}, got {val}"
+        print(f"  {expr_str} = {val}  (expected {expected}) -> OK")

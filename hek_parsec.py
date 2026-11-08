@@ -557,6 +557,13 @@ class Parser(metaclass=ParserMeta):
             return str(self.node)
         return str(getattr(self, "node", ""))
 
+    def evaluate(self):
+        if hasattr(self, "node") and self.node is not self:
+            if hasattr(self.node, "evaluate"):
+                return self.node.evaluate()
+            return self.node
+        return getattr(self, "node", None)
+
 def forward(parser_name: str) -> type[Parser]:
     """Create a lazy forward reference for recursive grammars."""
     # Capture the module namespace at definition time, not parse time
@@ -714,12 +721,15 @@ def sequence(p1, p2):
                 for i in range(
                     len(p.parsers)
                 ):  # look at the alternatives in the choice parser
+                    saved_pos = token_stream.mark()
                     if not (m := p.parse(token_stream, i)):
+                        token_stream.reset(saved_pos)
                         continue  # backtrack
                     ast, token_stream = m
                     if not parsers[1:]:
                         return [ast], token_stream
                     if not (m := cls.parse_sequence(token_stream, parsers[1:])):
+                        token_stream.reset(saved_pos)
                         continue  # backtrack
                     asts, token_stream = m
                     return [ast] + asts, token_stream
