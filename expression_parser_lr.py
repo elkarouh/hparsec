@@ -13,7 +13,7 @@ from hek_parsec import (
 )
 
 # ============================================================
-# 1. Small ad-hoc tokenizer  (same as expression_parser.py)
+# 1. Small ad-hoc tokenizer
 # ============================================================
 
 class Token:
@@ -96,8 +96,8 @@ def op(symbol):
 # 3. Terminals
 # ============================================================
 
-number  = expect_type(TOKEN_TYPES["NUMBER"])
-string  = expect_type(TOKEN_TYPES["STRING"])
+number = expect_type(TOKEN_TYPES["NUMBER"])
+string = expect_type(TOKEN_TYPES["STRING"])
 boolean = literal("true") | literal("false")
 
 reserved = {"and", "or", "not", "mod", "true", "false"}

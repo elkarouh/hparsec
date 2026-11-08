@@ -30,7 +30,7 @@ TOKEN_SPEC = [
     ("NUMBER",   r"\d+(?:\.\d+)?"),
     ("STRING",   r'"(?:[^"\\]|\\.)*"'),
     ("IDENT",    r"[A-Za-z][A-Za-z0-9_]*"),
-    ("OP",       r"/=|<=|>=|[+\-*/=<>(),]"),
+    ("OP",       r"/=|<=|>=|[+\-*/=<>(),]"),   # no space in char-class
     ("SKIP",     r"[ \t\r\n]+"),
 ]
 
@@ -70,11 +70,11 @@ def tokenize(source):
             )
 
         start = (line, column)
-        end = (line, column + len(value))
+        end   = (line, column + len(value))
         tokens.append(Token(TOKEN_TYPES[kind], value, start, end, source))
         column += len(value)
 
-    # Detect characters not matched by the tokenizer.
+    # Reject any character not covered by the spec.
     consumed = "".join(m.group() for m in TOKEN_RE.finditer(source))
     if consumed != source:
         raise SyntaxError("Invalid character in expression")
@@ -106,46 +106,42 @@ identifier = filt(
     expect_type(TOKEN_TYPES["IDENT"]),
 )
 
-# Operators & keywords (matched and ignored from AST)
-OR = op("or")
-AND = op("and")
-NOT = op("not")
-MOD = op("mod")
-
-PLUS = op("+")
-MINUS = op("-")
-MUL = op("*")
-DIV = op("/")
-
-EQ = op("=")
-NE = op("/=")
-LT = op("<")
-GT = op(">")
-LE = op("<=")
-GE = op(">=")
+# Ignored operator tokens, (consumed but not kept in the AST)
+# by convention, we use UPPERCASE 
+EQ    = op("=")
+NE    = op("/=")
+LT    = op("<")
+GT    = op(">")
+LE    = op("<=")
+GE    = op(">=")
 
 LPAREN = op("(")
 RPAREN = op(")")
-COMMA = op(",")
+COMMA  = op(",")
+AND    = op("and")
+OR     = op("or")
 
-compare_op = NE | LE | GE | EQ | LT | GT
-add_op = PLUS | MINUS
-mul_op = MUL | DIV | MOD
-unary_op = PLUS | MINUS | NOT
+COMPARE_OP = NE | LE | GE | EQ | LT | GT
+
+# Visible operator tokens (kept in the AST for evaluate() dispatch)
+# These use literal() without ignore() so evaluate() can read self.nodes[1].node.
+add_op  = literal("+") | literal("-")
+mul_op  = literal("*") | literal("/") | literal("mod")
+unary_op = literal("+") | literal("-") | literal("not")
 
 
 # ============================================================
 # 4. Forward declarations
 # ============================================================
 
-expression = fw("expression")
-logical_or = fw("logical_or")
-logical_and = fw("logical_and")
-comparison = fw("comparison")
-additive = fw("additive")
+expression    = fw("expression")
+logical_or    = fw("logical_or")
+logical_and   = fw("logical_and")
+comparison    = fw("comparison")
+additive      = fw("additive")
 multiplicative = fw("multiplicative")
-unary = fw("unary")
-primary = fw("primary")
+unary         = fw("unary")
+primary       = fw("primary")
 function_call = fw("function_call")
 argument_list = fw("argument_list")
 
@@ -157,7 +153,7 @@ argument_list = fw("argument_list")
 expression = logical_or
 logical_or = logical_and + (OR + logical_and)[:]
 logical_and = comparison + (AND + comparison)[:]
-comparison = additive + ((compare_op + additive) | nothing)
+comparison = additive + ((COMPARE_OP + additive) | nothing)
 additive = multiplicative + (add_op + multiplicative)[:]
 multiplicative = unary + (mul_op + unary)[:]
 unary = (unary_op + primary) | primary
@@ -188,6 +184,12 @@ def parse_expression(source):
         )
 
     return ast
+
+
+def evaluate_expression(source):
+    """Parse and evaluate a pure arithmetic expression."""
+    ast = parse_expression(source)
+    return ast.evaluate()
 
 
 # ============================================================
