@@ -88,28 +88,28 @@ def tokenize_zsh(source):
 # 2. Terminals
 # ============================================================
 
-number = expect_type_node(TOKEN_TYPES["NUMBER"])
-string = expect_type_node(TOKEN_TYPES["STRING"])
-var_exp = expect_type_node(TOKEN_TYPES["VAR_EXP"])
-backtick = expect_type_node(TOKEN_TYPES["BACKTICK"])
-comment = expect_type_node(TOKEN_TYPES["COMMENT"])
-newline = expect_type_node(TOKEN_TYPES["NEWLINE"])
-
-l_bracket = filt(lambda tok: tok.string == "[", expect_type_node(TOKEN_TYPES["OP"]), name="[")
-r_bracket = filt(lambda tok: tok.string == "]", expect_type_node(TOKEN_TYPES["OP"]), name="]")
-
-reserved = {"if", "fi", "for", "do", "done", "case", "esac", "while", "local", "typeset", "declare", "function"}
-
-identifier = filt(
-    lambda tok: tok.string not in reserved,
-    expect_type_node(TOKEN_TYPES["IDENT"]),
-)
-
 class Terminals(Terminals):
     ASSIGN = "="
     SEMICOL = ";"
     LPAREN = "("
     RPAREN = ")"
+    # Visible terminal parsers (lowercase)
+    number = expect_type_node(TOKEN_TYPES["NUMBER"])
+    string = expect_type_node(TOKEN_TYPES["STRING"])
+    var_exp = expect_type_node(TOKEN_TYPES["VAR_EXP"])
+    backtick = expect_type_node(TOKEN_TYPES["BACKTICK"])
+    comment = expect_type_node(TOKEN_TYPES["COMMENT"])
+    newline = expect_type_node(TOKEN_TYPES["NEWLINE"])
+
+    l_bracket = filt(lambda tok: tok.string == "[", expect_type_node(TOKEN_TYPES["OP"]), name="[")
+    r_bracket = filt(lambda tok: tok.string == "]", expect_type_node(TOKEN_TYPES["OP"]), name="]")
+
+    reserved = {"if", "fi", "for", "do", "done", "case", "esac", "while", "local", "typeset", "declare", "function"}
+
+    identifier = filt(
+        lambda tok: tok.string not in reserved,
+        expect_type_node(TOKEN_TYPES["IDENT"]),
+    )
 
     argument = backtick | var_exp | string | number | identifier
     statement_sep = newline | SEMICOL
@@ -143,7 +143,7 @@ def check_argument_issues(arg_node):
 
 
 # ============================================================
-# 4. Grammar & Expanded Style Linting Rules
+# 4. Grammar & Style Linting Rules
 # ============================================================
 
 class ZshStyleGrammar(Grammar):
@@ -247,7 +247,7 @@ def lint_zsh_code(source):
 
 
 # ============================================================
-# 6. Extended Tests
+# 6. Tests
 # ============================================================
 
 if __name__ == "__main__":
