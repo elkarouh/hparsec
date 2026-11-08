@@ -26,6 +26,25 @@ Quick example:
     ast, rest = keyvalue.parse(Input("x=789;"))
     print(ast.to_py())  # x:789
 
+IMPORTANT — sequence flattening
+-------------------------------
+`A + B` where A is already a Sequence_Parser produces a NEW Sequence_Parser
+whose `.parsers` is `A.parsers + [B]` — i.e. A's children are hoisted into
+the parent, and the intermediate `A` node does NOT appear in the resulting
+AST. Likewise `A | B` flattens when A is a Choice_Parser.
+
+Consequence: if you write
+
+    command  = command_head + argument[:]
+    pipeline = command + (PIPE + command)[:]
+
+then the `pipeline` AST node has shape `[command_head, argument[:], pipes]`
+— it does NOT contain a nested `command` node. Any method attached to
+`command` will only fire when `command` matches on its own; inside a
+`pipeline` the command's children are hoisted. Lint/output code that needs
+to treat "a command, wherever it appears" uniformly must therefore classify
+by node shape rather than relying on `@method` attachment.
+
 todo: replace tokenizer with own lexer
 """
 
@@ -66,11 +85,19 @@ def calling_module_namespace():
 
 
 def _attach_method(target_parser, method_name: str, func: Callable):
-    """Attach method_name=func to target_parser, distributing to Sequence_Parsers if Choice_Parser."""
-    if hasattr(target_parser, "parsers") and any(
-        getattr(p, "__name__", None) == "Sequence_Parser" for p in target_parser.parsers
-    ):
-        targets = [p for p in target_parser.parsers if getattr(p, "__name__", None) == "Sequence_Parser"]
+    """Attach method_name=func to target_parser.
+
+    FIX: only distribute to Sequence_Parser alternatives when the target
+    really IS a Choice_Parser.  Distributing from a Sequence_Parser to its
+    children was silently overwriting methods on inner parsers.
+    """
+    if getattr(target_parser, "__name__", None) == "Choice_Parser":
+        targets = [
+            p for p in target_parser.parsers
+            if getattr(p, "__name__", None) == "Sequence_Parser"
+        ]
+        if not targets:
+            targets = [target_parser]
     else:
         targets = [target_parser]
 
@@ -182,21 +209,12 @@ class ParserState:
 
     Attributes:
         DEBUG: When True, print parser construction and matching details.
-        memos: Memoization cache (currently unused, reserved for packrat parsing).
+        memos: Reserved for packrat parsing at the ParserState level.
+            NOTE: per-parse memoization currently lives on TokenStream.memos.
         symbol_table: SymbolTable instance for the current parse.
 
-    Backend-specific state (imports, type maps, pragmas, etc.) is managed by
-    each backend, not here.  Backends call reset() then initialise their own
-    fields.
-
-    The state is process-global, so translating one unit inside the
-    translation of another (dependency transpiles, prepasses) would clobber
-    the outer unit's state.  Wrap any nested translation in ``scoped()``::
-
-        with ParserState.scoped():
-            ParserState.reset()
-            translate(dep_code)
-        # outer unit's state is restored here
+    The state is process-global. Use ``ParserState.scoped()`` around nested
+    translations to preserve the outer unit's state.
     """
 
     DEBUG = False
@@ -576,6 +594,7 @@ class Parser(metaclass=ParserMeta):
                 self.node = nodes[0]
                 self.nodes = nodes
             else:
+                self.node = None
                 self.nodes = []
         else:
             self.node = nodes
@@ -896,16 +915,31 @@ def sequence(p1, p2):
 
 
 def several_times_parser(parser, min_times, max_times=None):
-    """Repeat parser between min_times and max_times. None means unbounded."""
+    """Repeat parser between min_times and max_times. None means unbounded.
+
+    Zero-width-success guard: if the inner parser succeeds but does not advance
+    the stream (e.g. `nothing[:]`), stop to avoid an infinite loop.
+
+    NOTE: the position must be captured BEFORE calling parser.parse. Capturing
+    it after the parse (as an earlier revision did) makes every iteration look
+    zero-width and terminates the loop after a single match.
+    """
 
     class Several_Times(Parser):
         @apply_parsing_context
         def parse(cls, token_stream):
             nodes = []
-            while m := parser.parse(token_stream):
+            while True:
+                before = token_stream.pos
+                m = parser.parse(token_stream)
+                if not m:
+                    break
                 ast, token_stream = m
                 nodes.append(ast)
                 if max_times is not None and len(nodes) == max_times:
+                    break
+                if token_stream.pos == before:
+                    # zero-width success — stop to avoid an infinite loop
                     break
             if min_times is None:
                 if len(nodes) == 0:
@@ -984,6 +1018,7 @@ def expect_re(regex):
              name='NUMBER' if 'eE' in regex else 'STRING' if (len(regex) > 0 and regex[0] == '(') else f'/{regex}/')
     )
     return parser
+
 
 class TerminalsNamespace(dict):
     """Namespace mapping for Terminals class body execution.
