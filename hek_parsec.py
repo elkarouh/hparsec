@@ -501,6 +501,7 @@ def forward(parser_name: str) -> type[Parser]:
             return parser.parse(token_stream, *args)
 
     Lazy_Parser.name = parser_name
+    Lazy_Parser.namespace = g
     Lazy_Parser.__name__ = parser_name
     return Lazy_Parser
 
@@ -627,11 +628,17 @@ def sequence(p1, p2):
             """This function was made recursive to allow backtracking"""
             p = parsers[0]
             if hasattr(p, "name"):
-                g = calling_module_namespace()
+                # forward() already captured the caller's namespace. Reuse it
+                # instead of walking the Python stack on every parse invocation.
+                g = getattr(p, "namespace", None)
+                if g is None:
+                    g = calling_module_namespace()
                 if p.name in g:
                     p = g[p.name]
             elif getattr(p, "__name__", None) == "Lazy_Parser":
-                g = calling_module_namespace()
+                g = getattr(p, "namespace", None)
+                if g is None:
+                    g = calling_module_namespace()
                 p = g[p.name]
             if (
                 p.__name__ == "Choice_Parser"
