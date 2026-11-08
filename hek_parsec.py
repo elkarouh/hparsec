@@ -29,9 +29,8 @@ Quick example:
 todo: replace tokenizer with own lexer
 """
 
-import inspect
+import sys
 import re
-import tokenize as tkn
 from functools import wraps
 from typing import Callable
 
@@ -44,6 +43,16 @@ def calling_module_namespace():
 
     Used by forward() and method() to resolve parser names in the caller's scope.
     """
+    if hasattr(sys, "_getframe"):
+        f = sys._getframe(1)
+        while f:
+            f_name = f.f_globals.get("__name__")
+            if f_name != __name__:
+                return f.f_globals
+            f = f.f_back
+        return globals()
+
+    import inspect
     for stk in inspect.stack():
         mod = inspect.getmodule(stk[0])
         if mod is None:
@@ -717,24 +726,11 @@ cut = nothing | fail
 
 
 #############################################################################
-def Input(string: str):
-    """Create a token stream using hek_tokenize (loaded on demand).
-
-    This is a convenience adapter. The parser combinators themselves accept
-    any compatible token stream and do not depend on hek_tokenize.
-    """
-    from hek_tokenize import Tokenizer
-
-    gen = Tokenizer(string)
-    next(gen)  # skip the encoding token
-    return gen
-
-
 def expect(ty, val):
     """Match a token with the given type and exact string value."""
     parser = fmap(
-        lambda tok: tok.string,
-        filt(lambda tok: tok.type == ty and tok.string == val, shift),
+        lambda tok: getattr(tok, "string", tok),
+        filt(lambda tok: getattr(tok, "type", None) == ty and getattr(tok, "string", tok) == val, shift),
     )
     # parser.__name__=f'expect_{val}'
     return parser
@@ -742,7 +738,7 @@ def expect(ty, val):
 
 def expect_type(ty):
     """Match any token of the given type."""
-    parser = fmap(lambda tok: tok.string, filt(lambda tok: tok.type == ty, shift))
+    parser = fmap(lambda tok: getattr(tok, "string", tok), filt(lambda tok: getattr(tok, "type", None) == ty, shift))
     # parser.__name__=f'expect_{ty}'
     return parser
 
@@ -752,29 +748,20 @@ def expect_type_node(ty):
     
     Used for RichNL and other enriched token types that carry additional data.
     """
-    parser = filt(lambda tok: tok.type == ty, shift, name=tkn.tok_name.get(ty, str(ty)))
+    parser = filt(lambda tok: getattr(tok, "type", None) == ty, shift, name=str(ty))
     return parser
 
 
 def expect_node(ty, val):
     """Match token by type and value, preserving the full TokenInfo as node."""
-    return filt(lambda tok: tok.type == ty and tok.string == val, shift, name=repr(val))
-
-
-def expect_nl_or_richnl():
-    """Match NL token or RichNL object and return it.
-    
-    RichNL.type == tkn.NL, so this matches both.
-    """
-    parser = filt(lambda tok: tok.type == tkn.NL, shift, name='NL')
-    return parser
+    return filt(lambda tok: getattr(tok, "type", None) == ty and getattr(tok, "string", tok) == val, shift, name=repr(val))
 
 
 def literal(mylit: str) -> type[Parser]:
-    """Match a NAME token with the exact string value (e.g. a keyword)."""
+    """Match a token with the exact string value (e.g. a keyword)."""
     parser = fmap(
-        lambda tok: tok.string,
-        filt(lambda tok: tok.type == tkn.NAME and tok.string == mylit, shift, name=repr(mylit)),
+        lambda tok: getattr(tok, "string", tok),
+        filt(lambda tok: getattr(tok, "string", tok) == mylit, shift, name=repr(mylit)),
     )
     parser.__name__ = f"Literal_{mylit}"
     return parser
@@ -783,149 +770,182 @@ def literal(mylit: str) -> type[Parser]:
 def expect_re(regex):
     """Match a token whose string matches the given regex."""
     parser = fmap(
-        lambda tok: tok.string, filt(lambda tok: re.match(regex, tok.string), shift, name='NUMBER' if 'eE' in regex else 'STRING' if regex[0] == '(' else f'/{regex}/')
+        lambda tok: getattr(tok, "string", tok),
+        filt(lambda tok: bool(re.match(regex, getattr(tok, "string", str(tok)))), shift,
+             name='NUMBER' if 'eE' in regex else 'STRING' if (len(regex) > 0 and regex[0] == '(') else f'/{regex}/')
     )
     return parser
 
 
 ###############################################################################
-# Token definition helpers
-def _op(symbol: str):
-    """Create an ignored operator token parser."""
-    return ignore(expect(tkn.OP, symbol))
+# Lazy-loaded legacy tokens and adapters for tokenize / hek_tokenize
+_LEGACY_TOKEN_NAMES = {
+    "Tokenizer",
+    "Input",
+    "expect_nl_or_richnl",
+    # Delimiters
+    "LPAREN", "RPAREN", "LBRACE", "RBRACE", "LBRACKET", "RBRACKET",
+    "COMMA", "SEMICOLON", "VBAR", "COLON", "EQUAL",
+    # Arithmetic operators
+    "PLUS", "MINUS", "MUL", "STAR", "SSTAR", "DIV", "SLASH",
+    "PERCENT", "DOUBLESTAR", "DOUBLESLASH",
+    # Bitwise operators
+    "AMPER", "TILDE", "CIRCUMFLEX", "LEFTSHIFT", "RIGHTSHIFT",
+    # Comparison operators
+    "LESS", "GREATER", "EQEQUAL", "NOTEQUAL", "LESSEQUAL", "GREATEREQUAL",
+    # Assignment operators
+    "PLUSEQUAL", "MINEQUAL", "STAREQUAL", "SLASHEQUAL", "PERCENTEQUAL",
+    "AMPEREQUAL", "VBAREQUAL", "CIRCUMFLEXEQUAL", "LEFTSHIFTEQUAL",
+    "RIGHTSHIFTEQUAL", "DOUBLESTAREQUAL", "DOUBLESLASHEQUAL",
+    # Other operators
+    "DOT", "RARROW", "ELLIPSIS", "COLONEQUAL",
+    "DOUBLEDOT", "RANGE_OP", "RANGE_EXCL_OP",
+    "TICK", "DOLLAR", "BASH_TEST", "BASH_CMP",
+    "REGEX_LIT", "CAPTURE", "NAMED_CAPTURE", "SUBST",
+    # Semantic tokens
+    "IDENTIFIER", "NUMBER", "STRING", "INTEGER", "FLOAT", "DECIMAL", "QUESTION_MARK",
+}
 
 
-def _visible_op(symbol: str):
-    """Create a visible (non-ignored) operator token parser."""
-    return expect(tkn.OP, symbol)
+def _init_legacy_tokens():
+    """Lazily initialize legacy token parsers and Input() that depend on tokenize / hek_tokenize."""
+    if "Input" in globals():
+        return
+    import tokenize as tkn
 
+    def Input(string: str):
+        """Create a token stream using hek_tokenize (loaded on demand)."""
+        from hek_tokenize import Tokenizer
 
-# Delimiters
-LPAREN = _op("(")
-RPAREN = _op(")")
-LBRACE = _op("{")
-RBRACE = _op("}")
-LBRACKET = _op("[")
-RBRACKET = _op("]")
-COMMA = _op(",")
-SEMICOLON = _op(";")
-VBAR = _op("|")
-COLON = _op(":")
-EQUAL = _op("=")
+        gen = Tokenizer(string)
+        next(gen)  # skip the encoding token
+        return gen
 
-# Arithmetic operators
-PLUS = _op("+")
-MINUS = _op("-")
-MUL = STAR = _op("*")
-SSTAR = _visible_op("*")  # no ignore !!!
-DIV = SLASH = _op("/")
-PERCENT = _op("%")
-DOUBLESTAR = _op("**")
-DOUBLESLASH = _op("//")
+    def expect_nl_or_richnl():
+        """Match NL token or RichNL object and return it."""
+        return filt(lambda tok: getattr(tok, "type", None) == tkn.NL, shift, name="NL")
 
-# Bitwise operators
-AMPER = _op("&")
-TILDE = _op("~")
-CIRCUMFLEX = _op("^")
-LEFTSHIFT = _op("<<")
-RIGHTSHIFT = _op(">>")
+    def _op(symbol: str):
+        return ignore(expect(tkn.OP, symbol))
 
-# Comparison operators
-LESS = _op("<")
-GREATER = _op(">")
-EQEQUAL = _op("==")
-NOTEQUAL = _op("!=")
-LESSEQUAL = _op("<=")
-GREATEREQUAL = _op(">=")
+    def _visible_op(symbol: str):
+        return expect(tkn.OP, symbol)
 
-# Assignment operators
-PLUSEQUAL = _op("+=")
-MINEQUAL = _op("-=")
-STAREQUAL = _op("*=")
-SLASHEQUAL = _op("/=")
-PERCENTEQUAL = _op("%=")
-AMPEREQUAL = _op("&=")
-VBAREQUAL = _op("|=")
-CIRCUMFLEXEQUAL = _op("^=")
-LEFTSHIFTEQUAL = _op("<<=")
-RIGHTSHIFTEQUAL = _op(">>=")
-DOUBLESTAREQUAL = _op("**=")
-DOUBLESLASHEQUAL = _op("//=")
+    # Synthetic token type numbers reserved by hek_tokenize
+    _TICK_TOKEN          = 90
+    _DOLLAR_TOKEN        = 91
+    _BASH_TEST_TOKEN     = 92
+    _BASH_CMP_TOKEN      = 93
+    _RANGE_TOKEN         = 94
+    _RANGE_EXCL_TOKEN    = 95
+    _REGEX_TOKEN         = 98
+    _CAPTURE_TOKEN       = 99
+    _NAMED_CAPTURE_TOKEN = 100
+    _SUBST_TOKEN         = 101
 
-# Other operators
-DOT = _op(".")
-RARROW = _op("->")
-ELLIPSIS = _op("...")
-COLONEQUAL = _op(":=")
-# Synthetic token type numbers reserved by hek_tokenize.  Keep these values
-# here so grammars can define terminals without importing the lexer.
-_TICK_TOKEN          = 90
-_DOLLAR_TOKEN        = 91
-_BASH_TEST_TOKEN     = 92
-_BASH_CMP_TOKEN      = 93
-_RANGE_TOKEN         = 94
-_RANGE_EXCL_TOKEN    = 95
-_REGEX_TOKEN         = 98
-_CAPTURE_TOKEN       = 99
-_NAMED_CAPTURE_TOKEN = 100
-_SUBST_TOKEN         = 101
-TICK          = ignore(filt(lambda tok: tok.type == _TICK_TOKEN,       shift, name="'"))
-DOLLAR        = ignore(filt(lambda tok: tok.type == _DOLLAR_TOKEN,     shift, name="$"))
-BASH_TEST     = filt(lambda tok: tok.type == _BASH_TEST_TOKEN,  shift, name="bash_test")
-BASH_CMP      = fmap(lambda tok: tok.string, filt(lambda tok: tok.type == _BASH_CMP_TOKEN,  shift, name="bash_cmp"))
-RANGE_OP      = fmap(lambda tok: tok.string, filt(lambda tok: tok.type == _RANGE_TOKEN,      shift, name=".."))
-RANGE_EXCL_OP = fmap(lambda tok: tok.string, filt(lambda tok: tok.type == _RANGE_EXCL_TOKEN, shift, name="..<"))
-DOUBLEDOT = ignore(RANGE_OP)  # kept for backward compat (used in type declarations)
-REGEX_LIT     = fmap(lambda tok: tok.string, filt(lambda tok: tok.type == _REGEX_TOKEN,         shift, name="regex_lit"))
-CAPTURE       = fmap(lambda tok: tok.string, filt(lambda tok: tok.type == _CAPTURE_TOKEN,       shift, name="capture"))
-NAMED_CAPTURE = fmap(lambda tok: tok.string, filt(lambda tok: tok.type == _NAMED_CAPTURE_TOKEN, shift, name="named_capture"))
-SUBST         = fmap(lambda tok: tok.string, filt(lambda tok: tok.type == _SUBST_TOKEN,         shift, name="subst"))
-IDENTIFIER = filt(str.isidentifier, expect_type(tkn.NAME))
-# IDENTIFIER = expect_re(r"\w")
-NUMBER = expect_re(tkn.Number)
-STRING = expect_re(tkn.String)
-INTEGER = filt(str.isdecimal, expect_type(tkn.NUMBER))
-FLOAT = expect_re(tkn.Floatnumber)
-DECIMAL = expect_re(tkn.Decnumber)
-QUESTION_MARK = ignore(expect(tkn.ERRORTOKEN, "?"))
+    range_op = fmap(lambda tok: tok.string, filt(lambda tok: getattr(tok, "type", None) == _RANGE_TOKEN, shift, name=".."))
+    sstar = _visible_op("*")
+    identifier = filt(str.isidentifier, expect_type(tkn.NAME))
+    number = expect_re(tkn.Number)
+    string = expect_re(tkn.String)
+    integer = filt(str.isdecimal, expect_type(tkn.NUMBER))
+    float_tok = expect_re(tkn.Floatnumber)
 
+    tokens = {
+        "Input": Input,
+        "expect_nl_or_richnl": expect_nl_or_richnl,
+        # Delimiters
+        "LPAREN": _op("("),
+        "RPAREN": _op(")"),
+        "LBRACE": _op("{"),
+        "RBRACE": _op("}"),
+        "LBRACKET": _op("["),
+        "RBRACKET": _op("]"),
+        "COMMA": _op(","),
+        "SEMICOLON": _op(";"),
+        "VBAR": _op("|"),
+        "COLON": _op(":"),
+        "EQUAL": _op("="),
+        # Arithmetic operators
+        "PLUS": _op("+"),
+        "MINUS": _op("-"),
+        "MUL": _op("*"),
+        "STAR": _op("*"),
+        "SSTAR": sstar,
+        "DIV": _op("/"),
+        "SLASH": _op("/"),
+        "PERCENT": _op("%"),
+        "DOUBLESTAR": _op("**"),
+        "DOUBLESLASH": _op("//"),
+        # Bitwise operators
+        "AMPER": _op("&"),
+        "TILDE": _op("~"),
+        "CIRCUMFLEX": _op("^"),
+        "LEFTSHIFT": _op("<<"),
+        "RIGHTSHIFT": _op(">>"),
+        # Comparison operators
+        "LESS": _op("<"),
+        "GREATER": _op(">"),
+        "EQEQUAL": _op("=="),
+        "NOTEQUAL": _op("!="),
+        "LESSEQUAL": _op("<="),
+        "GREATEREQUAL": _op(">="),
+        # Assignment operators
+        "PLUSEQUAL": _op("+="),
+        "MINEQUAL": _op("-="),
+        "STAREQUAL": _op("*="),
+        "SLASHEQUAL": _op("/="),
+        "PERCENTEQUAL": _op("%="),
+        "AMPEREQUAL": _op("&="),
+        "VBAREQUAL": _op("|="),
+        "CIRCUMFLEXEQUAL": _op("^="),
+        "LEFTSHIFTEQUAL": _op("<<="),
+        "RIGHTSHIFTEQUAL": _op(">>="),
+        "DOUBLESTAREQUAL": _op("**="),
+        "DOUBLESLASHEQUAL": _op("//="),
+        # Other operators
+        "DOT": _op("."),
+        "RARROW": _op("->"),
+        "ELLIPSIS": _op("..."),
+        "COLONEQUAL": _op(":="),
+        "DOUBLEDOT": ignore(range_op),
+        "RANGE_OP": range_op,
+        "RANGE_EXCL_OP": fmap(lambda tok: tok.string, filt(lambda tok: getattr(tok, "type", None) == _RANGE_EXCL_TOKEN, shift, name="..<")),
+        "TICK": ignore(filt(lambda tok: getattr(tok, "type", None) == _TICK_TOKEN, shift, name="'")),
+        "DOLLAR": ignore(filt(lambda tok: getattr(tok, "type", None) == _DOLLAR_TOKEN, shift, name="$")),
+        "BASH_TEST": filt(lambda tok: getattr(tok, "type", None) == _BASH_TEST_TOKEN, shift, name="bash_test"),
+        "BASH_CMP": fmap(lambda tok: tok.string, filt(lambda tok: getattr(tok, "type", None) == _BASH_CMP_TOKEN, shift, name="bash_cmp")),
+        "REGEX_LIT": fmap(lambda tok: tok.string, filt(lambda tok: getattr(tok, "type", None) == _REGEX_TOKEN, shift, name="regex_lit")),
+        "CAPTURE": fmap(lambda tok: tok.string, filt(lambda tok: getattr(tok, "type", None) == _CAPTURE_TOKEN, shift, name="capture")),
+        "NAMED_CAPTURE": fmap(lambda tok: tok.string, filt(lambda tok: getattr(tok, "type", None) == _NAMED_CAPTURE_TOKEN, shift, name="named_capture")),
+        "SUBST": fmap(lambda tok: tok.string, filt(lambda tok: getattr(tok, "type", None) == _SUBST_TOKEN, shift, name="subst")),
+        # Semantic tokens
+        "IDENTIFIER": identifier,
+        "NUMBER": number,
+        "STRING": string,
+        "INTEGER": integer,
+        "FLOAT": float_tok,
+        "DECIMAL": expect_re(tkn.Decnumber),
+        "QUESTION_MARK": ignore(expect(tkn.ERRORTOKEN, "?")),
+    }
 
-# THE AST methods
-@method(IDENTIFIER)
-def to_py(self):
-    return self.node
+    # AST methods
+    for parser_cls in (identifier, number, integer, string, float_tok, sstar):
+        @method(parser_cls)
+        def to_py(self):
+            return self.node
 
-
-@method(NUMBER)
-def to_py(self):
-    return self.node
-
-
-@method(INTEGER)
-def to_py(self):
-    return self.node
-
-
-@method(STRING)
-def to_py(self):
-    return self.node
-
-
-@method(FLOAT)
-def to_py(self):
-    return self.node
-
-
-@method(SSTAR)
-def to_py(self):
-    return self.node
+    globals().update(tokens)
 
 
 def __getattr__(name):
-    """Load the legacy Tokenizer export only when explicitly requested."""
+    """Load legacy tokens, Input(), and Tokenizer on demand."""
     if name == "Tokenizer":
         from hek_tokenize import Tokenizer
         return Tokenizer
+    if name in _LEGACY_TOKEN_NAMES:
+        _init_legacy_tokens()
+        return globals()[name]
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
@@ -1044,7 +1064,8 @@ __all__ = [
 ########################################################################################################################
 ##########################################
 if __name__ == "__main__":
-    # The tokenizer is needed only by this test harness (and Input()).
+    # The tokenizer and legacy token definitions are needed only by this test harness.
+    _init_legacy_tokens()
     from hek_tokenize import Tokenizer
 
     # THE ADASCRIPT_GRAMMAR

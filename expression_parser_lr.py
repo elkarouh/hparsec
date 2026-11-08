@@ -1,10 +1,8 @@
 
 import re
-import tokenize as py_tokenize
-from dataclasses import dataclass
 
 from hek_parsec import (
-    Parser, ParserState, fw, filt, fmap, ignore,
+    Parser, ParserState, fw, filt, fmap, ignore, shift,
     expect, expect_type, literal, nothing,
     sequence, choice,
 )
@@ -13,13 +11,16 @@ from hek_parsec import (
 # 1. Small ad-hoc tokenizer  (same as expression_parser.py)
 # ============================================================
 
-@dataclass
 class Token:
-    type: int
-    string: str
-    start: tuple = (1, 0)
-    end: tuple = (1, 0)
-    line: str = ""
+    def __init__(self, type, string, start=(1, 0), end=(1, 0), line=""):
+        self.type = type
+        self.string = string
+        self.start = start
+        self.end = end
+        self.line = line
+
+    def __repr__(self):
+        return f"Token({self.type!r}, {self.string!r}, {self.start!r})"
 
 TOKEN_SPEC = [
     ("NUMBER",   r"\d+(?:\.\d+)?"),
@@ -35,10 +36,10 @@ TOKEN_RE = re.compile(
 )
 
 TOKEN_TYPES = {
-    "NUMBER": py_tokenize.NUMBER,
-    "STRING": py_tokenize.STRING,
-    "IDENT":  py_tokenize.NAME,
-    "OP":     py_tokenize.OP,
+    "NUMBER": 1,
+    "STRING": 2,
+    "IDENT":  3,
+    "OP":     4,
 }
 
 class TokenStream:
@@ -111,22 +112,10 @@ def Input(source):
 # ============================================================
 
 def keyword(word):
-    return fmap(
-        lambda tok: tok.string,
-        filt(
-            lambda tok: tok.type == py_tokenize.NAME and tok.string == word,
-            __import__("hek_parsec").shift,
-        ),
-    )
+    return literal(word)
 
 def operator(value):
-    return fmap(
-        lambda tok: tok.string,
-        filt(
-            lambda tok: tok.type == py_tokenize.OP and tok.string == value,
-            __import__("hek_parsec").shift,
-        ),
-    )
+    return literal(value)
 
 def token_type(ty):
     return expect_type(ty)
@@ -139,15 +128,15 @@ def ignored(p):
 # 3. Terminals
 # ============================================================
 
-number  = token_type(py_tokenize.NUMBER)
-string  = token_type(py_tokenize.STRING)
+number  = token_type(TOKEN_TYPES["NUMBER"])
+string  = token_type(TOKEN_TYPES["STRING"])
 boolean = keyword("true") | keyword("false")
 
 reserved = {"and", "or", "not", "mod", "true", "false"}
 
 identifier = filt(
     lambda value: value not in reserved,
-    token_type(py_tokenize.NAME),
+    token_type(TOKEN_TYPES["IDENT"]),
 )
 
 # Operator tokens (all consumed but not kept in the AST)
