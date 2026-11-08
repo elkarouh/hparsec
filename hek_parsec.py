@@ -31,6 +31,7 @@ todo: replace tokenizer with own lexer
 
 import sys
 import re
+import inspect
 from functools import wraps
 from typing import Callable
 
@@ -64,6 +65,19 @@ def calling_module_namespace():
     return globals()
 
 
+def _attach_method(target_parser, method_name: str, func: Callable):
+    """Attach method_name=func to target_parser, distributing to Sequence_Parsers if Choice_Parser."""
+    if hasattr(target_parser, "parsers") and any(
+        getattr(p, "__name__", None) == "Sequence_Parser" for p in target_parser.parsers
+    ):
+        targets = [p for p in target_parser.parsers if getattr(p, "__name__", None) == "Sequence_Parser"]
+    else:
+        targets = [target_parser]
+
+    for target in targets:
+        setattr(target, method_name, func)
+
+
 def method(KLASS: type) -> Callable:
     """Decorator to add a method to a class.
 
@@ -87,17 +101,7 @@ def method(KLASS: type) -> Callable:
     """
 
     def wrapper(f):
-        # For a Choice_Parser, distribute to its Sequence_Parser alternatives,
-        # since the Choice_Parser class itself is never the AST node.
-        if hasattr(KLASS, "parsers") and any(
-            p.__name__ == "Sequence_Parser" for p in KLASS.parsers
-        ):
-            targets = [p for p in KLASS.parsers if p.__name__ == "Sequence_Parser"]
-        else:
-            targets = [KLASS]
-
-        for target in targets:
-            setattr(target, f.__name__, f)
+        _attach_method(KLASS, f.__name__, f)
 
     # give a name to the assigned class !!!
     g = calling_module_namespace()
@@ -620,11 +624,15 @@ class GrammarNamespace(dict):
     Intercepts attribute lookups during class definition: if an attribute is not
     yet defined in the class body or in outer globals/builtins, it automatically
     generates a lazy forward reference (Parser) pointing to that attribute name.
+
+    Also intercepts inner classes named after existing rules (e.g. ``class additive:``)
+    to augment the rule with methods directly.
     """
 
     def __init__(self, outer_globals):
         super().__init__()
         self.outer_globals = outer_globals
+        self.augmented_methods = []
 
     def __missing__(self, key):
         if key in self.outer_globals:
@@ -637,22 +645,68 @@ class GrammarNamespace(dict):
         self[key] = lazy
         return lazy
 
+    def __setitem__(self, key, value):
+        if isinstance(value, type) and (key in self or key in self.outer_globals) and not issubclass(value, Parser):
+            prev = self[key] if key in self else self.outer_globals[key]
+            for attr_name, attr_val in value.__dict__.items():
+                if not attr_name.startswith("_") and inspect.isfunction(attr_val):
+                    self.augmented_methods.append((prev, attr_name, attr_val))
+            return
+        super().__setitem__(key, value)
+
 
 class GrammarMeta(type):
-    """Metaclass that enables declarative grammars without explicit forward declarations."""
+    """Metaclass that enables declarative grammars without explicit forward declarations.
+
+    Also supports supplying AST methods directly inside the class without ``@method``:
+    - As flat methods named ``<action>_<rule>`` (e.g. ``def evaluate_additive(self):``)
+      or ``<rule>_<action>`` (e.g. ``def additive_evaluate(self):``).
+    - As inner classes named after rules (e.g. ``class additive: def evaluate(self): ...``).
+    """
 
     @classmethod
     def __prepare__(metacls, name, bases, **kwds):
         return GrammarNamespace(calling_module_namespace())
 
     def __new__(metacls, name, bases, namespace, **kwds):
+        all_rules = {}
+        if isinstance(namespace, GrammarNamespace):
+            g = namespace.outer_globals
+            all_rules.update({k: v for k, v in g.items() if hasattr(v, "parse")})
+        all_rules.update({k: v for k, v in namespace.items() if hasattr(v, "parse")})
+
+        # 1. Attach inner-class augmented methods
+        if isinstance(namespace, GrammarNamespace):
+            for target_parser, mname, mfunc in namespace.augmented_methods:
+                _attach_method(target_parser, mname, mfunc)
+
+        # 2. Process flat methods like evaluate_additive, to_py_additive, etc.
+        sorted_rule_names = sorted(all_rules.keys(), key=len, reverse=True)
+        methods_to_remove = set()
+
+        for k, v in list(namespace.items()):
+            if inspect.isfunction(v) and not k.startswith("_"):
+                for rname in sorted_rule_names:
+                    if k.endswith("_" + rname):
+                        action = k[:-len(rname)-1]
+                        rule = all_rules[rname]
+                        _attach_method(rule, action, v)
+                        methods_to_remove.add(k)
+                        break
+                    elif k.startswith(rname + "_"):
+                        action = k[len(rname)+1:]
+                        rule = all_rules[rname]
+                        _attach_method(rule, action, v)
+                        methods_to_remove.add(k)
+                        break
+
         cls = super().__new__(metacls, name, bases, dict(namespace))
-        # Export all non-private rules to the outer module namespace
-        # so they can be referenced directly and decorated with @method
+
+        # 3. Export rules to the caller's outer globals
         if isinstance(namespace, GrammarNamespace):
             g = namespace.outer_globals
             for k, v in namespace.items():
-                if not k.startswith("_"):
+                if not k.startswith("_") and k not in methods_to_remove:
                     g[k] = v
         return cls
 
@@ -662,6 +716,10 @@ class Grammar(metaclass=GrammarMeta):
 
     Rules defined inside a subclass of Grammar do not require any `fw()` or `forward()`
     declarations — undefined rule references are resolved automatically.
+
+    Methods can also be supplied directly inside the class:
+      - ``def evaluate_<rule>(self): ...``
+      - or inner classes ``class <rule>: def evaluate(self): ...``
     """
     pass
 
@@ -1646,15 +1704,24 @@ if __name__ == "__main__":
     assert m, "indirect left-recursion failed"
     print("  indirect left recursion (A -> B -> A): ok")
 
-    # 3. Grammar declarative class (zero forward declarations)
+    # 3. Grammar declarative class (zero forward declarations, inner-class AST methods)
     ParserState.reset()
 
     class AutoGrammar(Grammar):
         auto_expr = (auto_expr + PLUS + auto_term) | auto_term
         auto_term = (auto_term + MUL + NUMBER) | NUMBER
 
+        class auto_expr:
+            def to_py(self):
+                return f"({self.nodes[0].to_py()} + {self.nodes[1].to_py()})"
+
+        class auto_term:
+            def to_py(self):
+                return f"({self.nodes[0].to_py()} * {self.nodes[1].to_py()})"
+
     m = auto_expr.parse(Input("1 + 2 * 3"))
     assert m, "Grammar class parse failed"
-    print("  Grammar class (zero forward declarations): ok")
+    assert m[0].to_py() == "(1 + (2 * 3))"
+    print("  Grammar class (zero forward declarations, inner-class AST methods): ok")
 
     print("\nAll tests passed.")

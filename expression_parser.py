@@ -2,10 +2,10 @@
 import re
 
 from hek_parsec import (
+    Grammar,
     ParserState,
     expect_type,
     filt,
-    fw,
     ignore,
     literal,
     nothing,
@@ -131,38 +131,91 @@ unary_op = literal("+") | literal("-") | literal("not")
 
 
 # ============================================================
-# 4. Forward declarations
+# 4. Grammar (avoids left-recursivity and therefore faster)
 # ============================================================
 
-expression    = fw("expression")
-logical_or    = fw("logical_or")
-logical_and   = fw("logical_and")
-comparison    = fw("comparison")
-additive      = fw("additive")
-multiplicative = fw("multiplicative")
-unary         = fw("unary")
-primary       = fw("primary")
-function_call = fw("function_call")
-argument_list = fw("argument_list")
+class ExpressionGrammar(Grammar):
+    expression = logical_or
+    logical_or = logical_and + (OR + logical_and)[:]
+    logical_and = comparison + (AND + comparison)[:]
+    comparison = additive + ((COMPARE_OP + additive) | nothing)
+    additive = multiplicative + (add_op + multiplicative)[:]
+    multiplicative = unary + (mul_op + unary)[:]
+    unary = (unary_op + primary) | primary
+    group = LPAREN + expression + RPAREN
+    primary = number | string | boolean | function_call | identifier | group
+    function_call = identifier + LPAREN + (argument_list | nothing) + RPAREN
+    argument_list = expression + (COMMA + expression)[:]
+
+    # --------------------------------------------------------
+    # AST Evaluation Methods
+    # Grouped per-rule via inner class (zero @method decorators)
+    # --------------------------------------------------------
+
+    class number:
+        def evaluate(self):
+            val = float(self.node)
+            return int(val) if val.is_integer() else val
+
+    class additive:
+        def evaluate(self):
+            val = self.nodes[0].evaluate()
+            if len(self.nodes) > 1 and self.nodes[1] is not None:
+                for pair in self.nodes[1].nodes:
+                    opr = pair.nodes[0].node
+                    rhs = pair.nodes[1].evaluate()
+                    if opr == "+":
+                        val = val + rhs
+                    elif opr == "-":
+                        val = val - rhs
+                    else:
+                        raise ValueError(f"Unknown additive op: {opr!r}")
+            return val
+
+    class multiplicative:
+        def evaluate(self):
+            val = self.nodes[0].evaluate()
+            if len(self.nodes) > 1 and self.nodes[1] is not None:
+                for pair in self.nodes[1].nodes:
+                    opr = pair.nodes[0].node
+                    rhs = pair.nodes[1].evaluate()
+                    if opr == "*":
+                        val = val * rhs
+                    elif opr == "/":
+                        val = val / rhs
+                    elif opr == "mod":
+                        val = val % rhs
+                    else:
+                        raise ValueError(f"Unknown multiplicative op: {opr!r}")
+            return val
+
+    class unary:
+        def evaluate(self):
+            if len(self.nodes) == 2:
+                opr = self.nodes[0].node
+                operand = self.nodes[1].evaluate()
+                if opr == "+":
+                    return +operand
+                if opr == "-":
+                    return -operand
+                raise ValueError("Cannot evaluate 'not' in arithmetic context")
+            return self.node.evaluate()
+
+    class group:
+        def evaluate(self):
+            return self.node.evaluate()
+
+    class identifier:
+        def evaluate(self):
+            raise ValueError(f"Cannot evaluate non-arithmetic identifier: {self.node}")
+
+    class function_call:
+        def evaluate(self):
+            raise ValueError(f"Cannot evaluate non-arithmetic function call: {self.nodes[0].node}")
 
 
 # ============================================================
-# 5. Grammar (avoids left-recursivity and therefore faster)
-# ============================================================
-
-expression = logical_or
-logical_or = logical_and + (OR + logical_and)[:]
-logical_and = comparison + (AND + comparison)[:]
-comparison = additive + ((COMPARE_OP + additive) | nothing)
-additive = multiplicative + (add_op + multiplicative)[:]
-multiplicative = unary + (mul_op + unary)[:]
-unary = (unary_op + primary) | primary
-primary = number | string | boolean | function_call | identifier | (LPAREN + expression + RPAREN)
-function_call =  identifier + LPAREN + (argument_list | nothing) + RPAREN
-argument_list = expression + (COMMA + expression)[:]
-
-# ============================================================
-# 6. Public entry point
+# 5. Public entry point
 # ============================================================
 
 def parse_expression(source):
@@ -193,7 +246,7 @@ def evaluate_expression(source):
 
 
 # ============================================================
-# 7. Tests
+# 6. Tests
 # ============================================================
 
 if __name__ == "__main__":
@@ -209,13 +262,34 @@ if __name__ == "__main__":
         "true or false and not false",
         "-a * +b",
         "a mod 3",
+        # Left-associativity stress tests
+        "1 - 2 - 3",        # should be (1-2)-3 = -4, not 1-(2-3) = 2
+        "8 / 4 / 2",        # should be (8/4)/2 = 1, not 8/(4/2) = 4
     ]
 
+    print("--- Parsing Tests ---")
     for source in tests:
         try:
             ast = parse_expression(source)
             print("OK:", source)
-            print(ast)
         except Exception as exc:
             print("ERROR:", source, exc)
+
+    print("\n--- Arithmetic Evaluation Tests ---")
+    arithmetic_tests = [
+        ("1 + 2 * 3", 7),
+        ("(1 + 2) * 3", 9),
+        ("10 - 4 - 2", 4),
+        ("8 / 4 / 2", 1.0),
+        ("20 / 2 * 5", 50.0),
+        ("-5 * +3", -15),
+        ("14 mod 4", 2),
+        ("((2 + 3) * (4 - 1)) / 3", 5.0),
+        ("100 - 50 + 25 - 10", 65),
+    ]
+
+    for expr_str, expected in arithmetic_tests:
+        val = evaluate_expression(expr_str)
+        assert val == expected, f"Expected {expected}, got {val}"
+        print(f"  {expr_str} = {val}  (expected {expected}) -> OK")
 

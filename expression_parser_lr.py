@@ -8,7 +8,6 @@ from hek_parsec import (
     filt,
     ignore,
     literal,
-    method,
     nothing,
 )
 
@@ -157,73 +156,65 @@ class ExpressionGrammar(Grammar):
     function_call = identifier + LPAREN + (argument_list | nothing) + RPAREN
     argument_list = (argument_list + COMMA + expression) | expression
 
+    # --------------------------------------------------------
+    # AST Evaluation Methods
+    # Grouped per-rule via inner class (zero @method decorators)
+    # --------------------------------------------------------
 
-# ============================================================
-# 5. AST Evaluation Methods (via @method)
-#
-# For Choice_Parser rules (additive, multiplicative, unary),
-# @method automatically distributes to the Sequence_Parser binary
-# alternative — the only case that gets instantiated as an AST node.
-# The passthrough / base case delegates through Parser.evaluate().
-# ============================================================
+    class number:
+        def evaluate(self):
+            val = float(self.node)
+            return int(val) if val.is_integer() else val
 
-@method(number)
-def evaluate(self):
-    val = float(self.node)
-    return int(val) if val.is_integer() else val
+    class additive:
+        def evaluate(self):
+            lhs = self.nodes[0].evaluate()
+            opr = self.nodes[1].node   # '+' or '-'
+            rhs = self.nodes[2].evaluate()
+            if opr == "+":
+                return lhs + rhs
+            if opr == "-":
+                return lhs - rhs
+            raise ValueError(f"Unknown additive op: {opr!r}")
 
-@method(additive)
-def evaluate(self):
-    # nodes = [lhs, op_literal, rhs]  (binary case only)
-    lhs = self.nodes[0].evaluate()
-    opr = self.nodes[1].node   # '+' or '-'
-    rhs = self.nodes[2].evaluate()
-    if opr == "+":
-        return lhs + rhs
-    if opr == "-":
-        return lhs - rhs
-    raise ValueError(f"Unknown additive op: {opr!r}")
+    class multiplicative:
+        def evaluate(self):
+            lhs = self.nodes[0].evaluate()
+            opr = self.nodes[1].node   # '*', '/', or 'mod'
+            rhs = self.nodes[2].evaluate()
+            if opr == "*":
+                return lhs * rhs
+            if opr == "/":
+                return lhs / rhs
+            if opr == "mod":
+                return lhs % rhs
+            raise ValueError(f"Unknown multiplicative op: {opr!r}")
 
-@method(multiplicative)
-def evaluate(self):
-    # nodes = [lhs, op_literal, rhs]  (binary case only)
-    lhs = self.nodes[0].evaluate()
-    opr = self.nodes[1].node   # '*', '/', or 'mod'
-    rhs = self.nodes[2].evaluate()
-    if opr == "*":
-        return lhs * rhs
-    if opr == "/":
-        return lhs / rhs
-    if opr == "mod":
-        return lhs % rhs
-    raise ValueError(f"Unknown multiplicative op: {opr!r}")
+    class unary:
+        def evaluate(self):
+            opr     = self.nodes[0].node   # '+' or '-'
+            operand = self.nodes[1].evaluate()
+            if opr == "+":
+                return +operand
+            if opr == "-":
+                return -operand
+            raise ValueError(f"Cannot evaluate 'not' in arithmetic context")
 
-@method(unary)
-def evaluate(self):
-    # nodes = [op_literal, operand]  (prefix case only)
-    opr     = self.nodes[0].node   # '+' or '-'
-    operand = self.nodes[1].evaluate()
-    if opr == "+":
-        return +operand
-    if opr == "-":
-        return -operand
-    raise ValueError(f"Cannot evaluate 'not' in arithmetic context")
+    class group:
+        def evaluate(self):
+            return self.node.evaluate()
 
-@method(group)
-def evaluate(self):
-    return self.node.evaluate()
+    class identifier:
+        def evaluate(self):
+            raise ValueError(f"Cannot evaluate non-arithmetic identifier: {self.node}")
 
-@method(identifier)
-def evaluate(self):
-    raise ValueError(f"Cannot evaluate non-arithmetic identifier: {self.node}")
-
-@method(function_call)
-def evaluate(self):
-    raise ValueError(f"Cannot evaluate non-arithmetic function call: {self.nodes[0].node}")
+    class function_call:
+        def evaluate(self):
+            raise ValueError(f"Cannot evaluate non-arithmetic function call: {self.nodes[0].node}")
 
 
 # ============================================================
-# 6. Public entry point
+# 5. Public entry point
 # ============================================================
 
 def parse_expression(source):
@@ -254,7 +245,7 @@ def evaluate_expression(source):
 
 
 # ============================================================
-# 7. Tests
+# 6. Tests
 # ============================================================
 
 if __name__ == "__main__":
@@ -286,7 +277,7 @@ if __name__ == "__main__":
         except Exception as exc:
             print("ERROR:", source, exc)
 
-    print("\n--- Arithmetic Evaluation Tests (via @method) ---")
+    print("\n--- Arithmetic Evaluation Tests ---")
     arithmetic_tests = [
         ("1 + 2 * 3", 7),
         ("(1 + 2) * 3", 9),
@@ -303,3 +294,4 @@ if __name__ == "__main__":
         val = evaluate_expression(expr_str)
         assert val == expected, f"Expected {expected}, got {val}"
         print(f"  {expr_str} = {val}  (expected {expected}) -> OK")
+
