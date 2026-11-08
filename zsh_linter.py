@@ -1,0 +1,238 @@
+import re
+from hek_parsec import (
+    Grammar,
+    ParserState,
+    Terminals,
+    expect_type_node,
+    filt,
+    literal,
+    nothing,
+)
+
+# ============================================================
+# 1. Zsh Tokenizer with Line/Column Tracking
+# ============================================================
+
+class Token:
+    def __init__(self, type, string, start=(1, 0), end=(1, 0), line=""):
+        self.type = type
+        self.string = string
+        self.start = start
+        self.end = end
+        self.line = line
+
+    def __repr__(self):
+        return f"Token({self.type!r}, {self.string!r}, {self.start!r})"
+
+TOKEN_SPEC = [
+    ("COMMENT",    r"#[^\n]*"),
+    ("VAR_EXP",    r"\$\{[A-Za-z_][A-Za-z0-9_]*\}|\$[A-Za-z_][A-Za-z0-9_]*"),
+    ("STRING",     r'"(?:[^"\\]|\\.)*"|\'(?:[^\'\\]|\\.)*\''),
+    ("IDENT",      r"[A-Za-z_][A-Za-z0-9_]*"),
+    ("NUMBER",     r"\d+(?:\.\d+)?"),
+    ("OP",         r"==|!=|&&|\|\||<<|>>|[=;(){}|\[\]]"),
+    ("SKIP",       r"[ \t\r]+"),
+    ("NEWLINE",    r"\n"),
+]
+
+TOKEN_RE = re.compile(
+    "|".join(f"(?P<{name}>{pattern})" for name, pattern in TOKEN_SPEC)
+)
+
+TOKEN_TYPES = {
+    "COMMENT": 1,
+    "VAR_EXP": 2,
+    "STRING": 3,
+    "IDENT": 4,
+    "NUMBER": 5,
+    "OP": 6,
+    "NEWLINE": 7,
+}
+
+def tokenize_zsh(source):
+    tokens = []
+    line = 1
+    column = 0
+    lines = source.splitlines()
+    current_line_text = lines[0] if lines else ""
+
+    for match in TOKEN_RE.finditer(source):
+        kind = match.lastgroup
+        value = match.group()
+
+        if kind == "SKIP":
+            column += len(value)
+            continue
+
+        if kind == "NEWLINE":
+            line += 1
+            column = 0
+            current_line_text = lines[line - 1] if line <= len(lines) else ""
+            tokens.append(Token(TOKEN_TYPES[kind], value, (line - 1, column), (line - 1, column + 1), current_line_text))
+            continue
+
+        if kind is None:
+            raise SyntaxError(f"Invalid token at line {line}, column {column}")
+
+        start = (line, column)
+        end = (line, column + len(value))
+        tokens.append(Token(TOKEN_TYPES[kind], value, start, end, current_line_text))
+        column += len(value)
+
+    return tokens
+
+
+# ============================================================
+# 2. Terminals (Using expect_type_node to preserve Token objects)
+# ============================================================
+
+number = expect_type_node(TOKEN_TYPES["NUMBER"])
+string = expect_type_node(TOKEN_TYPES["STRING"])
+var_exp = expect_type_node(TOKEN_TYPES["VAR_EXP"])
+comment = expect_type_node(TOKEN_TYPES["COMMENT"])
+newline = expect_type_node(TOKEN_TYPES["NEWLINE"])
+
+reserved = {"if", "fi", "for", "do", "done", "case", "esac", "while", "local", "typeset", "declare"}
+
+identifier = filt(
+    lambda tok: tok.string not in reserved,
+    expect_type_node(TOKEN_TYPES["IDENT"]),
+)
+
+class Terminals(Terminals):
+    ASSIGN = "="
+    SEMICOL = ";"
+    LPAREN = "("
+    RPAREN = ")"
+
+    argument = var_exp | string | number | identifier
+    statement_sep = newline | SEMICOL
+
+
+# ============================================================
+# 3. Grammar & Style Checker Rules
+# ============================================================
+
+class ZshStyleGrammar(Grammar):
+    script = statement[:]
+    statement = (comment | declaration | assignment | command) + statement_sep[:]
+
+    declaration = literal("local") + identifier + ASSIGN + argument
+    assignment = identifier + ASSIGN + argument
+    command = identifier + argument[:]
+
+    # --------------------------------------------------------
+    # Style Linting Methods via Inner Classes
+    # --------------------------------------------------------
+
+    class command:
+        def lint(self):
+            issues = []
+            cmd_parser = self.nodes[0]
+            cmd_token = cmd_parser.node if hasattr(cmd_parser, "node") else cmd_parser
+            cmd_name = cmd_token.string if hasattr(cmd_token, "string") else str(cmd_token)
+            
+            # Rule ZSH001: Prefer native 'print' or 'printf' over legacy 'echo'
+            if cmd_name == "echo":
+                issues.append({
+                    "rule": "ZSH001",
+                    "message": "Prefer native 'print' or 'printf' over legacy 'echo'.",
+                    "token": cmd_token
+                })
+
+            # Rule ZSH002: Detect unquoted variable expansions ($var instead of "$var")
+            if len(self.nodes) > 1 and self.nodes[1] is not None:
+                args_node = self.nodes[1]
+                arg_list = args_node.nodes if hasattr(args_node, "nodes") else [args_node]
+                
+                for arg in arg_list:
+                    arg_token = arg.node if hasattr(arg, "node") else arg
+                    val = arg_token.string if hasattr(arg_token, "string") else str(arg_token)
+                    if isinstance(val, str) and val.startswith("$") and not val.startswith("${"):
+                        issues.append({
+                            "rule": "ZSH002",
+                            "message": f"Unquoted variable expansion '{val}' detected. Risk of word splitting and globbing.",
+                            "token": arg_token
+                        })
+            return issues
+
+    class assignment:
+        def lint(self):
+            return []
+
+    class declaration:
+        def lint(self):
+            return []
+
+    class comment:
+        def lint(self):
+            return []
+
+    class script:
+        def lint(self):
+            all_issues = []
+            def traverse(node):
+                if hasattr(node, "lint") and node is not self:
+                    all_issues.extend(node.lint())
+                if hasattr(node, "nodes") and isinstance(node.nodes, list):
+                    for child in node.nodes:
+                        if child is not None:
+                            traverse(child)
+                elif hasattr(node, "node") and node.node is not None:
+                    traverse(node.node)
+            
+            traverse(self)
+            return all_issues
+
+
+# ============================================================
+# 4. Public Entry Point
+# ============================================================
+
+def lint_zsh_code(source):
+    ParserState.reset()
+    tokens = tokenize_zsh(source)
+    
+    result = script.parse(tokens)
+    if not result:
+        raise SyntaxError(f"Invalid zsh script: {source}")
+
+    ast, stream = result
+    
+    while stream.pos < len(stream.tokens) and stream.tokens[stream.pos].type == TOKEN_TYPES["NEWLINE"]:
+        stream.pos += 1
+
+    if stream.pos < len(stream.tokens):
+        tok = stream.tokens[stream.pos]
+        raise SyntaxError(f"Unexpected token {tok.string!r} at position {tok.start}")
+
+    return ast.lint()
+
+
+# ============================================================
+# 5. Tests
+# ============================================================
+
+if __name__ == "__main__":
+    test_scripts = [
+        ('Clean script', 'print "Hello World"\nlocal my_var="test"\n'),
+        ('Echo usage (ZSH001)', 'echo "Hello World"\n'),
+        ('Unquoted variable (ZSH002)', 'print $USER_INPUT\n'),
+        ('Multiple issues', 'echo $PATH\nprint "ok"\necho $USER\n'),
+    ]
+
+    print("--- Running Zsh Style Linter Tests ---")
+    for name, code in test_scripts:
+        print(f"\nTest Case: [{name}]")
+        print(f"Code:\n{code.strip()}")
+        try:
+            violations = lint_zsh_code(code)
+            if violations:
+                print("Linter Warnings Found:")
+                for v in violations:
+                    pos = getattr(v['token'], 'start', 'unknown')
+                    print(f"  [{v['rule']}] Line {pos}: {v['message']}")
+            else:
+                print("  No violations found!")
+        except Exception as e:
+            print("  Parse Error:", e)
