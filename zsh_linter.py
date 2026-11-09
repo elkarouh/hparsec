@@ -96,7 +96,7 @@ class Terminals(Terminals):
     assign_name = filt(lambda tok: tok.string.isidentifier(), expect_type_node(TOKEN_TYPES["IDENT"]))
     assign_word = assign_name + ASSIGN + _basic_arg
 
-def _children(node):
+def _children(node): # should be part of hek_parsec.py
     if node is None:
         return []
     if hasattr(node, "nodes") and isinstance(node.nodes, list):
@@ -105,10 +105,10 @@ def _children(node):
         return [node.node]
     return []
 
-def _is_several_times(node):
+def _is_several_times(node): # should be inlined
     return type(node).__name__ == "Several_Times"
 
-def _token_of(node):
+def _token_of(node): # should be part of hek_parsec.py
     """Return the deepest token/str that `node` wraps."""
     n = node
     for _ in range(20):
@@ -128,7 +128,7 @@ def _token_of(node):
         return None
     return None
 
-def _argument_expansion_issues(argument_node):
+def _argument_expansion_issues(argument_node): # should be inlined
     """Return expansion diagnostics for the tokens inside one argument node."""
     issues = []
     seen = set()
@@ -168,7 +168,7 @@ def _argument_expansion_issues(argument_node):
     return issues
 
 
-def _raw_test_expansion_issues(test_node):
+def _raw_test_expansion_issues(test_node): # should be inlined
     """Check raw tokens in legacy [ ... ]; [[ ... ]] is intentionally exempt."""
     issues = []
     for child in _children(test_node):
@@ -191,7 +191,7 @@ def _raw_test_expansion_issues(test_node):
             issues.extend(_raw_test_expansion_issues(child))
     return issues
 
-def _has_wildcard_case(case_node):
+def _has_wildcard_case(case_node): # should be inlined
     seq = []
 
     def walk(node):
