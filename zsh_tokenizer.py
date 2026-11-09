@@ -225,7 +225,7 @@ def tokenize_zsh(source):
                             if depth == 0:
                                 j += 1
                                 break
-                    j += 1
+                        j += 1
                 push("VAR_EXP", source[i:j], start)
                 i = j
                 continue
