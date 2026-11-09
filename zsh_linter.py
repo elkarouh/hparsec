@@ -79,7 +79,6 @@ class Terminals(Terminals):
     identifier = filt(lambda tok: tok.string not in reserved, expect_type_node(TOKEN_TYPES["IDENT"]))
     argument_identifier = expect_type_node(TOKEN_TYPES["IDENT"])
 
-    argument = backtick | cmd_subst | arith_exp | var_exp | heredoc | string | number | argument_identifier
     STATEMENT_SEP = NEWLINE | SEMICOL | AMP | AMP_PIPE | AMP_BANG
 
     # Enhance argument with glob qualifiers, subscripts, and inline assignments.
