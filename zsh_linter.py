@@ -82,7 +82,9 @@ class Terminals(Terminals):
 
 
 # Enhance argument with glob qualifiers, subscripts, and inline assignments.
-glob_qual = LPAREN + filt(lambda tok: tok.string not in ("(", ")"), shift)[:] + RPAREN
+# A glob qualifier has at least one token; `()` alone is not one (it is an empty
+# argument-less function header or anonymous function).
+glob_qual = LPAREN + filt(lambda tok: tok.string not in ("(", ")"), shift)[1:] + RPAREN
 subscript = lbracket + ((~rbracket) + shift)[:] + rbracket
 # glob suffix used inside case patterns: distinguishes `)` inside `(a|b)*`
 # from the pattern-closing `)`.
@@ -92,7 +94,10 @@ _basic_arg = (backtick | cmd_subst | arith_exp | var_exp | heredoc | string
               | number | glob_qual | subscript | argument_identifier)
 # assign_word matches `name=value` as a single argument (needed for
 # `alias ls='...'`, `export FOO=bar` inline, etc.)
-assign_word = identifier + ignore(ASSIGN) + _basic_arg
+# Assignment names are plain identifiers; reserved words such as `end` are only
+# keywords in command position, so `end=$second` is a valid assignment.
+assign_name = filt(lambda tok: tok.string.isidentifier(), expect_type_node(TOKEN_TYPES["IDENT"]))
+assign_word = assign_name + ignore(ASSIGN) + _basic_arg
 argument = assign_word | _basic_arg
 
 def _children(node):
@@ -225,26 +230,30 @@ class ZshStyleGrammar(Grammar):
     # both need and_or to be tried before the assignment fallback.
     statement = (
         comment | declaration | declaration2
-        | and_or
-        | if_stmt
-        | for_alt | for_stmt | foreach_stmt | select_stmt
-        | while_stmt | until_stmt | repeat_stmt
         | function_def | anon_function | case_stmt
+        | if_stmt
+        | for_alt | for_stmt | for_positional | foreach_stmt | select_stmt
+        | while_stmt | until_stmt | repeat_stmt
+        | and_or
         | subshell | grouping
     ) + statement_sep[:]
 
     assign_op = ignore(ASSIGN) | ignore(PLUSEQUAL) | ignore(MINEQUAL)
     # Array literal is opaque; guard with (~LPAREN) so `((…))` still parses
     # as arith_stmt instead of being eaten as an array.
-    array_literal = LPAREN + (~LPAREN) + ((~RPAREN) + shift)[:] + RPAREN    
+    # Elements may carry glob qualifiers, e.g. `x=("$v"(Nm-1))`, so a nested
+    # `(...)` is consumed as one unit instead of closing the array early.
+    array_literal = LPAREN + (argument | newline)[:] + RPAREN
     assign_rhs = array_literal | argument
 
-    assign_target = identifier | number   # `0=${...}` and other numeric names
+    assign_target = assign_name | number   # `0=${...}` and other numeric names
 
-    declaration = literal("local") + flag[:] + identifier + (assign_op + assign_rhs)[0:1]
+    # The declared name may be dynamic: `typeset -ga ${cache_place}`.
+    declaration = literal("local") + flag[:] + ((assign_name | var_exp) + (assign_op + (assign_rhs | nothing))[0:1])[1:]
     declaration2 = (literal("typeset") | literal("declare")
-                    | literal("export") | literal("readonly")) + flag[:] + identifier + (assign_op + assign_rhs)[0:1]
-    assignment = assign_target + subscript[0:1] + assign_op + assign_rhs
+                    | literal("export") | literal("readonly")) + flag[:] + ((assign_name | var_exp) + (assign_op + (assign_rhs | nothing))[0:1])[1:]
+    # One or more `name=value` pairs on a line: `start=$a end=$b`.
+    assignment = assign_target + subscript[0:1] + assign_op + assign_rhs + assign_word[:]
 
     # [ ] and [[ ]] content is opaque — anything inside (including `=` `==`
     # `!=` `=~` `&&` `||` `<` `>`) is treated as raw tokens. ZSH004 still
@@ -266,17 +275,19 @@ class ZshStyleGrammar(Grammar):
     # as_node(command) keeps each command a distinct node inside pipelines,
     # so command.lint fires per stage instead of only on bare commands.
     pipeline_item = command | grouping | subshell
-    pipeline = as_node(pipeline_item) + (PIPE + as_node(pipeline_item))[:]
+    # Operators may be followed by a line break: `a |\n  b` and `a &&\n  b`.
+    pipeline = as_node(pipeline_item) + (PIPE + newline[:] + as_node(pipeline_item))[:]
     # `! cmd` — command negation prefix
-    not_command = ignore(literal("!")) + pipeline
+    # `! x=$(cmd) || ...` negates an assignment as well as a command.
+    not_command = ignore(literal("!")) + (pipeline | assignment)
 
     inner_statement = (
         comment | declaration | declaration2
-        | and_or
-        | if_stmt
-        | for_alt | for_stmt | foreach_stmt | select_stmt
-        | while_stmt | until_stmt | repeat_stmt
         | function_def | anon_function | case_stmt
+        | if_stmt
+        | for_alt | for_stmt | for_positional | foreach_stmt | select_stmt
+        | while_stmt | until_stmt | repeat_stmt
+        | and_or
         | subshell | grouping
     ) + statement_sep[:]
 
@@ -286,7 +297,7 @@ class ZshStyleGrammar(Grammar):
         test_construct | dbl_test_construct | arith_stmt
         | not_command | grouping | subshell | assignment | pipeline
     )    
-    and_or = as_node(and_or_item) + ((AND_AND | OR_OR) + as_node(and_or_item))[:]
+    and_or = as_node(and_or_item) + ((AND_AND | OR_OR) + newline[:] + as_node(and_or_item))[:]
 
     # All four control-flow conditions now accept and_or chains:
     #   if [[ -f x ]] && (( i++ )); then ... fi
@@ -315,6 +326,10 @@ class ZshStyleGrammar(Grammar):
     for_stmt = (literal("for") + identifier + literal("in") + argument[:] + statement_sep[:]
                 + literal("do") + statement_sep[:] + inner_statement[:]
                 + statement_sep[:] + literal("done"))
+    # `for x; do ...` iterates over the positional parameters (no `in` list).
+    for_positional = (literal("for") + identifier + statement_sep[:]
+                + literal("do") + statement_sep[:] + inner_statement[:]
+                + statement_sep[:] + literal("done"))
     foreach_stmt = (literal("foreach") + identifier + LPAREN + argument[:] + RPAREN + statement_sep[:]
                     + inner_statement[:] + statement_sep[:] + literal("end"))
     select_stmt = (literal("select") + identifier + literal("in") + argument[:] + statement_sep[:]
@@ -336,15 +351,23 @@ class ZshStyleGrammar(Grammar):
     # `)` in `(darwin|freebsd)*)` from the `)` inside the glob group.
     case_pattern = ((~((rparen_vis + (~glob_suffix)))) + shift)[:] + rparen_vis
     case_body = case_pattern + statement_sep[:] + inner_statement[:] + statement_sep[:]
+    # Arms that end with a terminator, then an optional final arm without one
+    # (`*) cmd` directly before `esac`). The optional arm must not start at
+    # `esac`: a case pattern would otherwise scan through `esac` up to the next
+    # `)` in the file. The guard therefore sits after the leading separators.
+    case_arm = case_body + (DSEMI | SEMI_AMP | SEMI_BAR)
+    case_final = statement_sep[:] + (~literal("esac")) + case_body
     case_stmt = (
         literal("case") + argument + literal("in") + statement_sep[:]
-        + (case_body + (DSEMI | SEMI_AMP | SEMI_BAR))[:]
+        + case_arm[:] + case_final[0:1]
         + statement_sep[:] + literal("esac")
     )
 
+    # Function names may be dynamic: `_widget_${name}() { ... }`.
+    func_name = (identifier | var_exp)[1:]
     function_def = (
-        (identifier + LPAREN + RPAREN)
-        | (literal("function") + identifier + (LPAREN + RPAREN)[0:1])
+        (func_name + LPAREN + RPAREN)
+        | (literal("function") + func_name + (LPAREN + RPAREN)[0:1])
     ) + statement_sep[:] + LBRACE + statement_sep[:] + inner_statement[:] + statement_sep[:] + RBRACE
 
     # Anonymous function: `() { body }` — zsh-specific, defined and called
@@ -405,9 +428,12 @@ class ZshStyleGrammar(Grammar):
 
     class assignment:
         def lint(self):
-            if len(self.nodes) > 1 and self.nodes[-1] is not None:
-                return _check_args(self.nodes[-1])
-            return []
+            # nodes[0] is the target; every value after it may need checking.
+            issues = []
+            for n in self.nodes[1:]:
+                if n is not None:
+                    issues.extend(_check_args(n))
+            return issues
 
     class declaration:
         def lint(self):

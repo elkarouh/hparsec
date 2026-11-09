@@ -200,10 +200,31 @@ def tokenize_zsh(source):
                 i = j
                 continue
 
-            # --- $VAR ---
+            # --- $'...' ANSI-C quoting: one STRING token ---
+            if nxt == "'":
+                j = i + 2
+                while j < n and source[j] != "'":
+                    j += 2 if source[j] == "\\" and j + 1 < n else 1
+                j = min(j + 1, n)
+                push("STRING", source[i:j], start)
+                i = j
+                continue
+
+            # --- $VAR, optionally with a subscript: $m[1], $m[$k] ---
             if nxt.isalpha() or nxt == "_":
                 j = i + 2
                 while j < n and (source[j].isalnum() or source[j] == "_"):
+                    j += 1
+                if j < n and source[j] == "[":
+                    depth = 0
+                    while j < n:
+                        if source[j] == "[":
+                            depth += 1
+                        elif source[j] == "]":
+                            depth -= 1
+                            if depth == 0:
+                                j += 1
+                                break
                     j += 1
                 push("VAR_EXP", source[i:j], start)
                 i = j
@@ -311,6 +332,12 @@ def tokenize_zsh(source):
         if source[i:i + 2] in ("++", "+="):
             push("OP", source[i:i + 2], start)
             i += 2
+            continue
+        # single `-` alone (stdin, `cd -`, end-of-options marker) is an IDENT
+        if ch == "-" and (i + 1 >= n or source[i + 1].isspace()
+                          or source[i + 1] in "\n;|&()"):
+            push("IDENT", "-", start)
+            i += 1
             continue
         # negative number: -1, -3.14
         if ch == "-" and i + 1 < n and source[i + 1].isdigit():
