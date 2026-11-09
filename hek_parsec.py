@@ -33,17 +33,10 @@ whose `.parsers` is `A.parsers + [B]` — i.e. A's children are hoisted into
 the parent, and the intermediate `A` node does NOT appear in the resulting
 AST. Likewise `A | B` flattens when A is a Choice_Parser.
 
-Consequence: if you write
-
-    command  = command_head + argument[:]
-    pipeline = command + (PIPE + command)[:]
-
-then the `pipeline` AST node has shape `[command_head, argument[:], pipes]`
-— it does NOT contain a nested `command` node. Any method attached to
-`command` will only fire when `command` matches on its own; inside a
-`pipeline` the command's children are hoisted. Lint/output code that needs
-to treat "a command, wherever it appears" uniformly must therefore classify
-by node shape rather than relying on `@method` attachment.
+Consequence: if you need an intermediate rule to remain visible in the AST,
+wrap it with `as_node()` before composing it into a parent. The wrapper
+retains the complete result as one child and therefore prevents sequence or
+choice flattening from erasing that grammar boundary.
 
 todo: replace tokenizer with own lexer
 """
@@ -868,6 +861,33 @@ def choice(p1, p2):
     return Choice_Parser
 
 
+def as_node(parser):
+    """Wrap the result of *parser* in a distinct AST node.
+
+    Unlike a one-alternative choice, this creates an explicit AST boundary:
+    the wrapped parser's complete result is retained as the wrapper's single
+    child.  This works uniformly for choices, sequences, repetitions,
+    terminals, and other parser expressions.
+
+    The wrapper has its own parsing context, so it participates in the normal
+    packrat memoization and left-recursion machinery.  The wrapped parser is
+    still responsible for recognition; a failed match remains a failure and
+    the parsing-context decorator restores the wrapper's starting position.
+    """
+
+    class As_Node(Parser):
+        @apply_parsing_context
+        def parse(cls, token_stream):
+            result = parser.parse(token_stream)
+            if not result:
+                return False
+
+            ast, token_stream = result
+            return cls([ast]), token_stream
+
+    return As_Node
+
+
 def sequence(p1, p2):
     """Match parsers in order, collecting all results. Supports backtracking."""
 
@@ -1294,6 +1314,7 @@ __all__ = [
     "filt",
     "fmap",
     "choice",
+    "as_node",
     "sequence",
     "several_times_parser",
     "ignore",
@@ -1385,6 +1406,84 @@ __all__ = [
 ########################################################################################################################
 ##########################################
 if __name__ == "__main__":
+    # --- as_node() AST-boundary tests ---
+    ParserState.reset()
+
+    choice_node = as_node(shift | shift)
+    choice_match = choice_node.parse(TokenStream(["choice"]))
+    assert choice_match, "as_node(choice): parse failed"
+    choice_ast, choice_stream = choice_match
+    assert type(choice_ast) is choice_node, "as_node(choice): wrapper node missing"
+    assert len(choice_ast.nodes) == 1, "as_node(choice): expected exactly one child"
+    assert choice_ast.node is not choice_ast, "as_node(choice): child boundary missing"
+    assert choice_stream.pos == 1
+
+    # A failed first alternative must backtrack before the second is tried.
+    rejecting_tail = filt(lambda _token: False, shift)
+    backtracking_node = as_node((shift + rejecting_tail) | shift)
+    backtracking_stream = TokenStream(["fallback"])
+    backtracking_match = backtracking_node.parse(backtracking_stream)
+    assert backtracking_match and backtracking_stream.pos == 1, (
+        "as_node(choice): wrapped choice did not preserve backtracking"
+    )
+
+    sequence_node = as_node(shift + shift)
+    sequence_match = sequence_node.parse(TokenStream(["left", "right"]))
+    assert sequence_match, "as_node(sequence): parse failed"
+    sequence_ast, _ = sequence_match
+    assert type(sequence_ast) is sequence_node
+    assert type(sequence_ast.node).__name__ == "Sequence_Parser"
+    assert len(sequence_ast.node.nodes) == 2, "as_node(sequence): sequence structure lost"
+
+    nested_node = as_node(as_node(shift))
+    nested_match = nested_node.parse(TokenStream(["nested"]))
+    assert nested_match, "as_node(nested): parse failed"
+    nested_ast, _ = nested_match
+    assert type(nested_ast) is nested_node
+    assert type(nested_ast.node).__name__ == "As_Node"
+
+    repeated_node = as_node(shift[:])
+    repeated_match = repeated_node.parse(TokenStream(["one", "two"]))
+    assert repeated_match, "as_node(repetition): parse failed"
+    repeated_ast, repeated_stream = repeated_match
+    assert type(repeated_ast) is repeated_node
+    assert type(repeated_ast.node).__name__ == "Several_Times"
+    assert len(repeated_ast.node.nodes) == 2 and repeated_stream.pos == 2
+
+    failed_stream = TokenStream([])
+    assert not as_node(shift).parse(failed_stream), "as_node(failure): expected failure"
+    assert failed_stream.pos == 0, "as_node(failure): failure consumed input"
+
+    class AsNodeMethodGrammar(Grammar):
+        wrapped_rule = as_node(shift | shift)
+
+        class wrapped_rule:
+            def marker(self):
+                return "method attached to wrapper"
+
+    method_match = wrapped_rule.parse(TokenStream(["method"]))
+    assert method_match, "as_node(grammar method): parse failed"
+    assert method_match[0].marker() == "method attached to wrapper"
+
+    memo_stream = TokenStream(["memo"])
+    memo_parser = as_node(shift)
+    memo_match = memo_parser.parse(memo_stream)
+    assert memo_match, "as_node(memo): initial parse failed"
+    memo_stream.reset(0)
+    memo_match_again = memo_parser.parse(memo_stream)
+    assert memo_match_again and memo_stream.pos == 1, "as_node(memo): memoized parse failed"
+    assert any(key[0][0] == id(memo_parser) for key in memo_stream.memos), "as_node(memo): wrapper not memoized"
+
+    # The wrapper itself can be a left-recursive grammar rule.
+    ParserState.reset()
+    as_node_lr_expr = fw("as_node_lr_expr")
+    plus_token = filt(lambda token: token == "+", shift)
+    as_node_lr_expr = as_node((as_node_lr_expr + plus_token + shift) | shift)
+    lr_stream = TokenStream(["a", "+", "b", "+", "c"])
+    lr_match = as_node_lr_expr.parse(lr_stream)
+    assert lr_match and lr_stream.pos == 5, "as_node(left recursion): failed to grow parse"
+    print("as_node(): AST boundaries, backtracking, grammar methods, memoization, and left recursion OK")
+
     # The tokenizer and legacy token definitions are needed only by this test harness.
     _init_legacy_tokens()
     from hek_tokenize import Tokenizer
