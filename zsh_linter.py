@@ -2,7 +2,7 @@
 
 Design: one lint method per rule, attached via inner classes. Recursion is
 implicit — each rule's `lint(self)` is responsible for its own subtree,
-including calling `_recurse_lint` on any child that doesn't have its own
+including calling `deep_lint` on any child that doesn't have its own
 lint method.
 
 `as_node(p)` wraps a parser in a one-alternative Choice_Parser so that `+`
@@ -170,7 +170,7 @@ def _check_args(arg_node):
     return issues
 
 
-def _recurse_lint(node):
+def deep_lint(node):
     """If `node` has a `lint` method, call it (it owns its subtree).
     Otherwise, descend into children and recurse."""
     if node is None:
@@ -179,10 +179,10 @@ def _recurse_lint(node):
         return list(node.lint())
     issues = []
     for c in _children(node):
-        issues.extend(_recurse_lint(c))
+        issues.extend(deep_lint(c))
     return issues
 
-
+    
 def _has_wildcard_case(case_node):
     seq = []
 
@@ -469,14 +469,14 @@ class ZshStyleGrammar(Grammar):
                     "token": _token_of(self.nodes[1]) if len(self.nodes) > 1 else _token_of(self.nodes[0]),
                 })
             for c in _children(self):
-                issues.extend(_recurse_lint(c))
+                issues.extend(deep_lint(c))
             return issues
 
     class script:
         def lint(self):
             issues = []
             for c in _children(self):
-                issues.extend(_recurse_lint(c))
+                issues.extend(deep_lint(c))                       
             return issues
 
 
