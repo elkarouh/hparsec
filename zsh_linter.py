@@ -16,37 +16,10 @@ from hek_parsec import (
     nothing,
     ignore,
     shift,
+    children, 
+    token_of
 )
 from zsh_tokenizer import tokenize_zsh, TOKEN_TYPES, _RESERVED
-
-def _children(node): # should be part of hek_parsec.py
-    if node is None:
-        return []
-    if hasattr(node, "nodes") and isinstance(node.nodes, list):
-        return [c for c in node.nodes if c is not None]
-    if hasattr(node, "node") and node.node is not None:
-        return [node.node]
-    return []
-
-def _token_of(node): # should be part of hek_parsec.py
-    """Return the deepest token/str that `node` wraps."""
-    n = node
-    for _ in range(20):
-        if n is None:
-            return None
-        if isinstance(n, str):
-            return n
-        if hasattr(n, "string") and not hasattr(n, "nodes"):
-            return n
-        if hasattr(n, "node") and n.node is not n:
-            n = n.node
-            continue
-        kids = _children(n)
-        if kids:
-            n = kids[0]
-            continue
-        return None
-    return None
 
 # ============================================================
 # Terminals
@@ -125,7 +98,67 @@ class Terminals(Terminals):
     assign_name = filt(lambda tok: tok.string.isidentifier(), expect_type_node(TOKEN_TYPES["IDENT"]))
     assign_word = assign_name + ASSIGN + _basic_arg
 
+# HELPERS
+def _expansion_issues(node):
+    """Find unquoted expansions and legacy backticks below an AST node."""
+    issues = []
+    seen = set()
 
+    def walk(current):
+        if current is None:
+            return
+
+        # A token is a leaf: it has a string attribute but no AST children.
+        if hasattr(current, "string") and not hasattr(current, "nodes"):
+            tok = current
+            value = getattr(tok, "string", None)
+
+            if not isinstance(value, str) or not value:
+                return
+
+            if value.startswith("`") and value.endswith("`"):
+                rule = "ZSH003"
+                message = "Prefer modern '$(...)' over legacy backticks."
+
+            elif (
+                value.startswith("$(")
+                and value.endswith(")")
+                and not value.startswith("$((")
+            ):
+                rule = "ZSH002"
+                message = (
+                    f"Unquoted command substitution '{value}' detected."
+                )
+
+            elif value.startswith("$") and not value.startswith(
+                ("${", "$((")
+            ):
+                rule = "ZSH002"
+                message = (
+                    f"Unquoted variable expansion '{value}' detected. "
+                    "Risk of word splitting and globbing."
+                )
+
+            else:
+                return
+
+            marker = (rule, getattr(tok, "start", None), value)
+
+            if marker not in seen:
+                seen.add(marker)
+                issues.append({
+                    "rule": rule,
+                    "message": message,
+                    "token": tok,
+                })
+
+            return
+
+        for child in children(current):
+            walk(child)
+
+    walk(node)
+    return issues
 # ============================================================
 # Grammar
 # ============================================================
@@ -153,6 +186,27 @@ class ZshStyleGrammar(Grammar):
     # Its explicit node boundary gives it one consistent linting entry point
     # wherever the grammar accepts an argument.
     argument = as_node(assign_word | Terminals._basic_arg)
+
+    prefix_assignment = as_node(assign_word)
+
+    command_head = as_node(
+        identifier
+        | colon
+        | backtick
+        | cmd_subst
+        | arith_exp
+        | var_exp
+        | string
+        | number
+    )
+
+    command = (
+        prefix_assignment[:]
+        + command_head
+        + argument[:]
+        + redir[:]
+    )    
+    ############################################ NEW
 
     # Array literal is opaque; guard with (~LPAREN) so `((…))` still parses
     # as arith_stmt instead of being eaten as an array.
@@ -193,10 +247,6 @@ class ZshStyleGrammar(Grammar):
     redir = (named_fd | ignore(number[0:1])) + ignore(redir_op) + argument
     # Zsh permits redirection-only commands, e.g. `{myfd}</dev/null`.
     redir_command = redir[1:]
-
-    
-    command_head = identifier | colon | backtick | cmd_subst | arith_exp | var_exp | string | number
-    command = assign_word[:] + command_head + argument[:] + redir[:]
 
     _two_rparen = RPAREN + RPAREN
     arith_body = ((~_two_rparen) + shift)[:]
@@ -323,104 +373,38 @@ class ZshStyleGrammar(Grammar):
         def lint(self):
             # this node doesnt have a lint method, but its children may have.
             issues = []
-            for c in _children(self):
+            for c in children(self):
                 if hasattr(c,"lint"): 
                     issues.extend(c.lint())
             return issues
             
     class argument:
-        def lint(self):    
-            """Return expansion diagnostics for the tokens inside this argument node."""
-            issues = []
-            seen = set()
-            def walk(node):
-                if node is None:
-                    return
-                if hasattr(node, "string") and not hasattr(node, "nodes"):
-                    tok = node
-                    value = getattr(tok, "string", None)
-                    if not isinstance(value, str) or not value:
-                        return
-                    # Quoted expansions are tokenized as STRING and therefore retain
-                    # their quote prefix; only unquoted token spellings match here.
-                    if value.startswith("$") and not value.startswith(("${", "$((")):
-                        rule = "ZSH002"
-                        if value.startswith("$(") and value.endswith(")"):
-                            message = f"Unquoted command substitution '{value}' detected."
-                        else:
-                            message = (f"Unquoted variable expansion '{value}' detected. "
-                                       "Risk of word splitting and globbing.")
-                    elif value.startswith("`") and value.endswith("`"):
-                        rule = "ZSH003"
-                        message = "Prefer modern '$(...)' over legacy backticks."
-                    else:
-                        return
-                    marker = (rule, getattr(tok, "start", None), value)
-                    if marker not in seen:
-                        seen.add(marker)
-                        issues.append({"rule": rule, "message": message, "token": tok})
-                    return
-
-                for child in _children(node):
-                    walk(child)
-
-            walk(self)
-            return issues
-    class command:
         def lint(self):
-            issues = []
-            idx = 0
-            while idx < len(self.nodes) and type(self.nodes[idx]).__name__ == "Several_Times":
-                idx += 1
-            if idx >= len(self.nodes):
-                return []
-            head_tok = _token_of(self.nodes[idx])
-            if head_tok is None:
-                return []
-            head_name = getattr(head_tok, "string", None)
-            if head_name == "echo":
-                issues.append({"rule": "ZSH001",
-                               "message": "Prefer native 'print' or 'printf' over legacy 'echo'.",
-                               "token": head_tok})
-            elif head_name in ("grep", "sed", "awk"):
-                issues.append({"rule": "ZSH005",
-                               "message": f"External tool '{head_name}' used; prefer native zsh equivalents where possible.",
-                               "token": head_tok})
-            # command has a custom lint method, so explicitly continue the
-            # normal recursive traversal to reach its argument AST nodes.
-            for child in _children(self):
-                if hasattr(child, "lint"):
-                    issues.extend(child.lint())
-            return issues
+            return _expansion_issues(self)
+
+
+    class prefix_assignment:
+        def lint(self):
+            return _expansion_issues(self)
+
+
+    class command_head:
+        def lint(self):
+            return _expansion_issues(self)
+
         
     class test_construct:
         def lint(self):
-            def _raw_test_expansion_issues(test_node): # should be inlined
-                """Check raw tokens in legacy [ ... ]; [[ ... ]] is intentionally exempt."""
-                issues = []
-                for child in _children(test_node):
-                    if hasattr(child, "string"):
-                        value = child.string
-                        if isinstance(value, str) and value.startswith("$") and not value.startswith(("${", "$((")):
-                            issues.append({"rule": "ZSH002",
-                                           "message": f"Unquoted variable expansion '{value}' detected. Risk of word splitting and globbing.",
-                                           "token": child})
-                        elif isinstance(value, str) and value.startswith("$(") and value.endswith(")"):
-                            issues.append({"rule": "ZSH002",
-                                           "message": f"Unquoted command substitution '{value}' detected.",
-                                           "token": child})
-                        elif isinstance(value, str) and value.startswith("`") and value.endswith("`"):
-                            issues.append({"rule": "ZSH003",
-                                           "message": "Prefer modern '$(...)' over legacy backticks.",
-                                           "token": child})
-                    else:
-                        # Opaque test grammar can contain wrapper nodes; inspect their leaves.
-                        issues.extend(_raw_test_expansion_issues(child))
-                return issues            
-            issues = [{"rule": "ZSH004",
-                       "message": "Prefer enhanced '[[ ... ]]' over legacy POSIX '[ ... ]' test construct in zsh.",
-                       "token": _token_of(self.nodes[0])}]
-            issues.extend(_raw_test_expansion_issues(self))
+            issues = [{
+                "rule": "ZSH004",
+                "message": (
+                    "Prefer enhanced '[[ ... ]]' over legacy POSIX "
+                    "'[ ... ]' test construct in zsh."
+                ),
+                "token": token_of(self.nodes[0]),
+            }]
+
+            issues.extend(_expansion_issues(self))
             return issues
 
     class dbl_test_construct:
@@ -438,12 +422,12 @@ class ZshStyleGrammar(Grammar):
                 def walk(node):
                     if node is None:
                         return
-                    kids = _children(node)
+                    kids = children(node)
                     if kids:
                         for c in kids:
                             walk(c)
                         return
-                    tok = _token_of(node)
+                    tok = token_of(node)
                     if tok is None:
                         return
                     s = tok if isinstance(tok, str) else getattr(tok, "string", None)
@@ -460,16 +444,16 @@ class ZshStyleGrammar(Grammar):
                 issues.append({
                     "rule": "ZSH007",
                     "message": "case without a `*)` fallback — unexpected input silently ignored.",
-                    "token": _token_of(self.nodes[1]) if len(self.nodes) > 1 else _token_of(self.nodes[0]),
+                    "token": token_of(self.nodes[1]) if len(self.nodes) > 1 else token_of(self.nodes[0]),
                 })
-            for c in _children(self):
+            for c in children(self):
                 issues.extend(c.lint())
             return issues
 
     class script:
         def lint(self):
             issues = []
-            for c in _children(self):
+            for c in children(self):
                 issues.extend(c.lint())                       
             return issues
 
@@ -516,6 +500,37 @@ if __name__ == "__main__":
     _proc = [(t.type, t.string) for t in _tk("source <(dircolors -b)\n")]
     assert any(k == 5 for k, s in _proc), "process subst not CMD_SUBST"
     print("Tokenizer OK")
+    # AST helper and lint-boundary regression tests.
+
+    _sample = lint_zsh_code(
+        "GIT_OPTIONAL_LOCKS=$LOCK command git $ARGS\n"
+    )
+    assert any(
+        issue["rule"] == "ZSH002"
+        for issue in _sample
+    ), "prefix/head/argument expansion not linted"
+
+
+    _cmd_subst = lint_zsh_code("echo $(date)\n")
+    assert any(
+        issue["rule"] == "ZSH002"
+        and "command substitution" in issue["message"]
+        for issue in _cmd_subst
+    ), "command substitution not linted"
+
+
+    _backtick = lint_zsh_code("echo `date`\n")
+    assert any(
+        issue["rule"] == "ZSH003"
+        for issue in _backtick
+    ), "backtick not linted"
+
+
+    _double_test = lint_zsh_code("[[ $value == $(cmd) ]]\n")
+    assert not any(
+        issue["rule"] == "ZSH002"
+        for issue in _double_test
+    ), "[[ ]] expansion exemption regressed"
 
     test_scripts = [
         ("While loop", "while [ $count -lt 5 ]; do\n  echo $count\n  count=$((count + 1))\ndone\n"),

@@ -887,6 +887,48 @@ def as_node(parser):
 
     return As_Node
 
+def children(node):
+    """Return the non-null direct AST children of *node*.
+
+    Parser nodes normally expose ``nodes``; the singular ``node`` attribute
+    is retained as a compatibility fallback for node-like objects.
+    """
+    if node is None:
+        return []
+
+    nodes = getattr(node, "nodes", None)
+    if isinstance(nodes, list):
+        return [child for child in nodes if child is not None]
+
+    child = getattr(node, "node", None)
+    return [child] if child is not None and child is not node else []
+
+
+def token_of(node):
+    """Return the first leaf token wrapped by *node*, or ``None``.
+
+    An identity guard prevents malformed or cyclic node structures from
+    causing an infinite loop.
+    """
+    current = node
+    seen = set()
+
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+
+        if isinstance(current, str):
+            return current
+
+        if hasattr(current, "string") and not hasattr(current, "nodes"):
+            return current
+
+        kids = children(current)
+        if kids:
+            current = kids[0]
+        else:
+            return None
+
+    return None
 
 def sequence(p1, p2):
     """Match parsers in order, collecting all results. Supports backtracking."""
@@ -1293,6 +1335,8 @@ __all__ = [
     "ParserState",
     "TokenStream",
     "G",
+    "children",
+    "token_of",
     "Cut",
     "ParserMeta",
     "Grammar",
