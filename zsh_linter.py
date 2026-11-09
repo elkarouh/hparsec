@@ -218,14 +218,16 @@ def as_node(p):
 class ZshStyleGrammar(Grammar):
     script = statement[:]
 
+    # and_or comes BEFORE if_stmt/assignment: `x=1 || cmd` and `cond; then`
+    # both need and_or to be tried before the assignment fallback.
     statement = (
-        comment | declaration | declaration2 | assignment
+        comment | declaration | declaration2
+        | and_or
         | if_stmt
         | for_alt | for_stmt | foreach_stmt | select_stmt
         | while_stmt | until_stmt | repeat_stmt
         | function_def | anon_function | case_stmt
         | subshell | grouping
-        | and_or
     ) + statement_sep[:]
 
     assign_op = ignore(ASSIGN) | ignore(PLUSEQUAL) | ignore(MINEQUAL)
@@ -250,84 +252,110 @@ class ZshStyleGrammar(Grammar):
         expect_type_node(TOKEN_TYPES["OP"]),
     )
     redir = ignore(redir_op + argument)
+
     command_head = identifier | colon | backtick | cmd_subst | arith_exp | var_exp | string | number
-    command = assign_word[:] + command_head + argument[:] + redir[:]    
+    command = assign_word[:] + command_head + argument[:] + redir[:]
+
     _two_rparen = RPAREN + RPAREN
     arith_body = ((~_two_rparen) + shift)[:]
     arith_stmt = LPAREN + LPAREN + arith_body + RPAREN + RPAREN
     # as_node(command) keeps each command a distinct node inside pipelines,
     # so command.lint fires per stage instead of only on bare commands.
     pipeline = as_node(command) + (PIPE + as_node(command))[:]
-    and_or_item = test_construct | dbl_test_construct | arith_stmt | pipeline
-    and_or = as_node(and_or_item) + ((AND_AND | OR_OR) + as_node(and_or_item))[:]
+
+    # `! cmd` — command negation prefix
+    not_command = ignore(literal("!")) + pipeline
 
     inner_statement = (
-        comment | declaration | declaration2 | assignment
+        comment | declaration | declaration2
+        | and_or
         | if_stmt
         | for_alt | for_stmt | foreach_stmt | select_stmt
         | while_stmt | until_stmt | repeat_stmt
         | function_def | anon_function | case_stmt
         | subshell | grouping
-        | and_or
     ) + statement_sep[:]
 
+    # and_or_item now includes not_command (`!`) and assignment (`x=1 || cmd`)
+    # in addition to the previous test/arith/grouping/subshell/pipeline.
+    and_or_item = (
+        test_construct | dbl_test_construct | arith_stmt
+        | not_command | grouping | subshell | assignment | pipeline
+    )    
+    and_or = as_node(and_or_item) + ((AND_AND | OR_OR) + as_node(and_or_item))[:]
+
+    # All four control-flow conditions now accept and_or chains:
+    #   if [[ -f x ]] && (( i++ )); then ... fi
+    #   while cmd1 && ! cmd2; do ... done
     elif_branch = (
-        literal("elif") + (test_construct | dbl_test_construct | arith_stmt | command) + statement_sep[:]
+        literal("elif") + and_or + statement_sep[:]
         + literal("then") + statement_sep[:] + inner_statement[:]
+        + statement_sep[:]
     )
-    else_branch = literal("else") + statement_sep[:] + inner_statement[:]
+    else_branch = (
+        literal("else") + statement_sep[:] + inner_statement[:]
+        + statement_sep[:]
+    )
 
     if_stmt = (
-        literal("if") + (test_construct | dbl_test_construct | arith_stmt | command) + statement_sep[:]
+        literal("if") + and_or + statement_sep[:]
         + literal("then") + statement_sep[:] + inner_statement[:]
+        + statement_sep[:]
         + elif_branch[:] + else_branch[0:1]
         + literal("fi")
     )
 
     for_alt = (literal("for") + identifier + LPAREN + argument[:] + RPAREN + statement_sep[:]
-               + literal("do") + statement_sep[:] + inner_statement[:] + literal("done"))
+               + literal("do") + statement_sep[:] + inner_statement[:]
+               + statement_sep[:] + literal("done"))
     for_stmt = (literal("for") + identifier + literal("in") + argument[:] + statement_sep[:]
-                + literal("do") + statement_sep[:] + inner_statement[:] + literal("done"))
+                + literal("do") + statement_sep[:] + inner_statement[:]
+                + statement_sep[:] + literal("done"))
     foreach_stmt = (literal("foreach") + identifier + LPAREN + argument[:] + RPAREN + statement_sep[:]
-                    + inner_statement[:] + literal("end"))
+                    + inner_statement[:] + statement_sep[:] + literal("end"))
     select_stmt = (literal("select") + identifier + literal("in") + argument[:] + statement_sep[:]
-                   + literal("do") + statement_sep[:] + inner_statement[:] + literal("done"))
+                   + literal("do") + statement_sep[:] + inner_statement[:]
+                   + statement_sep[:] + literal("done"))
 
-    while_stmt = (literal("while") + (test_construct | dbl_test_construct | arith_stmt | command) + statement_sep[:]
-                  + literal("do") + statement_sep[:] + inner_statement[:] + literal("done"))
-    until_stmt = (literal("until") + (test_construct | dbl_test_construct | arith_stmt | command) + statement_sep[:]
-                  + literal("do") + statement_sep[:] + inner_statement[:] + literal("done"))
+    while_stmt = (literal("while") + and_or + statement_sep[:]
+                  + literal("do") + statement_sep[:] + inner_statement[:]
+                  + statement_sep[:] + literal("done"))
+    until_stmt = (literal("until") + and_or + statement_sep[:]
+                  + literal("do") + statement_sep[:] + inner_statement[:]
+                  + statement_sep[:] + literal("done"))
     repeat_stmt = (literal("repeat") + argument + statement_sep[:]
-                   + literal("do") + statement_sep[:] + inner_statement[:] + literal("done"))
+                   + literal("do") + statement_sep[:] + inner_statement[:]
+                   + statement_sep[:] + literal("done"))
 
     # Case pattern: consume tokens until we hit a `)` that is NOT followed by
     # a glob modifier (`*`, `?`, `[`). That distinguishes the pattern-closing
     # `)` in `(darwin|freebsd)*)` from the `)` inside the glob group.
     case_pattern = ((~((rparen_vis + (~glob_suffix)))) + shift)[:] + rparen_vis
-    case_body = case_pattern + statement_sep[:] + inner_statement[:]
+    case_body = case_pattern + statement_sep[:] + inner_statement[:] + statement_sep[:]
     case_stmt = (
         literal("case") + argument + literal("in") + statement_sep[:]
-        + (statement_sep[:] + case_body + (DSEMI | SEMI_AMP | SEMI_BAR))[:]
+        + (case_body + (DSEMI | SEMI_AMP | SEMI_BAR))[:]
         + statement_sep[:] + literal("esac")
     )
 
     function_def = (
         (identifier + LPAREN + RPAREN)
         | (literal("function") + identifier + (LPAREN + RPAREN)[0:1])
-    ) + statement_sep[:] + LBRACE + statement_sep[:] + inner_statement[:] + RBRACE
+    ) + statement_sep[:] + LBRACE + statement_sep[:] + inner_statement[:] + statement_sep[:] + RBRACE
 
     # Anonymous function: `() { body }` — zsh-specific, defined and called
     # immediately. Must appear BEFORE subshell in the choice lists because
     # `()` alone is also a valid (empty) subshell.
     anon_function = (
         LPAREN + RPAREN
-        + LBRACE + statement_sep[:] + inner_statement[:] + RBRACE
+        + LBRACE + statement_sep[:] + inner_statement[:] + statement_sep[:] + RBRACE
     )
 
-    subshell = LPAREN + statement_sep[:] + inner_statement[:] + RPAREN
-    grouping = LBRACE + statement_sep[:] + inner_statement[:] + RBRACE
+    subshell = LPAREN + statement_sep[:] + inner_statement[:] + statement_sep[:] + RPAREN
+    grouping = LBRACE + statement_sep[:] + inner_statement[:] + statement_sep[:] + RBRACE
 
     # ---------- Lint methods ----------
+
     class command:
         def lint(self):
             issues = []
@@ -352,8 +380,8 @@ class ZshStyleGrammar(Grammar):
                 issues.append({"rule": "ZSH003",
                                "message": "Prefer modern '$(...)' over legacy backticks.",
                                "token": head_tok})
-            if idx + 1 < len(self.nodes) and self.nodes[idx+1] is not None:
-                issues.extend(_check_args(self.nodes[idx+1]))
+            if idx + 1 < len(self.nodes) and self.nodes[idx + 1] is not None:
+                issues.extend(_check_args(self.nodes[idx + 1]))
             return issues
         
     class test_construct:
@@ -467,15 +495,29 @@ if __name__ == "__main__":
 
     test_scripts = [
         ("While loop", "while [ $count -lt 5 ]; do\n  echo $count\n  count=$((count + 1))\ndone\n"),
+        ("blank line in while", "while true; do\n  echo a\n\n  echo b\n\ndone\n"),
         ("Function (paren)", "my_func() {\n  echo $USER_NAME\n}\n"),
+        ("blank line in function", "f() {\n  echo a\n\n  echo b\n\n}\n"),
         ("Keyword function", "function cleanup {\n  echo done\n}\n"),
         ("Nested control flow", "my_func() {\n  if [ $x ]; then\n    echo yes\n  fi\n}\n"),
         ("If/elif/else", "if [ -f a ]; then\n  echo a\nelif [ -d b ]; then\n  echo b\nelse\n  echo none\nfi\n"),
+        ("blank line in if", "if true; then\n  echo a\n\nfi\n"),
+        ("if with &&", 'if cmd1 && cmd2; then\n  echo hi\nfi\n'),
+        ("if with complex &&", 'if [[ -f a ]] && (( i++ )) && [ -d b ]; then\n  echo hi\nfi\n'),
+        ("if with !", 'if ! cmd; then\n  echo hi\nfi\n'),
+        ("if with ! after &&", 'if cmd1 && ! cmd2; then\n  echo hi\nfi\n'),
+        ("elif with &&", 'if a; then\n  echo 1\nelif b && c; then\n  echo 2\nfi\n'),
+        ("while with &&", 'while cmd1 && cmd2; do\n  echo hi\ndone\n'),
+        ("until with ||", 'until a || b; do\n  echo hi\ndone\n'),
+        ("assign || cmd", 'x=1 || echo failed\n'),
+        ("assign && cmd", 'x=$(cmd) && echo ok\n'),
         ("Backtick pipeline", "`pwd` | grep foo\n"),
         ("Pipeline with var arg", "cat file.txt | grep $PATTERN\n"),
         ("Arithmetic only", "count=$((count + 1))\n"),
         ("Local declaration", "local name=$USER\n"),
         ("and-or chain", "cd /tmp && rm -f foo || echo failed\n"),
+        ("and with grouping", "true && { echo a; echo b; }\n"),
+        ("and with subshell", "true && ( cd /tmp && ls )\n"),
         ("cmd subst assignment", "x=$(date)\n"),
         ("nested cmd subst", "y=$(echo $(date))\n"),
         ("case simple", "case $1 in\n  start) echo starting;;\n  stop) echo stopping;;\n  *) echo unknown;;\nesac\n"),
@@ -504,7 +546,7 @@ if __name__ == "__main__":
         ("alias with = arg", "alias ls='gls --color=tty'\n"),
         ("process subst", "source <(dircolors -b)\n"),
         ("zero assign", "0=${(%):-%N}\n"),
-        ("prefix cmd", 'GIT_OPTIONAL_LOCKS=0 command git "$@"\n'),        
+        ("prefix cmd", 'GIT_OPTIONAL_LOCKS=0 command git "$@"\n'),
         ("case glob pattern", 'case "$OSTYPE" in\n  netbsd*)\n    echo a\n    ;;\n  (darwin|freebsd)*)\n    echo b\n    ;;\n  *)\n    echo c\n    ;;\nesac\n'),
     ]
 

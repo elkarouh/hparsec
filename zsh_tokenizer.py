@@ -69,11 +69,16 @@ def tokenize_zsh(source):
         return lines[ln - 1] if 0 < ln <= len(lines) else ""
 
     def push(kind, value, start_pos):
-        nonlocal col
+        nonlocal col, line
         end = (start_pos[0], start_pos[1] + len(value))
         tokens.append(Token(TOKEN_TYPES[kind], value, start_pos, end, line_text(start_pos[0])))
-        col += len(value)
-
+        nl_count = value.count("\n")
+        if nl_count:
+            line += nl_count
+            last_nl = value.rfind("\n")
+            col = len(value) - last_nl - 1
+        else:
+            col += len(value)
     while i < n:
         ch = source[i]
         start = (line, col)
