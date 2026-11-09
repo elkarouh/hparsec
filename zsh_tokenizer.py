@@ -37,6 +37,7 @@ TOKEN_TYPES = {
 
 _OP_TOKENS = (
     "<<<", "<<-", "<<", ">>", ">&", "<&", ">|", "&>>", "&>",
+    "&|", "&!",
     "&&", "||", "==", "!=", ";;", ";|", ";&",
     "++", "--", "+=", "-=",
     "[[", "]]",
@@ -79,6 +80,7 @@ def tokenize_zsh(source):
             col = len(value) - last_nl - 1
         else:
             col += len(value)
+
     while i < n:
         ch = source[i]
         start = (line, col)
@@ -305,6 +307,11 @@ def tokenize_zsh(source):
             i = j
             continue
 
+        # `++` and `+=` must be OPs, not idents — check before ident-start
+        if source[i:i + 2] in ("++", "+="):
+            push("OP", source[i:i + 2], start)
+            i += 2
+            continue
         # negative number: -1, -3.14
         if ch == "-" and i + 1 < n and source[i + 1].isdigit():
             j = i + 2
@@ -316,11 +323,11 @@ def tokenize_zsh(source):
 
         # ident start: includes . @ / * ? ~ , % and '-' followed by a word-continuation char
         if (ch.isalpha() or ch == "_" or ch in "/*?~,%.@"
-                or (ch == "-" and i + 1 < n
+                or ((ch == "-" or ch == "+") and i + 1 < n
                     and not source[i + 1].isspace()
                     and source[i + 1] not in ";(){}|[]<>&")):
             j = i + 1
-            starts_dash = (ch == "-")
+            starts_dash = (ch == "-" or ch == "+")
             while j < n:
                 c = source[j]
                 if c.isalnum() or c in _IDENT_CHARS:

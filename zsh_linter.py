@@ -44,7 +44,10 @@ class Terminals(Terminals):
     SEMI_BAR = ";|"
     PLUSEQUAL = "+="
     MINEQUAL = "-="
-
+    AMP = "&"
+    AMP_PIPE = "&|"
+    AMP_BANG = "&!"
+    
     # Visible punctuation (appear in the AST)
     lbracket = filt(lambda tok: tok.string == "[", shift, name="[")
     rbracket = filt(lambda tok: tok.string == "]", shift, name="]")
@@ -75,7 +78,7 @@ class Terminals(Terminals):
     argument_identifier = expect_type_node(TOKEN_TYPES["IDENT"])
 
     argument = backtick | cmd_subst | arith_exp | var_exp | heredoc | string | number | argument_identifier
-    statement_sep = newline | SEMICOL
+    statement_sep = newline | SEMICOL | AMP | AMP_PIPE | AMP_BANG
 
 
 # Enhance argument with glob qualifiers, subscripts, and inline assignments.
@@ -231,7 +234,9 @@ class ZshStyleGrammar(Grammar):
     ) + statement_sep[:]
 
     assign_op = ignore(ASSIGN) | ignore(PLUSEQUAL) | ignore(MINEQUAL)
-    array_literal = LPAREN + argument[:] + RPAREN
+    # Array literal is opaque; guard with (~LPAREN) so `((…))` still parses
+    # as arith_stmt instead of being eaten as an array.
+    array_literal = LPAREN + (~LPAREN) + ((~RPAREN) + shift)[:] + RPAREN    
     assign_rhs = array_literal | argument
 
     assign_target = identifier | number   # `0=${...}` and other numeric names
@@ -251,8 +256,7 @@ class ZshStyleGrammar(Grammar):
         lambda tok: tok.string in ("<", ">", ">>", "<<<", ">&", "<&", ">|", "&>", "&>>"),
         expect_type_node(TOKEN_TYPES["OP"]),
     )
-    redir = ignore(redir_op + argument)
-
+    redir = ignore(number[0:1] + redir_op + argument)
     command_head = identifier | colon | backtick | cmd_subst | arith_exp | var_exp | string | number
     command = assign_word[:] + command_head + argument[:] + redir[:]
 
@@ -261,8 +265,8 @@ class ZshStyleGrammar(Grammar):
     arith_stmt = LPAREN + LPAREN + arith_body + RPAREN + RPAREN
     # as_node(command) keeps each command a distinct node inside pipelines,
     # so command.lint fires per stage instead of only on bare commands.
-    pipeline = as_node(command) + (PIPE + as_node(command))[:]
-
+    pipeline_item = command | grouping | subshell
+    pipeline = as_node(pipeline_item) + (PIPE + as_node(pipeline_item))[:]
     # `! cmd` — command negation prefix
     not_command = ignore(literal("!")) + pipeline
 
