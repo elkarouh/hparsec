@@ -24,7 +24,6 @@ from hek_parsec import (
 )
 from zsh_tokenizer import tokenize_zsh, TOKEN_TYPES, _RESERVED
 
-
 # ============================================================
 # Terminals
 # ============================================================
@@ -80,15 +79,16 @@ class Terminals(Terminals):
     argument = backtick | cmd_subst | arith_exp | var_exp | heredoc | string | number | argument_identifier
     statement_sep = newline | SEMICOL | AMP | AMP_PIPE | AMP_BANG
 
-
 # Enhance argument with glob qualifiers, subscripts, and inline assignments.
 # A glob qualifier has at least one token; `()` alone is not one (it is an empty
 # argument-less function header or anonymous function).
 glob_qual = LPAREN + filt(lambda tok: tok.string not in ("(", ")"), shift)[1:] + RPAREN
 subscript = lbracket + ((~rbracket) + shift)[:] + rbracket
-# glob suffix used inside case patterns: distinguishes `)` inside `(a|b)*`
-# from the pattern-closing `)`.
-glob_suffix = filt(lambda tok: tok.string in ("*", "?", "["), shift)
+
+# FIX 5: Added ")" to glob_suffix. This ensures that in a pattern like `(a|b) )`,
+# the first `)` is consumed as part of the pattern (since it's followed by `)`),
+# and the parser correctly stops at the second `)` which acts as the arm closer.
+glob_suffix = filt(lambda tok: tok.string in ("*", "?", "[", ")"), shift)
 
 _basic_arg = (backtick | cmd_subst | arith_exp | var_exp | heredoc | string
               | number | glob_qual | subscript | argument_identifier)
@@ -132,7 +132,6 @@ def _token_of(node):
         return None
     return None
 
-
 def _check_args(arg_node):
     """ZSH002 / ZSH003 for every leaf argument under arg_node."""
     issues = []
@@ -169,7 +168,6 @@ def _check_args(arg_node):
     walk(arg_node)
     return issues
 
-
 def deep_lint(node):
     """If `node` has a `lint` method, call it (it owns its subtree).
     Otherwise, descend into children and recurse."""
@@ -182,7 +180,6 @@ def deep_lint(node):
         issues.extend(deep_lint(c))
     return issues
 
-    
 def _has_wildcard_case(case_node):
     seq = []
 
@@ -207,7 +204,6 @@ def _has_wildcard_case(case_node):
             return True
     return False
 
-
 def as_node(p):
     """Wrap parser `p` in a one-alternative Choice_Parser.
 
@@ -217,7 +213,6 @@ def as_node(p):
     contains a node of `p`'s class, not the wrapper's.
     """
     return p | p
-
 
 # ============================================================
 # Grammar
@@ -248,10 +243,12 @@ class ZshStyleGrammar(Grammar):
 
     assign_target = assign_name | number   # `0=${...}` and other numeric names
 
-    # The declared name may be dynamic: `typeset -ga ${cache_place}`.
-    declaration = literal("local") + flag[:] + ((assign_name | var_exp) + (assign_op + (assign_rhs | nothing))[0:1])[1:]
+    # FIX 1: The declared name may be dynamic: `typeset -ga ${cache_place}` or `"${var}"`.
+    # Added `string` to allow quoted variable expansions as declaration targets.
+    declaration = literal("local") + flag[:] + ((assign_name | var_exp | string) + (assign_op + (assign_rhs | nothing))[0:1])[1:]
     declaration2 = (literal("typeset") | literal("declare")
-                    | literal("export") | literal("readonly")) + flag[:] + ((assign_name | var_exp) + (assign_op + (assign_rhs | nothing))[0:1])[1:]
+                    | literal("export") | literal("readonly")) + flag[:] + ((assign_name | var_exp | string) + (assign_op + (assign_rhs | nothing))[0:1])[1:]
+    
     # One or more `name=value` pairs on a line: `start=$a end=$b`.
     assignment = assign_target + subscript[0:1] + assign_op + assign_rhs + assign_word[:]
 
@@ -265,18 +262,25 @@ class ZshStyleGrammar(Grammar):
         lambda tok: tok.string in ("<", ">", ">>", "<<<", ">&", "<&", ">|", "&>", "&>>"),
         expect_type_node(TOKEN_TYPES["OP"]),
     )
-    redir = ignore(number[0:1] + redir_op + argument)
+    
+    # FIX 3: Named file descriptor redirections: {fd}</dev/null or {1}>&-
+    named_fd = LBRACE + (argument_identifier | number) + RBRACE
+    redir = ignore((named_fd | number)[0:1] + redir_op + argument)
+    
     command_head = identifier | colon | backtick | cmd_subst | arith_exp | var_exp | string | number
     command = assign_word[:] + command_head + argument[:] + redir[:]
 
     _two_rparen = RPAREN + RPAREN
     arith_body = ((~_two_rparen) + shift)[:]
     arith_stmt = LPAREN + LPAREN + arith_body + RPAREN + RPAREN
+    
     # as_node(command) keeps each command a distinct node inside pipelines,
     # so command.lint fires per stage instead of only on bare commands.
     pipeline_item = command | grouping | subshell
+    
     # Operators may be followed by a line break: `a |\n  b` and `a &&\n  b`.
     pipeline = as_node(pipeline_item) + (PIPE + newline[:] + as_node(pipeline_item))[:]
+    
     # `! cmd` — command negation prefix
     # `! x=$(cmd) || ...` negates an assignment as well as a command.
     not_command = ignore(literal("!")) + (pipeline | assignment)
@@ -291,11 +295,12 @@ class ZshStyleGrammar(Grammar):
         | subshell | grouping
     ) + statement_sep[:]
 
-    # and_or_item now includes not_command (`!`) and assignment (`x=1 || cmd`)
-    # in addition to the previous test/arith/grouping/subshell/pipeline.
+    # FIX 2: and_or_item now includes declarations (`local x=1 && cmd` or `typeset x=1 || echo fail`)
+    # in addition to not_command (`!`), assignment (`x=1 || cmd`), and the previous items.
     and_or_item = (
         test_construct | dbl_test_construct | arith_stmt
         | not_command | grouping | subshell | assignment | pipeline
+        | declaration | declaration2
     )    
     and_or = as_node(and_or_item) + ((AND_AND | OR_OR) + newline[:] + as_node(and_or_item))[:]
 
@@ -320,17 +325,19 @@ class ZshStyleGrammar(Grammar):
         + literal("fi")
     )
 
-    for_alt = (literal("for") + identifier + LPAREN + argument[:] + RPAREN + statement_sep[:]
+    # FIX 4: Support multiple loop variables: `for a b in ...` and `for a b; do ...`
+    # Changed `identifier` to `identifier[1:]` (one or more identifiers).
+    for_alt = (literal("for") + identifier[1:] + LPAREN + argument[:] + RPAREN + statement_sep[:]
                + literal("do") + statement_sep[:] + inner_statement[:]
                + statement_sep[:] + literal("done"))
-    for_stmt = (literal("for") + identifier + literal("in") + argument[:] + statement_sep[:]
+    for_stmt = (literal("for") + identifier[1:] + literal("in") + argument[:] + statement_sep[:]
                 + literal("do") + statement_sep[:] + inner_statement[:]
                 + statement_sep[:] + literal("done"))
-    # `for x; do ...` iterates over the positional parameters (no `in` list).
-    for_positional = (literal("for") + identifier + statement_sep[:]
+    # `for x y; do ...` iterates over the positional parameters (no `in` list).
+    for_positional = (literal("for") + identifier[1:] + statement_sep[:]
                 + literal("do") + statement_sep[:] + inner_statement[:]
                 + statement_sep[:] + literal("done"))
-    foreach_stmt = (literal("foreach") + identifier + LPAREN + argument[:] + RPAREN + statement_sep[:]
+    foreach_stmt = (literal("foreach") + identifier[1:] + LPAREN + argument[:] + RPAREN + statement_sep[:]
                     + inner_statement[:] + statement_sep[:] + literal("end"))
     select_stmt = (literal("select") + identifier + literal("in") + argument[:] + statement_sep[:]
                    + literal("do") + statement_sep[:] + inner_statement[:]
@@ -347,10 +354,11 @@ class ZshStyleGrammar(Grammar):
                    + statement_sep[:] + literal("done"))
 
     # Case pattern: consume tokens until we hit a `)` that is NOT followed by
-    # a glob modifier (`*`, `?`, `[`). That distinguishes the pattern-closing
-    # `)` in `(darwin|freebsd)*)` from the `)` inside the glob group.
+    # a glob modifier (`*`, `?`, `[`, or `)`). That distinguishes the pattern-closing
+    # `)` in `(darwin|freebsd)*)` or `(a|b) )` from the `)` inside the group.
     case_pattern = ((~((rparen_vis + (~glob_suffix)))) + shift)[:] + rparen_vis
     case_body = case_pattern + statement_sep[:] + inner_statement[:] + statement_sep[:]
+    
     # Arms that end with a terminator, then an optional final arm without one
     # (`*) cmd` directly before `esac`). The optional arm must not start at
     # `esac`: a case pattern would otherwise scan through `esac` up to the next
@@ -578,7 +586,15 @@ if __name__ == "__main__":
         ("zero assign", "0=${(%):-%N}\n"),
         ("prefix cmd", 'GIT_OPTIONAL_LOCKS=0 command git "$@"\n'),
         ("case glob pattern", 'case "$OSTYPE" in\n  netbsd*)\n    echo a\n    ;;\n  (darwin|freebsd)*)\n    echo b\n    ;;\n  *)\n    echo c\n    ;;\nesac\n'),
-    ]
+        ("Quoted declaration name", 'typeset -g "${var}"=value\n'),
+        ("&& with declaration", 'local x=1 && echo ok\n'),
+        ("|| with declaration", 'typeset y=2 || echo fail\n'),
+        ("Named fd redirection", '{myfd}</dev/null\n'),
+        ("Named fd numeric", '{1}>&-\n'),
+        ("Multiple for vars", 'for a b in 1 2; do echo $a $b; done\n'),
+        ("Multiple for vars positional", 'for x y; do echo $x $y; done\n'),
+        ("Case parenthesized group", 'case "$OSTYPE" in\n  (darwin|freebsd)*)\n    echo b\n    ;;\n  *)\n    echo c\n    ;;\nesac\n'),
+]
 
     print("\n--- Path X tests ---")
     for name, code in test_scripts:
@@ -590,6 +606,6 @@ if __name__ == "__main__":
                     pos = getattr(v['token'], 'start', '?')
                     print(f"  [{v['rule']}] {pos}: {v['message']}")
             else:
-                print("  (no violations)")
+                print("  (no violations - parsed successfully)")
         except Exception as e:
             print(f"  Parse Error: {type(e).__name__}: {e}")
