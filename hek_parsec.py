@@ -587,7 +587,21 @@ class Parser(metaclass=ParserMeta):
         node:  The first AST node (shortcut for nodes[0]).
         nodes: List of all AST nodes produced by this parser.
     """
+    _default_class = None
 
+    def __getattr__(self, name):
+        """Delegate missing attributes to the registered default class."""
+        dc = Parser._default_class
+        if dc is not None:
+            attr = getattr(dc, name, None)
+            if attr is not None:
+                if callable(attr):
+                    return attr.__get__(self, type(self))
+                return attr
+        raise AttributeError(
+            f"{type(self).__name__!r} object has no attribute {name!r}"
+        )
+        
     def __init__(self, nodes) -> None:
         if type(nodes) is list:
             if nodes:
@@ -721,6 +735,15 @@ class GrammarMeta(type):
 
         cls = super().__new__(metacls, name, bases, dict(namespace))
 
+        # Auto-register a `__default__` class defined in the grammar body as
+        # the fallback class for all Parser instances. Rule authors never
+        # reference it: `node.anything()` works whether the method is defined
+        # on the rule or on `__default__`.
+        if isinstance(namespace, GrammarNamespace):
+            dc = namespace.get("__default__")
+            if isinstance(dc, type) and not hasattr(dc, "parse"):
+                Parser._default_class = dc
+                
         # 3. Export rules to the caller's outer globals
         if isinstance(namespace, GrammarNamespace):
             g = namespace.outer_globals

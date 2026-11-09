@@ -2,8 +2,8 @@
 
 Design: one lint method per rule, attached via inner classes. Recursion is
 implicit — each rule's `lint(self)` is responsible for its own subtree,
-including calling `deep_lint` on any child that doesn't have its own
-lint method.
+including calling `lint` in the __default__ class on any child that doesn't 
+have its own lint method.
 
 `as_node(p)` wraps a parser in a one-alternative Choice_Parser so that `+`
 doesn't flatten its contents into the parent. This is what makes `command`
@@ -46,6 +46,7 @@ class Terminals(Terminals):
     AMP = "&"
     AMP_PIPE = "&|"
     AMP_BANG = "&!"
+    ASSIGN_OP = ASSIGN | PLUSEQUAL | MINEQUAL
     
     # Visible punctuation (appear in the AST)
     lbrace_vis = filt(lambda tok: tok.string == "{", shift, name="{")
@@ -81,26 +82,26 @@ class Terminals(Terminals):
     argument = backtick | cmd_subst | arith_exp | var_exp | heredoc | string | number | argument_identifier
     statement_sep = newline | SEMICOL | AMP | AMP_PIPE | AMP_BANG
 
-# Enhance argument with glob qualifiers, subscripts, and inline assignments.
-# A glob qualifier has at least one token; `()` alone is not one (it is an empty
-# argument-less function header or anonymous function).
-glob_qual = LPAREN + filt(lambda tok: tok.string not in ("(", ")"), shift)[1:] + RPAREN
-subscript = lbracket + ((~rbracket) + shift)[:] + rbracket
+    # Enhance argument with glob qualifiers, subscripts, and inline assignments.
+    # A glob qualifier has at least one token; `()` alone is not one (it is an empty
+    # argument-less function header or anonymous function).
+    glob_qual = LPAREN + filt(lambda tok: tok.string not in ("(", ")"), shift)[1:] + RPAREN
+    subscript = lbracket + ((~rbracket) + shift)[:] + rbracket
 
-# FIX 5: Added ")" to glob_suffix. This ensures that in a pattern like `(a|b) )`,
-# the first `)` is consumed as part of the pattern (since it's followed by `)`),
-# and the parser correctly stops at the second `)` which acts as the arm closer.
-glob_suffix = filt(lambda tok: tok.string in ("*", "?", "[", ")"), shift)
+    # FIX 5: Added ")" to glob_suffix. This ensures that in a pattern like `(a|b) )`,
+    # the first `)` is consumed as part of the pattern (since it's followed by `)`),
+    # and the parser correctly stops at the second `)` which acts as the arm closer.
+    glob_suffix = filt(lambda tok: tok.string in ("*", "?", "[", ")"), shift)
 
-_basic_arg = (backtick | cmd_subst | arith_exp | var_exp | heredoc | string
-              | number | glob_qual | subscript | argument_identifier)
-# assign_word matches `name=value` as a single argument (needed for
-# `alias ls='...'`, `export FOO=bar` inline, etc.)
-# Assignment names are plain identifiers; reserved words such as `end` are only
-# keywords in command position, so `end=$second` is a valid assignment.
-assign_name = filt(lambda tok: tok.string.isidentifier(), expect_type_node(TOKEN_TYPES["IDENT"]))
-assign_word = assign_name + ignore(ASSIGN) + _basic_arg
-argument = assign_word | _basic_arg
+    _basic_arg = (backtick | cmd_subst | arith_exp | var_exp | heredoc | string
+                  | number | glob_qual | subscript | argument_identifier)
+    # assign_word matches `name=value` as a single argument (needed for
+    # `alias ls='...'`, `export FOO=bar` inline, etc.)
+    # Assignment names are plain identifiers; reserved words such as `end` are only
+    # keywords in command position, so `end=$second` is a valid assignment.
+    assign_name = filt(lambda tok: tok.string.isidentifier(), expect_type_node(TOKEN_TYPES["IDENT"]))
+    assign_word = assign_name + ASSIGN + _basic_arg
+    argument = assign_word | _basic_arg
 
 def _children(node):
     if node is None:
@@ -170,18 +171,6 @@ def _check_args(arg_node):
     walk(arg_node)
     return issues
 
-def deep_lint(node):
-    """If `node` has a `lint` method, call it (it owns its subtree).
-    Otherwise, descend into children and recurse."""
-    if node is None:
-        return []
-    if hasattr(node, "lint"):
-        return list(node.lint())
-    issues = []
-    for c in _children(node):
-        issues.extend(deep_lint(c))
-    return issues
-
 def _has_wildcard_case(case_node):
     seq = []
 
@@ -235,7 +224,6 @@ class ZshStyleGrammar(Grammar):
         | subshell | grouping
     ) + statement_sep[:]
 
-    assign_op = ignore(ASSIGN) | ignore(PLUSEQUAL) | ignore(MINEQUAL)
     # Array literal is opaque; guard with (~LPAREN) so `((…))` still parses
     # as arith_stmt instead of being eaten as an array.
     # Elements may carry glob qualifiers, e.g. `x=("$v"(Nm-1))`, so a nested
@@ -247,12 +235,12 @@ class ZshStyleGrammar(Grammar):
 
     # FIX 1: The declared name may be dynamic: `typeset -ga ${cache_place}` or `"${var}"`.
     # Added `string` to allow quoted variable expansions as declaration targets.
-    declaration = literal("local") + flag[:] + ((assign_name | var_exp | string) + (assign_op + (assign_rhs | nothing))[0:1])[1:]
+    declaration = literal("local") + flag[:] + ((assign_name | var_exp | string) + (ASSIGN_OP + (assign_rhs | nothing))[0:1])[1:]
     declaration2 = (literal("typeset") | literal("declare")
-                    | literal("export") | literal("readonly")) + flag[:] + ((assign_name | var_exp | string) + (assign_op + (assign_rhs | nothing))[0:1])[1:]
+                    | literal("export") | literal("readonly")) + flag[:] + ((assign_name | var_exp | string) + (ASSIGN_OP + (assign_rhs | nothing))[0:1])[1:]
     
     # One or more `name=value` pairs on a line: `start=$a end=$b`.
-    assignment = assign_target + subscript[0:1] + assign_op + assign_rhs + assign_word[:]
+    assignment = assign_target + subscript[0:1] + ASSIGN_OP + assign_rhs + assign_word[:]
 
     # [ ] and [[ ]] content is opaque — anything inside (including `=` `==`
     # `!=` `=~` `&&` `||` `<` `>`) is treated as raw tokens. ZSH004 still
@@ -396,7 +384,15 @@ class ZshStyleGrammar(Grammar):
     grouping = LBRACE + statement_sep[:] + inner_statement[:] + statement_sep[:] + RBRACE
 
     # ---------- Lint methods ----------
-
+    class __default__:
+        def lint(self):
+            # this node doesnt have a lint method, but its children may have.
+            issues = []
+            for c in _children(self):
+                if hasattr(c,"lint"): 
+                    issues.extend(c.lint())
+            return issues
+            
     class command:
         def lint(self):
             issues = []
@@ -483,14 +479,14 @@ class ZshStyleGrammar(Grammar):
                     "token": _token_of(self.nodes[1]) if len(self.nodes) > 1 else _token_of(self.nodes[0]),
                 })
             for c in _children(self):
-                issues.extend(deep_lint(c))
+                issues.extend(c.lint())
             return issues
 
     class script:
         def lint(self):
             issues = []
             for c in _children(self):
-                issues.extend(deep_lint(c))                       
+                issues.extend(c.lint())                       
             return issues
 
 
