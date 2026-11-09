@@ -1,4 +1,15 @@
-"""Zsh linter — extended grammar for real-ish zsh scripts."""
+"""Zsh linter — extended grammar for real-ish zsh scripts.
+
+Design: one lint method per rule, attached via inner classes. Recursion is
+implicit — each rule's `lint(self)` is responsible for its own subtree,
+including calling `_recurse_lint` on any child that doesn't have its own
+lint method.
+
+`as_node(p)` wraps a parser in a one-alternative Choice_Parser so that `+`
+doesn't flatten its contents into the parent. This is what makes `command`
+appear as a distinct node inside `pipeline` (and `pipeline` inside `and_or`),
+so `command.lint` fires on every command, piped or not.
+"""
 
 from hek_parsec import (
     Grammar,
@@ -31,6 +42,8 @@ class Terminals(Terminals):
     DSEMI = ";;"
     SEMI_AMP = ";&"
     SEMI_BAR = ";|"
+    PLUSEQUAL = "+="
+    MINEQUAL = "-="
 
     # Visible punctuation (appear in the AST)
     lbracket = filt(lambda tok: tok.string == "[", shift, name="[")
@@ -39,6 +52,13 @@ class Terminals(Terminals):
     drbracket = filt(lambda tok: tok.string == "]]", shift, name="]]")
     lparen_vis = filt(lambda tok: tok.string == "(", shift, name="(")
     rparen_vis = filt(lambda tok: tok.string == ")", shift, name=")")
+    colon = filt(lambda tok: tok.string == ":", shift, name=":")
+    flag = filt(
+        lambda tok: isinstance(tok.string, str) and len(tok.string) > 1
+                    and tok.string.startswith("-") and not tok.string.startswith("--"),
+        expect_type_node(TOKEN_TYPES["IDENT"]),
+        name="-flag",
+    )
 
     number = expect_type_node(TOKEN_TYPES["NUMBER"])
     string = expect_type_node(TOKEN_TYPES["STRING"])
@@ -51,11 +71,7 @@ class Terminals(Terminals):
     newline = expect_type_node(TOKEN_TYPES["NEWLINE"])
 
     reserved = _RESERVED
-
-    identifier = filt(
-        lambda tok: tok.string not in reserved,
-        expect_type_node(TOKEN_TYPES["IDENT"]),
-    )
+    identifier = filt(lambda tok: tok.string not in reserved, expect_type_node(TOKEN_TYPES["IDENT"]))
     argument_identifier = expect_type_node(TOKEN_TYPES["IDENT"])
 
     argument = backtick | cmd_subst | arith_exp | var_exp | heredoc | string | number | argument_identifier
@@ -65,16 +81,6 @@ class Terminals(Terminals):
 # ============================================================
 # Helpers
 # ============================================================
-
-def _token_of(node):
-    if node is None:
-        return None
-    if hasattr(node, "string"):
-        return node
-    if hasattr(node, "node"):
-        return _token_of(node.node)
-    return None
-
 
 def _children(node):
     if node is None:
@@ -86,84 +92,86 @@ def _children(node):
     return []
 
 
-def _first_token_string(node):
+def _token_of(node):
+    """Return the deepest token/str that `node` wraps."""
     n = node
-    for _ in range(10):
+    for _ in range(20):
         if n is None:
             return None
         if isinstance(n, str):
             return n
-        if hasattr(n, "string"):
-            return getattr(n, "string", None)
-        if hasattr(n, "node"):
+        if hasattr(n, "string") and not hasattr(n, "nodes"):
+            return n
+        if hasattr(n, "node") and n.node is not n:
             n = n.node
             continue
-        if hasattr(n, "nodes") and isinstance(n.nodes, list) and n.nodes:
-            n = n.nodes[0]
+        kids = _children(n)
+        if kids:
+            n = kids[0]
             continue
         return None
     return None
 
 
-def _is_leaf(node):
-    if node is None:
-        return False
-    if isinstance(node, str):
-        return True
-    if hasattr(node, "string") and not hasattr(node, "nodes"):
-        return True
-    if type(node).__name__ in ("Sequence_Parser", "Several_Times", "Choice_Parser"):
-        return False
-    return True
-
-
-def _is_several_times(node):
-    return type(node).__name__ == "Several_Times"
-
-
-def _is_sequence(node):
-    return type(node).__name__ == "Sequence_Parser"
-
-
-def check_argument_issues(arg_node, skip_split=False):
-    """Emit ZSH002 (unquoted expansion) / ZSH003 (backtick) for arguments.
-
-    When `skip_split` is True (e.g. inside `[[ ... ]]`), ZSH002 is NOT
-    emitted for `$var` / `$(...)` because `[[ ]]` performs no word
-    splitting — the expansion is safe unquoted there. ZSH003 still fires
-    because backticks are a style issue regardless of context.
-    """
+def _check_args(arg_node):
+    """ZSH002 / ZSH003 for every leaf argument under arg_node."""
     issues = []
-    for arg in _children(arg_node) or [arg_node]:
-        tok = _token_of(arg)
+
+    def walk(node):
+        if node is None:
+            return
+        kids = _children(node)
+        if kids:
+            for c in kids:
+                walk(c)
+            return
+        tok = node if hasattr(node, "string") else _token_of(node)
         if tok is None:
-            continue
-        val = getattr(tok, "string", str(tok))
-        if not isinstance(val, str):
-            continue
+            return
+        val = getattr(tok, "string", None)
+        if not isinstance(val, str) or not val:
+            return
         if val.startswith("$") and not val.startswith("${") and not val.startswith("$(("):
             if val.startswith("$(") and val.endswith(")"):
-                if not skip_split:
-                    issues.append({
-                        "rule": "ZSH002",
-                        "message": f"Unquoted command substitution '{val}' detected.",
-                        "token": tok,
-                    })
+                issues.append({"rule": "ZSH002",
+                    "message": f"Unquoted command substitution '{val}' detected.",
+                               "token": tok})
             else:
-                if not skip_split:
-                    issues.append({
-                        "rule": "ZSH002",
-                        "message": f"Unquoted variable expansion '{val}' detected. "
-                                   f"Risk of word splitting and globbing.",
-                        "token": tok,
-                    })
+                issues.append({"rule": "ZSH002",
+                    "message": f"Unquoted variable expansion '{val}' detected. "
+                               f"Risk of word splitting and globbing.",
+                               "token": tok})
         elif val.startswith("`") and val.endswith("`"):
-            issues.append({
-                "rule": "ZSH003",
-                "message": "Prefer modern '$(...)' command substitution over legacy backticks.",
-                "token": tok,
-            })
+            issues.append({"rule": "ZSH003",
+                           "message": "Prefer modern '$(...)' over legacy backticks.",
+                           "token": tok})
+
+    walk(arg_node)
     return issues
+
+
+def _recurse_lint(node):
+    """If `node` has a `lint` method, call it (it owns its subtree).
+    Otherwise, descend into children and recurse."""
+    if node is None:
+        return []
+    if hasattr(node, "lint"):
+        return list(node.lint())
+    issues = []
+    for c in _children(node):
+        issues.extend(_recurse_lint(c))
+    return issues
+
+
+def as_node(p):
+    """Wrap parser `p` in a one-alternative Choice_Parser.
+
+    The Choice wrapper prevents `ParserMeta.__add__` from flattening `p`'s
+    `.parsers` into the parent. The wrapper returns the matched alternative's
+    node directly (Choice_Parser.parse returns `m` from `p.parse`), so the AST
+    contains a node of `p`'s class, not the wrapper's.
+    """
+    return p | p
 
 
 # ============================================================
@@ -183,10 +191,14 @@ class ZshStyleGrammar(Grammar):
         | and_or
     ) + statement_sep[:]
 
-    declaration = literal("local") + identifier + ASSIGN + argument
+    assign_op = ignore(ASSIGN) | ignore(PLUSEQUAL) | ignore(MINEQUAL)
+    array_literal = LPAREN + argument[:] + RPAREN
+    assign_rhs = array_literal | argument
+
+    declaration = literal("local") + flag[:] + identifier + (assign_op + assign_rhs)[0:1]
     declaration2 = (literal("typeset") | literal("declare")
-                    | literal("export") | literal("readonly")) + identifier + ASSIGN + argument
-    assignment = identifier + ASSIGN + argument
+                    | literal("export") | literal("readonly")) + flag[:] + identifier + (assign_op + assign_rhs)[0:1]
+    assignment = identifier + assign_op + assign_rhs
 
     test_construct = lbracket + argument[:] + rbracket
     dbl_test_construct = dlbracket + argument[:] + drbracket
@@ -197,10 +209,13 @@ class ZshStyleGrammar(Grammar):
     )
     redir = ignore(redir_op + argument)
 
-    command_head = identifier | backtick | cmd_subst | arith_exp | var_exp | string | number
+    command_head = identifier | colon | backtick | cmd_subst | arith_exp | var_exp | string | number
     command = command_head + argument[:] + redir[:]
-    pipeline = command + (PIPE + command)[:]
-    and_or = pipeline + ((AND_AND | OR_OR) + pipeline)[:]
+
+    # as_node(command) keeps each command a distinct node inside pipelines,
+    # so command.lint fires per stage instead of only on bare commands.
+    pipeline = as_node(command) + (PIPE + as_node(command))[:]
+    and_or = as_node(pipeline) + ((AND_AND | OR_OR) + as_node(pipeline))[:]
 
     inner_statement = (
         comment | declaration | declaration2 | assignment
@@ -212,68 +227,41 @@ class ZshStyleGrammar(Grammar):
         | and_or
     ) + statement_sep[:]
 
-    elif_branch = literal("elif") + (test_construct | dbl_test_construct | command) + statement_sep[:] + literal("then") + statement_sep[:] + inner_statement[:]
+    elif_branch = (
+        literal("elif") + (test_construct | dbl_test_construct | command) + statement_sep[:]
+        + literal("then") + statement_sep[:] + inner_statement[:]
+    )
     else_branch = literal("else") + statement_sep[:] + inner_statement[:]
 
     if_stmt = (
         literal("if") + (test_construct | dbl_test_construct | command) + statement_sep[:]
-        + literal("then") + statement_sep[:]
-        + inner_statement[:]
-        + elif_branch[:]
-        + else_branch[0:1]
+        + literal("then") + statement_sep[:] + inner_statement[:]
+        + elif_branch[:] + else_branch[0:1]
         + literal("fi")
     )
 
-    for_alt = (
-        literal("for") + identifier + LPAREN + argument[:] + RPAREN + statement_sep[:]
-        + literal("do") + statement_sep[:]
-        + inner_statement[:]
-        + literal("done")
-    )
-    for_stmt = (
-        literal("for") + identifier + literal("in") + argument[:] + statement_sep[:]
-        + literal("do") + statement_sep[:]
-        + inner_statement[:]
-        + literal("done")
-    )
-    foreach_stmt = (
-        literal("foreach") + identifier + LPAREN + argument[:] + RPAREN + statement_sep[:]
-        + inner_statement[:]
-        + literal("end")
-    )
-    select_stmt = (
-        literal("select") + identifier + literal("in") + argument[:] + statement_sep[:]
-        + literal("do") + statement_sep[:]
-        + inner_statement[:]
-        + literal("done")
-    )
+    for_alt = (literal("for") + identifier + LPAREN + argument[:] + RPAREN + statement_sep[:]
+               + literal("do") + statement_sep[:] + inner_statement[:] + literal("done"))
+    for_stmt = (literal("for") + identifier + literal("in") + argument[:] + statement_sep[:]
+                + literal("do") + statement_sep[:] + inner_statement[:] + literal("done"))
+    foreach_stmt = (literal("foreach") + identifier + LPAREN + argument[:] + RPAREN + statement_sep[:]
+                    + inner_statement[:] + literal("end"))
+    select_stmt = (literal("select") + identifier + literal("in") + argument[:] + statement_sep[:]
+                   + literal("do") + statement_sep[:] + inner_statement[:] + literal("done"))
 
-    while_stmt = (
-        literal("while") + (test_construct | dbl_test_construct | command) + statement_sep[:]
-        + literal("do") + statement_sep[:]
-        + inner_statement[:]
-        + literal("done")
-    )
-    until_stmt = (
-        literal("until") + (test_construct | dbl_test_construct | command) + statement_sep[:]
-        + literal("do") + statement_sep[:]
-        + inner_statement[:]
-        + literal("done")
-    )
-    repeat_stmt = (
-        literal("repeat") + argument + statement_sep[:]
-        + literal("do") + statement_sep[:]
-        + inner_statement[:]
-        + literal("done")
-    )
+    while_stmt = (literal("while") + (test_construct | dbl_test_construct | command) + statement_sep[:]
+                  + literal("do") + statement_sep[:] + inner_statement[:] + literal("done"))
+    until_stmt = (literal("until") + (test_construct | dbl_test_construct | command) + statement_sep[:]
+                  + literal("do") + statement_sep[:] + inner_statement[:] + literal("done"))
+    repeat_stmt = (literal("repeat") + argument + statement_sep[:]
+                   + literal("do") + statement_sep[:] + inner_statement[:] + literal("done"))
 
     case_pattern = lparen_vis[0:1] + argument[:] + rparen_vis
     case_body = case_pattern + statement_sep[:] + inner_statement[:]
     case_stmt = (
         literal("case") + argument + literal("in") + statement_sep[:]
         + (statement_sep[:] + case_body + (DSEMI | SEMI_AMP | SEMI_BAR))[:]
-        + statement_sep[:]
-        + literal("esac")
+        + statement_sep[:] + literal("esac")
     )
 
     function_def = (
@@ -284,147 +272,93 @@ class ZshStyleGrammar(Grammar):
     subshell = LPAREN + statement_sep[:] + inner_statement[:] + RPAREN
     grouping = LBRACE + statement_sep[:] + inner_statement[:] + RBRACE
 
+    # ---------- Lint methods (one per rule) ----------
+
+    class command:
+        def lint(self):
+            issues = []
+            head_tok = _token_of(self.nodes[0]) if self.nodes else None
+            head_name = getattr(head_tok, "string", None)
+            if head_name == "echo":
+                issues.append({"rule": "ZSH001",
+                    "message": "Prefer native 'print' or 'printf' over legacy 'echo'.",
+                               "token": head_tok})
+            elif head_name in ("grep", "sed", "awk"):
+                issues.append({"rule": "ZSH005",
+                    "message": f"External tool '{head_name}' used; prefer native zsh equivalents where possible.",
+                               "token": head_tok})
+            elif isinstance(head_name, str) and head_name.startswith("`") and head_name.endswith("`"):
+                issues.append({"rule": "ZSH003",
+                               "message": "Prefer modern '$(...)' over legacy backticks.",
+                               "token": head_tok})
+            if len(self.nodes) > 1 and self.nodes[1] is not None:
+                issues.extend(_check_args(self.nodes[1]))
+            return issues
+
+    class test_construct:
+        def lint(self):
+            issues = [{"rule": "ZSH004",
+                "message": "Prefer enhanced '[[ ... ]]' over legacy POSIX '[ ... ]' test construct in zsh.",
+                       "token": _token_of(self.nodes[0])}]
+            if len(self.nodes) > 1 and self.nodes[1] is not None:
+                issues.extend(_check_args(self.nodes[1]))
+            return issues
+
+    class dbl_test_construct:
+        # [[ ... ]] performs no word splitting — suppress ZSH002 for its args.
+        # Also suppresses ZSH004 (this is the recommended form).
+        def lint(self):
+            return []   # [[ ]] does no word splitting; recommended form
+
+    class assignment:
+        def lint(self):
+            if len(self.nodes) > 1 and self.nodes[1] is not None:
+                return _check_args(self.nodes[1])
+            return []
+
+    class declaration:
+        def lint(self):
+            # nodes = [flag_several, ident, assign_several?]
+            for n in self.nodes[1:]:
+                if n is not None:
+                    issues = _check_args(n)
+                    if issues:
+                        return issues
+            return []
+
+    class declaration2:
+        def lint(self):
+            for n in self.nodes[1:]:
+                if n is not None:
+                    issues = _check_args(n)
+                    if issues:
+                        return issues
+            return []
+
+    class case_stmt:
+        # The case word (nodes[1]) is subject to splitting — check it.
+        # Then recurse into bodies.
+        def lint(self):
+            issues = []
+            if len(self.nodes) > 1 and self.nodes[1] is not None:
+                issues.extend(_check_args(self.nodes[1]))
+            # NEW: check for wildcard fallback
+            if not _has_wildcard_case(self):
+                issues.append({
+                    "rule": "ZSH007",
+                    "message": "case without a `*)` fallback — unexpected input silently ignored.",
+                    "token": _token_of(self.nodes[0]),
+                })
+            for c in _children(self):
+                issues.extend(_recurse_lint(c))
+            return issues
+
     class script:
         def lint(self):
-            all_issues = []
-
-            def visit(node, in_dbl_test):
-                if node is None:
-                    return
-                is_dbl_test = _looks_like_dbl_test_construct(node)
-                for child in _children(node):
-                    visit(child, in_dbl_test or is_dbl_test)
-                all_issues.extend(_classify_and_lint(node, in_dbl_test=in_dbl_test))
-
-            visit(self, False)
-            return all_issues
-
-
-# ============================================================
-# Shape classifiers
-# ============================================================
-
-def _looks_like_test_construct(node):
-    if not _is_sequence(node):
-        return False
-    kids = _children(node)
-    if len(kids) != 3:
-        return False
-    return _first_token_string(kids[0]) == "[" and _first_token_string(kids[2]) == "]"
-
-
-def _looks_like_dbl_test_construct(node):
-    if not _is_sequence(node):
-        return False
-    kids = _children(node)
-    if len(kids) != 3:
-        return False
-    return _first_token_string(kids[0]) == "[[" and _first_token_string(kids[2]) == "]]"
-
-
-def _looks_like_declaration(node):
-    if not _is_sequence(node):
-        return False
-    kids = _children(node)
-    if len(kids) < 2:
-        return False
-    if not _is_leaf(kids[0]):
-        return False
-    return _first_token_string(kids[0]) in ("local", "typeset", "declare", "export", "readonly")
-
-
-def _looks_like_assignment(node):
-    if not _is_sequence(node):
-        return False
-    kids = _children(node)
-    if len(kids) != 2:
-        return False
-    if not _is_leaf(kids[0]):
-        return False
-    return not _is_several_times(kids[1])
-
-
-def _looks_like_pipeline(node):
-    if not _is_sequence(node):
-        return False
-    kids = _children(node)
-    if len(kids) != 3:
-        return False
-    if not _is_leaf(kids[0]):
-        return False
-    return _is_several_times(kids[2])
-
-
-def _looks_like_command(node):
-    if not _is_sequence(node):
-        return False
-    kids = _children(node)
-    if len(kids) < 2:
-        return False
-    if not _is_leaf(kids[0]):
-        return False
-    return _first_token_string(kids[0]) is not None
-
-
-def _lint_command_head_and_args(kids, skip_split=False):
-    issues = []
-    head_tok = _token_of(kids[0])
-    head_name = getattr(head_tok, "string", None) if head_tok else _first_token_string(kids[0])
-
-    if head_name == "echo":
-        issues.append({
-            "rule": "ZSH001",
-            "message": "Prefer native 'print' or 'printf' over legacy 'echo'.",
-            "token": head_tok,
-        })
-    elif head_name in ("grep", "sed", "awk"):
-        issues.append({
-            "rule": "ZSH005",
-            "message": f"External tool '{head_name}' used; prefer native zsh equivalents where possible.",
-            "token": head_tok,
-        })
-    elif isinstance(head_name, str) and head_name.startswith("`") and head_name.endswith("`"):
-        issues.append({
-            "rule": "ZSH003",
-            "message": "Prefer modern '$(...)' command substitution over legacy backticks.",
-            "token": head_tok,
-        })
-
-    if len(kids) > 1:
-        issues.extend(check_argument_issues(kids[1], skip_split=skip_split))
-    return issues
-
-
-def _classify_and_lint(node, in_dbl_test=False):
-    if _looks_like_test_construct(node):
-        open_tok = _token_of(_children(node)[0])
-        return [{
-            "rule": "ZSH004",
-            "message": "Prefer enhanced '[[ ... ]]' over legacy POSIX '[ ... ]' test construct in zsh.",
-            "token": open_tok,
-        }]
-
-    if _looks_like_dbl_test_construct(node):
-        # [[ ... ]] is not a warn target — its whole point is to avoid the
-        # word-splitting issues of [ ... ].
-        return []
-
-    if _looks_like_declaration(node):
-        kids = _children(node)
-        if len(kids) >= 3:
-            return check_argument_issues(kids[2])
-        return []
-
-    if _looks_like_assignment(node):
-        return check_argument_issues(_children(node)[1])
-
-    if _looks_like_pipeline(node):
-        return _lint_command_head_and_args(_children(node)[:2], skip_split=in_dbl_test)
-
-    if _looks_like_command(node):
-        return _lint_command_head_and_args(_children(node), skip_split=in_dbl_test)
-
-    return []
+            issues = []
+            for c in _children(self):
+                issues.extend(_recurse_lint(c))
+            return issues
 
 
 # ============================================================
@@ -456,74 +390,57 @@ def lint_zsh_code(source):
 
 if __name__ == "__main__":
     from zsh_tokenizer import tokenize_zsh as _tk
-    print("TOKENIZER FILE:", _tk.__code__.co_filename)
     _arith = [(t.type, t.string) for t in _tk("count=$((count + 1))")]
-    print("arith tokens:", _arith)
-    assert any(k == 3 and s == "$((count + 1))" for k, s in _arith), (
-        "Tokenizer is STALE: $((...)) must be a single ARITH_EXP token."
-    )
+    assert any(k == 3 and s == "$((count + 1))" for k, s in _arith), "ARITH_EXP split"
     _case = [(t.type, t.string) for t in _tk("case $1 in\n a) x;;\nesac\n")]
-    print("case tokens:", _case)
-    assert any(k == 4 and s == "$1" for k, s in _case), (
-        "Tokenizer is STALE: $1 must be a single VAR_EXP token."
-    )
-    print()
+    assert any(k == 4 and s == "$1" for k, s in _case), "$1 split"
+    _esc = [(t.type, t.string) for t in _tk("git log --format=%h\\ %s\n")]
+    assert not any(t == 10 and s == "\\" for t, s in _esc), "escape leaked"
+    print("Tokenizer OK")
 
     test_scripts = [
-        ("While loop",
-         "while [ $count -lt 5 ]; do\n  echo $count\n  count=$((count + 1))\ndone\n"),
-        ("Function (paren)",
-         "my_func() {\n  echo $USER_NAME\n}\n"),
-        ("Keyword function",
-         "function cleanup {\n  echo done\n}\n"),
-        ("Nested control flow",
-         "my_func() {\n  if [ $x ]; then\n    echo yes\n  fi\n}\n"),
-        ("If/elif/else",
-         "if [ -f a ]; then\n  echo a\nelif [ -d b ]; then\n  echo b\nelse\n  echo none\nfi\n"),
-        ("Backtick pipeline",
-         "`pwd` | grep foo\n"),
-        ("Pipeline with var arg",
-         "cat file.txt | grep $PATTERN\n"),
-        ("Arithmetic only",
-         "count=$((count + 1))\n"),
-        ("Local declaration",
-         "local name=$USER\n"),
-        ("and-or chain",
-         "cd /tmp && rm -f foo || echo failed\n"),
-        ("cmd subst assignment",
-         "x=$(date)\n"),
-        ("nested cmd subst",
-         "y=$(echo $(date))\n"),
-        ("case simple",
-         "case $1 in\n  start) echo starting;;\n  stop) echo stopping;;\n  *) echo unknown;;\nesac\n"),
-        ("dbl bracket",
-         "if [[ -f $x ]]; then\n  echo yes\nfi\n"),
-        ("redirection",
-         "echo hello > /tmp/x\n"),
-        ("subshell",
-         "( cd /tmp && ls )\n"),
-        ("grouping",
-         "{ echo a; echo b; }\n"),
-        ("for-alt",
-         "for f (*.txt) do\n  echo $f\ndone\n"),
-        ("select",
-         "select opt in a b c; do\n  echo $opt\ndone\n"),
-        ("heredoc",
-         "cat <<EOF\nhello\nEOF\n"),
+        ("While loop", "while [ $count -lt 5 ]; do\n  echo $count\n  count=$((count + 1))\ndone\n"),
+        ("Function (paren)", "my_func() {\n  echo $USER_NAME\n}\n"),
+        ("Keyword function", "function cleanup {\n  echo done\n}\n"),
+        ("Nested control flow", "my_func() {\n  if [ $x ]; then\n    echo yes\n  fi\n}\n"),
+        ("If/elif/else", "if [ -f a ]; then\n  echo a\nelif [ -d b ]; then\n  echo b\nelse\n  echo none\nfi\n"),
+        ("Backtick pipeline", "`pwd` | grep foo\n"),
+        ("Pipeline with var arg", "cat file.txt | grep $PATTERN\n"),
+        ("Arithmetic only", "count=$((count + 1))\n"),
+        ("Local declaration", "local name=$USER\n"),
+        ("and-or chain", "cd /tmp && rm -f foo || echo failed\n"),
+        ("cmd subst assignment", "x=$(date)\n"),
+        ("nested cmd subst", "y=$(echo $(date))\n"),
+        ("case simple", "case $1 in\n  start) echo starting;;\n  stop) echo stopping;;\n  *) echo unknown;;\nesac\n"),
+        ("dbl bracket", "if [[ -f $x ]]; then\n  echo yes\nfi\n"),
+        ("redirection", "echo hello > /tmp/x\n"),
+        ("subshell", "( cd /tmp && ls )\n"),
+        ("grouping", "{ echo a; echo b; }\n"),
+        ("for-alt", "for f (*.txt) do\n  echo $f\ndone\n"),
+        ("select", "select opt in a b c; do\n  echo $opt\ndone\n"),
+        ("heredoc", "cat <<EOF\nhello\nEOF\n"),
+        ("line continuation", "echo a \\\n     b\n"),
+        ("append assignment", "arr+=foo\n"),
+        ("negative number", "x=-1\n"),
+        ("colon no-op", ":\n"),
+        ("colon with args", ": ${FOO:=bar}\n"),
+        ("escape space", "git log --format=%h\\ %s\n"),
+        ("typeset with flag", "typeset -g foo=bar\n"),
+        ("declare array", "declare -A map\n"),
+        ("comma in ident", "echo a,b\n"),
     ]
 
-    print("--- Extended Zsh Linter Tests ---")
+    print("\n--- Path X tests ---")
     for name, code in test_scripts:
-        print(f"\nTest Case: [{name}]")
-        print(f"Code:\n{code.rstrip()}")
+        print(f"\n[{name}]")
         try:
             violations = lint_zsh_code(code)
             if violations:
                 print("Linter Warnings Found:")
                 for v in violations:
-                    pos = getattr(v['token'], 'start', 'unknown')
-                    print(f"  [{v['rule']}] Line {pos}: {v['message']}")
+                    pos = getattr(v['token'], 'start', '?')
+                    print(f"  [{v['rule']}] {pos}: {v['message']}")
             else:
-                print("  No violations found!")
+                print("  (no violations)")
         except Exception as e:
             print(f"  Parse Error: {type(e).__name__}: {e}")

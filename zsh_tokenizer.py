@@ -36,10 +36,12 @@ TOKEN_TYPES = {
 }
 
 _OP_TOKENS = (
-    "<<<", "<<-", "<<", ">>", ">&", "<&",
+    "<<<", "<<-", "<<", ">>", ">&", "<&", ">|", "&>>", "&>",
     "&&", "||", "==", "!=", ";;", ";|", ";&",
+    "++", "--", "+=", "-=",
     "[[", "]]",
     "=", ";", "(", ")", "{", "}", "|", "[", "]", "<", ">", "!", "&", "$",
+    "+", "-", ":", "^",
 )
 
 _RESERVED = {
@@ -50,6 +52,9 @@ _RESERVED = {
     "local", "typeset", "declare", "export", "readonly",
     "function", "time", "coproc",
 }
+
+# characters that may start or continue an IDENT
+_IDENT_CHARS = "_-./*?~,%@"   # note: comma, percent, at-sign for paths/emails/format strings
 
 
 def tokenize_zsh(source):
@@ -78,6 +83,18 @@ def tokenize_zsh(source):
             line += 1
             col = 0
             i += 1
+            continue
+
+        # line continuation: \<newline> or \<CR><newline>
+        if ch == "\\" and i + 1 < n and source[i + 1] == "\n":
+            i += 2
+            line += 1
+            col = 0
+            continue
+        if ch == "\\" and i + 2 < n and source[i + 1] == "\r" and source[i + 2] == "\n":
+            i += 3
+            line += 1
+            col = 0
             continue
 
         if ch in " \t\r":
@@ -184,9 +201,8 @@ def tokenize_zsh(source):
                 push("VAR_EXP", source[i:j], start)
                 i = j
                 continue
-
             # --- $1, $@, $?, $#, etc. (positional and special) ---
-            if nxt in ("@", "*", "#", "?", "!", "$", "-",
+            if nxt in ("@", "*", "#", "?", "!", "$", "-", "+", "~",
                        "0", "1", "2", "3", "4", "5", "6", "7", "8", "9"):
                 push("VAR_EXP", source[i:i + 2], start)
                 i += 2
@@ -194,6 +210,35 @@ def tokenize_zsh(source):
 
             push("OP", "$", start)
             i += 1
+            continue
+
+        # process substitution: <( ... ) or >( ... )
+        if ch in ("<", ">") and i + 1 < n and source[i + 1] == "(":
+            depth = 1
+            j = i + 2
+            while j < n and depth > 0:
+                if source[j] == "\\" and j + 1 < n:
+                    j += 2
+                    continue
+                if source[j] in ("'", '"'):
+                    q = source[j]
+                    j += 1
+                    while j < n:
+                        if source[j] == "\\" and q == '"' and j + 1 < n:
+                            j += 2
+                            continue
+                        if source[j] == q:
+                            j += 1
+                            break
+                        j += 1
+                    continue
+                if source[j] == "(":
+                    depth += 1
+                elif source[j] == ")":
+                    depth -= 1
+                j += 1
+            push("CMD_SUBST", source[i:j], start)
+            i = j
             continue
 
         if ch in ('"', "'"):
@@ -246,11 +291,39 @@ def tokenize_zsh(source):
             i = m.end()
             continue
 
-        if (ch.isalpha() or ch == "_" or ch in "/*?~"
-                or (ch == "-" and i + 1 < n and (source[i + 1].isalpha() or source[i + 1] == "_"))):
-            j = i + 1
-            while j < n and (source[j].isalnum() or source[j] in "_-./*?~"):
+        # generic escape: \<char> (line continuations already handled above)
+        if ch == "\\" and i + 1 < n:
+            j = i + 2
+            while j < n and (source[j].isalnum() or source[j] in _IDENT_CHARS):
                 j += 1
+            push("IDENT", source[i:j], start)
+            i = j
+            continue
+
+        # negative number: -1, -3.14
+        if ch == "-" and i + 1 < n and source[i + 1].isdigit():
+            j = i + 2
+            while j < n and (source[j].isdigit() or source[j] == "."):
+                j += 1
+            push("NUMBER", source[i:j], start)
+            i = j
+            continue
+
+        # ident start: includes . @ / * ? ~ , % and '-' followed by a word-continuation char
+        if (ch.isalpha() or ch == "_" or ch in "/*?~,%.@"
+                or (ch == "-" and i + 1 < n
+                    and not source[i + 1].isspace()
+                    and source[i + 1] not in ";(){}|[]<>&")):
+            j = i + 1
+            starts_dash = (ch == "-")
+            while j < n:
+                c = source[j]
+                if c.isalnum() or c in _IDENT_CHARS:
+                    j += 1
+                elif starts_dash and c == "=":
+                    j += 1
+                else:
+                    break
             push("IDENT", source[i:j], start)
             i = j
             continue

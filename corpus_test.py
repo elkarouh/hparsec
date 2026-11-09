@@ -5,7 +5,7 @@ import os
 import sys
 import traceback
 
-from zsh_linter3 import lint_zsh_code
+from zsh_linter import lint_zsh_code
 
 
 def run_corpus(directory="corpus", verbose=False):
