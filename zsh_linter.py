@@ -95,9 +95,6 @@ class Terminals(Terminals):
     # keywords in command position, so `end=$second` is a valid assignment.
     assign_name = filt(lambda tok: tok.string.isidentifier(), expect_type_node(TOKEN_TYPES["IDENT"]))
     assign_word = assign_name + ASSIGN + _basic_arg
-    # Keep every argument as a distinct AST node. Its lint method owns
-    # ZSH002/ZSH003, regardless of the grammar construct containing it.
-    argument = as_node(assign_word | _basic_arg)
 
 def _children(node):
     if node is None:
@@ -223,17 +220,25 @@ def _has_wildcard_case(case_node):
 # ============================================================
 
 class ZshStyleGrammar(Grammar):
+    # An argument is a grammar-level AST construct, not a lexical terminal.
+    # Its explicit node boundary gives it one consistent linting entry point
+    # wherever the grammar accepts an argument.
+    argument = as_node(assign_word | Terminals._basic_arg)
+
     script = statement[:]
 
     # and_or comes BEFORE if_stmt/assignment: `x=1 || cmd` and `cond; then`
     # both need and_or to be tried before the assignment fallback.
     statement = (
-        comment | declaration | declaration2
+        # Try logical chains before their individual operands. Otherwise a
+        # declaration such as `local x=1` succeeds as a prefix and leaves &&/||
+        # behind for the top-level statement parser.
+        and_or | redir_command
+        | comment | declaration | declaration2
         | function_def | anon_function | case_stmt
         | if_stmt
         | for_alt | for_stmt | for_positional | foreach_stmt | select_stmt
         | while_stmt | until_stmt | repeat_stmt
-        | and_or
         | subshell | grouping
     ) + STATEMENT_SEP[:]
 
@@ -267,12 +272,15 @@ class ZshStyleGrammar(Grammar):
     )
     
     # FIX 3: Named file descriptor redirections: {fd}</dev/null or {1}>&-
-    # ADDED: named_fd matches `{identifier}` for zsh named file descriptors
+    # A zsh descriptor can be a name or a numeric descriptor: `{myfd}` / `{1}`.
+    # Try the braced form before the optional traditional numeric prefix; the
+    # latter can otherwise succeed empty and prevent the braced form matching.
     named_fd = ignore(lbrace_vis + identifier + rbrace_vis)
-    # UPDATED: redir now accepts either an optional number OR a named_fd
     # Keep the target argument in the AST so argument.lint() can inspect it.
     # Only the descriptor and operator are syntactic details.
-    redir = (ignore(number[0:1]) | named_fd) + ignore(redir_op) + argument
+    redir = (named_fd | ignore(number[0:1])) + ignore(redir_op) + argument
+    # Zsh permits redirection-only commands, e.g. `{myfd}</dev/null`.
+    redir_command = redir[1:]
 
     
     command_head = identifier | colon | backtick | cmd_subst | arith_exp | var_exp | string | number
@@ -294,12 +302,12 @@ class ZshStyleGrammar(Grammar):
     not_command = ignore(literal("!")) + (pipeline | assignment)
 
     inner_statement = (
-        comment | declaration | declaration2
+        and_or | redir_command
+        | comment | declaration | declaration2
         | function_def | anon_function | case_stmt
         | if_stmt
         | for_alt | for_stmt | for_positional | foreach_stmt | select_stmt
         | while_stmt | until_stmt | repeat_stmt
-        | and_or
         | subshell | grouping
     ) + STATEMENT_SEP[:]
 

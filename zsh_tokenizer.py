@@ -284,7 +284,9 @@ def tokenize_zsh(source):
             i = j
             continue
 
-        if source[i:i + 3] == "<<-" or source[i:i + 2] == "<<":
+        # `<<<` is a here-string, not the start of a here-document.
+        # Leave it to the generic longest-match operator scanner below.
+        if source[i:i + 3] != "<<<" and (source[i:i + 3] == "<<-" or source[i:i + 2] == "<<"):
             op_len = 3 if source[i:i + 3] == "<<-" else 2
             j = i + op_len
             while j < n and source[j] in " \t":
