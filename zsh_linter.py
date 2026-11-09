@@ -48,6 +48,8 @@ class Terminals(Terminals):
     AMP_BANG = "&!"
     
     # Visible punctuation (appear in the AST)
+    lbrace_vis = filt(lambda tok: tok.string == "{", shift, name="{")
+    rbrace_vis = filt(lambda tok: tok.string == "}", shift, name="}")    
     lbracket = filt(lambda tok: tok.string == "[", shift, name="[")
     rbracket = filt(lambda tok: tok.string == "]", shift, name="]")
     dlbracket = filt(lambda tok: tok.string == "[[", shift, name="[[")
@@ -264,8 +266,11 @@ class ZshStyleGrammar(Grammar):
     )
     
     # FIX 3: Named file descriptor redirections: {fd}</dev/null or {1}>&-
-    named_fd = LBRACE + (argument_identifier | number) + RBRACE
-    redir = ignore((named_fd | number)[0:1] + redir_op + argument)
+    # ADDED: named_fd matches `{identifier}` for zsh named file descriptors
+    named_fd = ignore(lbrace_vis + identifier + rbrace_vis)
+    # UPDATED: redir now accepts either an optional number OR a named_fd
+    redir = ignore((number[0:1] | named_fd) + redir_op + argument)    
+
     
     command_head = identifier | colon | backtick | cmd_subst | arith_exp | var_exp | string | number
     command = assign_word[:] + command_head + argument[:] + redir[:]
@@ -354,16 +359,17 @@ class ZshStyleGrammar(Grammar):
                    + statement_sep[:] + literal("done"))
 
     # Case pattern: consume tokens until we hit a `)` that is NOT followed by
-    # a glob modifier (`*`, `?`, `[`, or `)`). That distinguishes the pattern-closing
-    # `)` in `(darwin|freebsd)*)` or `(a|b) )` from the `)` inside the group.
+    # a glob modifier (`*`, `?`, `[`). That distinguishes the pattern-closing
+    # `)` in `(darwin|freebsd)*)` from the `)` inside the glob group.
     case_pattern = ((~((rparen_vis + (~glob_suffix)))) + shift)[:] + rparen_vis
     case_body = case_pattern + statement_sep[:] + inner_statement[:] + statement_sep[:]
-    
     # Arms that end with a terminator, then an optional final arm without one
     # (`*) cmd` directly before `esac`). The optional arm must not start at
     # `esac`: a case pattern would otherwise scan through `esac` up to the next
     # `)` in the file. The guard therefore sits after the leading separators.
-    case_arm = case_body + (DSEMI | SEMI_AMP | SEMI_BAR)
+    # NOTE: The guard (~literal("esac")) must be on BOTH case_arm and case_final
+    # to prevent case_arm from greedily consuming `esac` and subsequent code.
+    case_arm = statement_sep[:] + (~literal("esac")) + case_body + (DSEMI | SEMI_AMP | SEMI_BAR)
     case_final = statement_sep[:] + (~literal("esac")) + case_body
     case_stmt = (
         literal("case") + argument + literal("in") + statement_sep[:]
