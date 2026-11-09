@@ -73,14 +73,14 @@ class Terminals(Terminals):
     backtick = expect_type_node(TOKEN_TYPES["BACKTICK"])
     heredoc = expect_type_node(TOKEN_TYPES["HEREDOC"])
     comment = expect_type_node(TOKEN_TYPES["COMMENT"])
-    newline = expect_type_node(TOKEN_TYPES["NEWLINE"])
+    NEWLINE = expect_type_node(TOKEN_TYPES["NEWLINE"])
 
     reserved = _RESERVED
     identifier = filt(lambda tok: tok.string not in reserved, expect_type_node(TOKEN_TYPES["IDENT"]))
     argument_identifier = expect_type_node(TOKEN_TYPES["IDENT"])
 
     argument = backtick | cmd_subst | arith_exp | var_exp | heredoc | string | number | argument_identifier
-    statement_sep = newline | SEMICOL | AMP | AMP_PIPE | AMP_BANG
+    STATEMENT_SEP = NEWLINE | SEMICOL | AMP | AMP_PIPE | AMP_BANG
 
     # Enhance argument with glob qualifiers, subscripts, and inline assignments.
     # A glob qualifier has at least one token; `()` alone is not one (it is an empty
@@ -222,13 +222,13 @@ class ZshStyleGrammar(Grammar):
         | while_stmt | until_stmt | repeat_stmt
         | and_or
         | subshell | grouping
-    ) + statement_sep[:]
+    ) + STATEMENT_SEP[:]
 
     # Array literal is opaque; guard with (~LPAREN) so `((…))` still parses
     # as arith_stmt instead of being eaten as an array.
     # Elements may carry glob qualifiers, e.g. `x=("$v"(Nm-1))`, so a nested
     # `(...)` is consumed as one unit instead of closing the array early.
-    array_literal = LPAREN + (argument | newline)[:] + RPAREN
+    array_literal = LPAREN + (argument | NEWLINE)[:] + RPAREN
     assign_rhs = array_literal | argument
 
     assign_target = assign_name | number   # `0=${...}` and other numeric names
@@ -272,7 +272,7 @@ class ZshStyleGrammar(Grammar):
     pipeline_item = command | grouping | subshell
     
     # Operators may be followed by a line break: `a |\n  b` and `a &&\n  b`.
-    pipeline = as_node(pipeline_item) + (PIPE + newline[:] + as_node(pipeline_item))[:]
+    pipeline = as_node(pipeline_item) + (PIPE + NEWLINE[:] + as_node(pipeline_item))[:]
     
     # `! cmd` — command negation prefix
     # `! x=$(cmd) || ...` negates an assignment as well as a command.
@@ -286,7 +286,7 @@ class ZshStyleGrammar(Grammar):
         | while_stmt | until_stmt | repeat_stmt
         | and_or
         | subshell | grouping
-    ) + statement_sep[:]
+    ) + STATEMENT_SEP[:]
 
     # FIX 2: and_or_item now includes declarations (`local x=1 && cmd` or `typeset x=1 || echo fail`)
     # in addition to not_command (`!`), assignment (`x=1 || cmd`), and the previous items.
@@ -295,74 +295,74 @@ class ZshStyleGrammar(Grammar):
         | not_command | grouping | subshell | assignment | pipeline
         | declaration | declaration2
     )    
-    and_or = as_node(and_or_item) + ((AND_AND | OR_OR) + newline[:] + as_node(and_or_item))[:]
+    and_or = as_node(and_or_item) + ((AND_AND | OR_OR) + NEWLINE[:] + as_node(and_or_item))[:]
 
     # All four control-flow conditions now accept and_or chains:
     #   if [[ -f x ]] && (( i++ )); then ... fi
     #   while cmd1 && ! cmd2; do ... done
     elif_branch = (
-        literal("elif") + and_or + statement_sep[:]
-        + literal("then") + statement_sep[:] + inner_statement[:]
-        + statement_sep[:]
+        literal("elif") + and_or + STATEMENT_SEP[:]
+        + literal("then") + STATEMENT_SEP[:] + inner_statement[:]
+        + STATEMENT_SEP[:]
     )
     else_branch = (
-        literal("else") + statement_sep[:] + inner_statement[:]
-        + statement_sep[:]
+        literal("else") + STATEMENT_SEP[:] + inner_statement[:]
+        + STATEMENT_SEP[:]
     )
 
     if_stmt = (
-        literal("if") + and_or + statement_sep[:]
-        + literal("then") + statement_sep[:] + inner_statement[:]
-        + statement_sep[:]
+        literal("if") + and_or + STATEMENT_SEP[:]
+        + literal("then") + STATEMENT_SEP[:] + inner_statement[:]
+        + STATEMENT_SEP[:]
         + elif_branch[:] + else_branch[0:1]
         + literal("fi")
     )
 
     # FIX 4: Support multiple loop variables: `for a b in ...` and `for a b; do ...`
     # Changed `identifier` to `identifier[1:]` (one or more identifiers).
-    for_alt = (literal("for") + identifier[1:] + LPAREN + argument[:] + RPAREN + statement_sep[:]
-               + literal("do") + statement_sep[:] + inner_statement[:]
-               + statement_sep[:] + literal("done"))
-    for_stmt = (literal("for") + identifier[1:] + literal("in") + argument[:] + statement_sep[:]
-                + literal("do") + statement_sep[:] + inner_statement[:]
-                + statement_sep[:] + literal("done"))
+    for_alt = (literal("for") + identifier[1:] + LPAREN + argument[:] + RPAREN + STATEMENT_SEP[:]
+               + literal("do") + STATEMENT_SEP[:] + inner_statement[:]
+               + STATEMENT_SEP[:] + literal("done"))
+    for_stmt = (literal("for") + identifier[1:] + literal("in") + argument[:] + STATEMENT_SEP[:]
+                + literal("do") + STATEMENT_SEP[:] + inner_statement[:]
+                + STATEMENT_SEP[:] + literal("done"))
     # `for x y; do ...` iterates over the positional parameters (no `in` list).
-    for_positional = (literal("for") + identifier[1:] + statement_sep[:]
-                + literal("do") + statement_sep[:] + inner_statement[:]
-                + statement_sep[:] + literal("done"))
-    foreach_stmt = (literal("foreach") + identifier[1:] + LPAREN + argument[:] + RPAREN + statement_sep[:]
-                    + inner_statement[:] + statement_sep[:] + literal("end"))
-    select_stmt = (literal("select") + identifier + literal("in") + argument[:] + statement_sep[:]
-                   + literal("do") + statement_sep[:] + inner_statement[:]
-                   + statement_sep[:] + literal("done"))
+    for_positional = (literal("for") + identifier[1:] + STATEMENT_SEP[:]
+                + literal("do") + STATEMENT_SEP[:] + inner_statement[:]
+                + STATEMENT_SEP[:] + literal("done"))
+    foreach_stmt = (literal("foreach") + identifier[1:] + LPAREN + argument[:] + RPAREN + STATEMENT_SEP[:]
+                    + inner_statement[:] + STATEMENT_SEP[:] + literal("end"))
+    select_stmt = (literal("select") + identifier + literal("in") + argument[:] + STATEMENT_SEP[:]
+                   + literal("do") + STATEMENT_SEP[:] + inner_statement[:]
+                   + STATEMENT_SEP[:] + literal("done"))
 
-    while_stmt = (literal("while") + and_or + statement_sep[:]
-                  + literal("do") + statement_sep[:] + inner_statement[:]
-                  + statement_sep[:] + literal("done"))
-    until_stmt = (literal("until") + and_or + statement_sep[:]
-                  + literal("do") + statement_sep[:] + inner_statement[:]
-                  + statement_sep[:] + literal("done"))
-    repeat_stmt = (literal("repeat") + argument + statement_sep[:]
-                   + literal("do") + statement_sep[:] + inner_statement[:]
-                   + statement_sep[:] + literal("done"))
+    while_stmt = (literal("while") + and_or + STATEMENT_SEP[:]
+                  + literal("do") + STATEMENT_SEP[:] + inner_statement[:]
+                  + STATEMENT_SEP[:] + literal("done"))
+    until_stmt = (literal("until") + and_or + STATEMENT_SEP[:]
+                  + literal("do") + STATEMENT_SEP[:] + inner_statement[:]
+                  + STATEMENT_SEP[:] + literal("done"))
+    repeat_stmt = (literal("repeat") + argument + STATEMENT_SEP[:]
+                   + literal("do") + STATEMENT_SEP[:] + inner_statement[:]
+                   + STATEMENT_SEP[:] + literal("done"))
 
     # Case pattern: consume tokens until we hit a `)` that is NOT followed by
     # a glob modifier (`*`, `?`, `[`). That distinguishes the pattern-closing
     # `)` in `(darwin|freebsd)*)` from the `)` inside the glob group.
     case_pattern = ((~((rparen_vis + (~glob_suffix)))) + shift)[:] + rparen_vis
-    case_body = case_pattern + statement_sep[:] + inner_statement[:] + statement_sep[:]
+    case_body = case_pattern + STATEMENT_SEP[:] + inner_statement[:] + STATEMENT_SEP[:]
     # Arms that end with a terminator, then an optional final arm without one
     # (`*) cmd` directly before `esac`). The optional arm must not start at
     # `esac`: a case pattern would otherwise scan through `esac` up to the next
     # `)` in the file. The guard therefore sits after the leading separators.
     # NOTE: The guard (~literal("esac")) must be on BOTH case_arm and case_final
     # to prevent case_arm from greedily consuming `esac` and subsequent code.
-    case_arm = statement_sep[:] + (~literal("esac")) + case_body + (DSEMI | SEMI_AMP | SEMI_BAR)
-    case_final = statement_sep[:] + (~literal("esac")) + case_body
+    case_arm = STATEMENT_SEP[:] + (~literal("esac")) + case_body + (DSEMI | SEMI_AMP | SEMI_BAR)
+    case_final = STATEMENT_SEP[:] + (~literal("esac")) + case_body
     case_stmt = (
-        literal("case") + argument + literal("in") + statement_sep[:]
+        literal("case") + argument + literal("in") + STATEMENT_SEP[:]
         + case_arm[:] + case_final[0:1]
-        + statement_sep[:] + literal("esac")
+        + STATEMENT_SEP[:] + literal("esac")
     )
 
     # Function names may be dynamic: `_widget_${name}() { ... }`.
@@ -370,18 +370,18 @@ class ZshStyleGrammar(Grammar):
     function_def = (
         (func_name + LPAREN + RPAREN)
         | (literal("function") + func_name + (LPAREN + RPAREN)[0:1])
-    ) + statement_sep[:] + LBRACE + statement_sep[:] + inner_statement[:] + statement_sep[:] + RBRACE
+    ) + STATEMENT_SEP[:] + LBRACE + STATEMENT_SEP[:] + inner_statement[:] + STATEMENT_SEP[:] + RBRACE
 
     # Anonymous function: `() { body }` — zsh-specific, defined and called
     # immediately. Must appear BEFORE subshell in the choice lists because
     # `()` alone is also a valid (empty) subshell.
     anon_function = (
         LPAREN + RPAREN
-        + LBRACE + statement_sep[:] + inner_statement[:] + statement_sep[:] + RBRACE
+        + LBRACE + STATEMENT_SEP[:] + inner_statement[:] + STATEMENT_SEP[:] + RBRACE
     )
 
-    subshell = LPAREN + statement_sep[:] + inner_statement[:] + statement_sep[:] + RPAREN
-    grouping = LBRACE + statement_sep[:] + inner_statement[:] + statement_sep[:] + RBRACE
+    subshell = LPAREN + STATEMENT_SEP[:] + inner_statement[:] + STATEMENT_SEP[:] + RPAREN
+    grouping = LBRACE + STATEMENT_SEP[:] + inner_statement[:] + STATEMENT_SEP[:] + RBRACE
 
     # ---------- Lint methods ----------
     class __default__:
