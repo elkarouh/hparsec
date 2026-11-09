@@ -131,10 +131,6 @@ class Terminals(Terminals):
 # ============================================================
 
 class ZshStyleGrammar(Grammar):
-    # An argument is a grammar-level AST construct, not a lexical terminal.
-    # Its explicit node boundary gives it one consistent linting entry point
-    # wherever the grammar accepts an argument.
-    argument = as_node(assign_word | Terminals._basic_arg)
 
     script = statement[:]
 
@@ -152,6 +148,11 @@ class ZshStyleGrammar(Grammar):
         | while_stmt | until_stmt | repeat_stmt
         | subshell | grouping
     ) + STATEMENT_SEP[:]
+
+    # An argument is a grammar-level AST construct, not a lexical terminal.
+    # Its explicit node boundary gives it one consistent linting entry point
+    # wherever the grammar accepts an argument.
+    argument = as_node(assign_word | Terminals._basic_arg)
 
     # Array literal is opaque; guard with (~LPAREN) so `((…))` still parses
     # as arith_stmt instead of being eaten as an array.
