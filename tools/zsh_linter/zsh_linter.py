@@ -111,7 +111,7 @@ class ZshTerminals(Terminals):
         expect_type_node(TOKEN_TYPES["IDENT"]),
         name="-flag",
     # A numeric argument may follow a flag: `typeset -F 2 SECONDS`, `typeset -i 3 X`.
-    ) + ignore(expect_type_node(TOKEN_TYPES["ARITH_EXP"]) | expect_type_node(TOKEN_TYPES["NUMBER"]))[0:1]
+    ) + (expect_type_node(TOKEN_TYPES["ARITH_EXP"]) | expect_type_node(TOKEN_TYPES["NUMBER"]))[0:1]
 
     number = expect_type_node(TOKEN_TYPES["NUMBER"])
     string = expect_type_node(TOKEN_TYPES["STRING"])
@@ -127,7 +127,10 @@ class ZshTerminals(Terminals):
     identifier = filt(lambda tok: tok.string not in reserved, expect_type_node(TOKEN_TYPES["IDENT"]))
     argument_identifier = expect_type_node(TOKEN_TYPES["IDENT"])
 
-    STATEMENT_SEP = NEWLINE | SEMICOL | amp | amp_pipe | amp_bang
+    STATEMENT_SEP = NEWLINE | SEMICOL
+    # `cmd &` runs in the background; `&|` and `&!` also disown the job. They end a
+    # statement like a separator, but they are kept in the tree.
+    background = amp | amp_pipe | amp_bang
 
     # Enhance argument with glob qualifiers, subscripts, and inline assignments.
     # A glob qualifier has at least one token; `()` alone is not one (it is an empty
@@ -349,7 +352,7 @@ class ZshStyleGrammar(Grammar):
         | for_arith | for_alt | for_stmt | for_positional | foreach_stmt | select_stmt
         | while_stmt | until_stmt | repeat_stmt
         | subshell | grouping
-    ) + STATEMENT_SEP[:]
+    ) + background[0:1] + STATEMENT_SEP[:]
 
     # An argument is a grammar-level AST construct, not a lexical terminal.
     # Its explicit node boundary gives it one consistent linting entry point
@@ -486,7 +489,7 @@ class ZshStyleGrammar(Grammar):
         | for_arith | for_alt | for_stmt | for_positional | foreach_stmt | select_stmt
         | while_stmt | until_stmt | repeat_stmt
         | subshell | grouping
-    ) + STATEMENT_SEP[:]
+    ) + background[0:1] + STATEMENT_SEP[:]
 
     # FIX 2: and_or_item now includes declarations (`local x=1 && cmd` or `typeset x=1 || echo fail`)
     # in addition to not_command (`!`), assignment (`x=1 || cmd`), and the previous items.
@@ -2105,6 +2108,9 @@ def _run_self_tests():
         # Unsafe forms are reported but left as they are.
         for _code, _bad in (("ZSH004", "[ $x = a ]\n"), ("ZSH004", "[ -f a -a -f b ]\n"), ("ZSH010", "test a* = b\n")):
             assert _code in [i["rule"] for i in lint_zsh_code(format_zsh_code(_bad, fix=True))], f"{_code} fixed unsafely"
+        # Formatting keeps what the script does: background jobs and a flag's number.
+        _kept = "sleep 1 &\nwl-copy &>/dev/null &|\nfoo &!\ntypeset -F 2 SECONDS\ntypeset -L$(( N * 2 )) X\n"
+        assert format_zsh_code(_kept) == _kept, format_zsh_code(_kept)
         print("Fixes OK")
         print("Style rules OK")
 
