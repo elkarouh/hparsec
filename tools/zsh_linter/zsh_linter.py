@@ -724,6 +724,7 @@ def _run_self_tests():
             ("= inside assignment value", "PP=dumpfile=${DMP_FILE}\n"),
             ("time prefixes a pipeline", "time ./job.ksh args | tee\n"),
             ("comment on function header line", "function f # $1 user\n{\n  echo\n}\n"),
+            ("heredoc with punctuation delimiter", "sqlplus -s / <<!eof\nselect 1;\n!eof\n"),
             ("assignment value then argument", "x=a b\n"),
             ("for-alt", "for f (*.txt) do\n  echo $f\ndone\n"),
             ("select", "select opt in a b c; do\n  echo $opt\ndone\n"),

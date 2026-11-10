@@ -297,7 +297,8 @@ def tokenize_zsh(source):
                 q = source[j]
                 j += 1
             k = j
-            while k < n and (source[k].isalnum() or source[k] == "_"):
+            # Any word characters may make up the delimiter: `<<!eof` is delimited by `!eof`.
+            while k < n and source[k] not in " \t\r\n;|&<>()'\"":
                 k += 1
             delim = source[j:k]
             if not delim:
