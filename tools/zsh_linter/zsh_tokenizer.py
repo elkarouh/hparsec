@@ -199,8 +199,10 @@ def tokenize_zsh(source):
             continue
 
         if (ch == "#" and tokens and tokens[-1].end == start
-                and (tokens[-1].type != TOKEN_TYPES["OP"] or tokens[-1].string in ("}", "]", "]]"))):
+                and (tokens[-1].type != TOKEN_TYPES["OP"]
+                     or tokens[-1].string in ("}", "]", "]]", "="))):
             # A # inside a word is literal in zsh: `${NAME#*.}` after an unquoted part.
+            # `x=#a` is an assignment whose value starts with #, so it is literal too.
             # After a metacharacter such as `;` it still starts a comment: `x=1;# note`.
             push("IDENT", "#", start)
             i += 1
