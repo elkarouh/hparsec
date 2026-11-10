@@ -436,7 +436,8 @@ class ZshStyleGrammar(Grammar):
     # `)` in the file. The guard therefore sits after the leading separators.
     # NOTE: The guard (~literal("esac")) must be on BOTH case_arm and case_final
     # to prevent case_arm from greedily consuming `esac` and subsequent code.
-    case_arm = STATEMENT_SEP[:] + (~literal("esac")) + case_body + (DSEMI | SEMI_AMP | SEMI_BAR)
+    # A comment may follow the terminator: `;; # Invalid option`.
+    case_arm = STATEMENT_SEP[:] + (~literal("esac")) + case_body + (DSEMI | SEMI_AMP | SEMI_BAR) + comment[0:1]
     case_final = STATEMENT_SEP[:] + (~literal("esac")) + case_body
     case_stmt = (
         literal("case") + argument + literal("in") + STATEMENT_SEP[:]
