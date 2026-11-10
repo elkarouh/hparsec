@@ -105,7 +105,9 @@ class ZshTerminals(Terminals):
                   | number | glob_qual | subscript | argument_identifier | expect_type_node(TOKEN_TYPES["ASSIGN_EMPTY"])
                   # Bare pattern characters are word parts in zsh: `fd -tx remove$ dir`,
                   # `grep -v ^N_`, `grep .+%U.+`. Ignored so they are not mistaken for expansions.
-                  | ignore(filt(lambda tok: tok.string in ("$", "^", "+"), expect_type_node(TOKEN_TYPES["OP"]))))
+                  | ignore(filt(lambda tok: tok.string in ("$", "^", "+"), expect_type_node(TOKEN_TYPES["OP"])))
+                  # `test "x$a" != x`: comparison operators are plain words to test(1).
+                  | ignore(filt(lambda tok: tok.string in ("!=", "=="), expect_type_node(TOKEN_TYPES["OP"]))))
     # assign_word matches `name=value` as a single argument (needed for
     # `alias ls='...'`, `export FOO=bar` inline, etc.)
     # Assignment names are plain identifiers; reserved words such as `end` are only
@@ -749,6 +751,7 @@ def _run_self_tests():
             ("comment before do in while", "while [[ $c -lt 3 ]]  # limit\ndo\n  echo\ndone\n"),
             ("double bracket as argument", "eval [[ -n $x ]]\n"),
             ("quoted alias name", "alias -g 'x'='y'\n"),
+            ("comparison word in test argument", "test \"x$a\" != x\n"),
             ("assignment value then argument", "x=a b\n"),
             ("for-alt", "for f (*.txt) do\n  echo $f\ndone\n"),
             ("select", "select opt in a b c; do\n  echo $opt\ndone\n"),
