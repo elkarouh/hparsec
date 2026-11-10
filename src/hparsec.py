@@ -15,7 +15,7 @@ Each parser's parse() method returns (ast, token_stream) on success, or False
 on failure. Use the @method decorator to add output methods (e.g. to_py) to
 parser classes.
 
-Quick example (the token names and Input() come from ady_helpers/ada_tokens.py):
+Quick example (the token names and Input() come from ady_helpers/ady_tokens.py):
     keyvalue = IDENTIFIER + EQUAL + NUMBER + SEMICOLON
     keyvalues = keyvalue[1:]
 

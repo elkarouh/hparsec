@@ -16,7 +16,7 @@ hparsec/
 ├── src/                      # the library (standard library only)
 │   └── hparsec.py            # core combinators and parse machinery
 ├── ady_helpers/              # AdaScript support, kept apart from the library
-│   ├── ada_tokens.py         # Input() and the AdaScript token names, with their self-tests
+│   ├── ady_tokens.py         # Input() and the AdaScript token names, with their self-tests
 │   ├── ady_tokenizer.py      # Python-tokenize based Tokenizer used by Input()
 │   └── hek_helpers.py        # helpers shared by translator backends
 ├── examples/
@@ -42,7 +42,7 @@ hparsec/
 | Module | Purpose |
 |------|---------|
 | `hparsec` | Core combinators: `Parser`, `ParserState`, `SymbolTable`, `Grammar`, `Terminals`, `forward`/`fw`, `method`, `filt`, `fmap`, `ignore`, `expect`, `literal`, … |
-| `ada_tokens` (in `ady_helpers/`) | `Input()` and the AdaScript token names (`IDENTIFIER`, `NUMBER`, `SEMICOLON`, …); hparsec does not import this module |
+| `ady_tokens` (in `ady_helpers/`) | `Input()` and the AdaScript token names (`IDENTIFIER`, `NUMBER`, `SEMICOLON`, …); hparsec does not import this module |
 | `ady_tokenizer` (in `ady_helpers/`) | `Tokenizer` — wraps Python's `tokenize` module; handles tick-attributes, range operators, bash-isms, f-string interpolation, `RichNL` comment bundling |
 | `hek_helpers` (in `ady_helpers/`) | Shared helpers: indentation (`_ind`), `RichNL` extraction, block statement utilities |
 
@@ -101,7 +101,7 @@ no install is needed to run them.
 
 ```python
 from hparsec import ParserState, method, forward
-from ada_tokens import Input, IDENTIFIER, EQUAL, NUMBER, SEMICOLON
+from ady_tokens import Input, IDENTIFIER, EQUAL, NUMBER, SEMICOLON
 
 # Grammar
 keyvalue  = IDENTIFIER + EQUAL + NUMBER + SEMICOLON
