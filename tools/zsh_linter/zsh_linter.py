@@ -24,6 +24,7 @@ from hparsec import (
     walk,
 )
 from zsh_tokenizer import tokenize_zsh, TOKEN_TYPES, _RESERVED
+from style_rules import style_issues
 
 # Auto-fixes applied by `--fix` before formatting, in this order. Each entry is
 # (rule code, fix function name). A fix must not change what the script does, and
@@ -173,7 +174,7 @@ def _expansion_issues(node, backticks_only=False):
 
             if value.startswith("`") and value.endswith("`"):
                 rule = "ZSH003"
-                message = "Prefer modern '$(...)' over legacy backticks."
+                message = "Use $( ) instead of backticks; backticks are hard to read and cannot be nested."
 
             elif (
                 value.startswith("$(")
@@ -801,8 +802,8 @@ class ZshStyleGrammar(Grammar):
             issues = [{
                 "rule": "ZSH004",
                 "message": (
-                    "Prefer enhanced '[[ ... ]]' over legacy POSIX "
-                    "'[ ... ]' test construct in zsh."
+                    "Use [[ ... ]] instead of [ ... ] in a test; "
+                    "[[ ]] is the enhanced test construct."
                 ),
                 "token": token_of(self.nodes[0]),
             }]
@@ -819,7 +820,7 @@ class ZshStyleGrammar(Grammar):
                 if getattr(tok, "string", None) == "<<<":
                     issues.append({
                         "rule": "ZSH008",
-                        "message": "Here-string '<<<' used; consider a pipe or a file.",
+                        "message": "Do not use the here-string '<<<'; use a pipe or a here-document.",
                         "token": tok,
                     })
                 elif hasattr(c, "lint"):
@@ -1425,12 +1426,18 @@ _PLAIN_NAME = re.compile(r"^\$[A-Za-z_][A-Za-z0-9_]*$")
 _STRING_NAME = re.compile(r"(?<!\\)\$([A-Za-z_][A-Za-z0-9_]*)(?![A-Za-z0-9_\[])")
 
 
+# Names that OML/OBM reads as literals, so they must stay bare: $OPC_USER, not ${OPC_USER}.
+# The ksh style check ZSH049 reports the braced form.
+UNBRACED_NAMES = frozenset({"OPC_SERVICE_NAME", "OPC_USER"})
+
+
 def _bare_spans(tokens):
     """(token, start, end, name) for each bare name that should be written ${name}.
 
     start and end are offsets inside token.string. A bare $name token is the whole
     token; inside a double-quoted string each match is found with a regex. $1-style
-    positionals, special parameters and a name followed by a subscript are skipped.
+    positionals, special parameters, a name followed by a subscript and the names in
+    UNBRACED_NAMES are skipped.
     """
     spans = []
     for i, tok in enumerate(tokens):
@@ -1438,9 +1445,13 @@ def _bare_spans(tokens):
             nxt = tokens[i + 1] if i + 1 < len(tokens) else None
             if nxt is not None and nxt.glued and nxt.string.startswith("["):
                 continue
+            if tok.string[1:] in UNBRACED_NAMES:
+                continue
             spans.append((tok, 0, len(tok.string), tok.string[1:]))
         elif tok.type == TOKEN_TYPES["STRING"] and tok.string.startswith('"'):
             for m in _STRING_NAME.finditer(tok.string):
+                if m.group(1) in UNBRACED_NAMES:
+                    continue
                 spans.append((tok, m.start(), m.end(), m.group(1)))
     return spans
 
@@ -1509,7 +1520,7 @@ def lint_zsh_code(source):
         tok = stream.tokens[index]
         raise SyntaxError(f"Unexpected token {tok.string!r} at position {tok.start}")
 
-    return ast.lint() + _bare_variable_issues(tokens)
+    return ast.lint() + _bare_variable_issues(tokens) + style_issues(source)
 
 
 # ============================================================
@@ -1700,6 +1711,49 @@ def _run_self_tests():
             ("Multiple for vars positional", 'for x y; do echo $x $y; done\n'),
             ("Case parenthesized group", 'case "$OSTYPE" in\n  (darwin|freebsd)*)\n    echo b\n    ;;\n  *)\n    echo c\n    ;;\nesac\n'),
     ]
+
+        # Line-level style rules (style_rules.py): each one fires on its example and not on the fix.
+        from style_rules import style_issues as _style
+        _style_cases = [
+            ("ZSH010", "if test -f x; then\n  :\nfi\n", "if [[ -f x ]]; then\n  :\nfi\n"),
+            ("ZSH011", '[[ $a == "" ]]\n', "[[ -z $a ]]\n"),
+            ("ZSH013", "[[ ! $x -eq 1 ]]\n", "[[ $x -ne 1 ]]\n"),
+            ("ZSH016", "echo ${MY VAR}\n", "echo ${MY_VAR}\n"),
+            ("ZSH017", "[[ $x < 3 ]]\n", "[[ $x -lt 3 ]]\n"),
+            ("ZSH018", "typeset -i N=\n", "typeset -i N=0\n"),
+            ("ZSH019", "echo a >>& f\n", "echo a >& f\n"),
+            ("ZSH020", "wc | awk '{print $1}'\n", "wc -l f\n"),
+            ("ZSH021", "echo a  \n", "echo a\n"),
+            ("ZSH022", "echo ${1}\n", "echo $1\n"),
+            ("ZSH023", "echo $*\n", "echo $@\n"),
+            ("ZSH029", "echo ${NF}\n", "echo ${x}\n"),
+            ("ZSH030", "cmd | tee f 2>&1\n", "cmd 2>&1 | tee f\n"),
+            ("ZSH031", "${X}=1\n", "X=1\n"),
+            ("ZSH032", "[[ -n $a ]] && [[ -n $b ]]\n", "[[ -n $a && -n $b ]]\n"),
+            ("ZSH033", "f ()\n{\n:\n}\n", "function f\n{\n:\n}\n"),
+            ("ZSH034", "x=/a.$(cm_where)\n", "x=/a!$(cm_where)\n"),
+            ("ZSH035", "cmd 2>&1 >f\n", "cmd >f 2>&1\n"),
+            ("ZSH036", "Log msg >&2\n", "Log msg\n"),
+            ("ZSH037", 'Log "ERROR x"\n', 'Log -i "x"\n'),
+            ("ZSH038", "echo y/n\n", "confirm\n"),
+            ("ZSH040", 'Log "done "\n', 'Log "done"\n'),
+            ("ZSH041", "alias_get X Value\n", "alias_get -q X\n"),
+            ("ZSH042", "cd -\n", 'cd "${OLDPWD}"\n'),
+            ("ZSH043", "tr a-z A-Z\n", 'tr "a-z" "A-Z"\n'),
+            ("ZSH044", "echo\ta\n", "echo a\n"),
+            ("ZSH045", "cfmu_ftps_list SVC *.txt\n", 'cfmu_ftps_list SVC "*.txt"\n'),
+            ("ZSH046", "bmw VAR | awk '{print $2}'\n", "bmw -V VAR\n"),
+            ("ZSH047", "x=$VAR.LATEST\n", "x=$VAR.LATEST_GOOD\n"),
+            ("ZSH048", "echo $CFMU_OS\n", "echo $OSTYPE\n"),
+        ]
+        _style_cases.append(("ZSH050", "[[ a = b ]]\n", "[[ $a = b ]]\n"))
+        _style_cases.append(("ZSH051", "if [[ -n $a && x ]]; then :; fi\n", "if [[ -n $a && -n $x ]]; then :; fi\n"))
+        _style_cases.append(("ZSH049", "echo ${OPC_USER}\n", "echo $OPC_USER\n"))
+        for _code, _bad, _good in _style_cases:
+            assert any(i["rule"] == _code for i in _style(_bad)), f"{_code} not reported"
+            assert not any(i["rule"] == _code for i in _style(_good)), f"{_code} reported on the fix"
+        assert not any(i["rule"] == "ZSH009" for i in lint_zsh_code("echo $OPC_USER\n")), "OPC_USER still braced"
+        print("Style rules OK")
 
         print("\n--- Path X tests ---")
         for name, code in test_scripts:
