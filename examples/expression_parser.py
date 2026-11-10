@@ -86,18 +86,17 @@ def tokenize(source):
 # 2. Terminals
 # ============================================================
 
-number = expect_type(TOKEN_TYPES["NUMBER"])
-string = expect_type(TOKEN_TYPES["STRING"])
-boolean = literal("true") | literal("false")
-
 reserved = {"and", "or", "not", "mod", "true", "false"}
 
-identifier = filt(
-    lambda value: value not in reserved,
-    expect_type(TOKEN_TYPES["IDENT"]),
-)
-
 class ExpressionTerminals(Terminals):
+    number = expect_type(TOKEN_TYPES["NUMBER"])
+    string = expect_type(TOKEN_TYPES["STRING"])
+    boolean = literal("true") | literal("false")
+    identifier = filt(
+        lambda value: value not in reserved,
+        expect_type(TOKEN_TYPES["IDENT"]),
+    )
+
     # Ignored operators & delimiters (UPPERCASE = automatically ignored)
     EQ         = "="
     NE         = "/="
