@@ -5,8 +5,8 @@ comments blanked out. Comments are found with the tokenizer, so line and column 
 still match the original file. Findings use the same issue shape as the AST rules, so
 zsh_linter.main() prints them the same way.
 
-Rules that duplicate an existing rule (ksh [ ] and <<< and backticks) or that conflict
-with an auto-fix (ZSH009 braces for variables) are not here. Rules that need data
+Rules that duplicate an existing rule (ksh [ ] and <<< and backticks) are not here. The OPC
+names are exempt from ZSH009 and its auto-fix; ZSH049 checks their braces instead. Rules that need data
 flow across lines (variables assigned before use, return codes) are not here either.
 """
 
@@ -57,6 +57,13 @@ def _trailing_blank(lines, source):
     # Uses the original text: a blank before a comment is still a trailing blank.
     return [("ZSH021", "Remove the trailing blank(s).", n, len(t.rstrip(" \t")))
             for n, t in enumerate(source.split("\n"), 1) if t != t.rstrip(" \t")]
+
+
+def _opc_braces(lines, source):
+    return [("ZSH049", "Write $OPC_USER and $OPC_SERVICE_NAME without braces; OML/OBM reads them literally.",
+             n, m.start())
+            for n, t in enumerate(lines, 1)
+            for m in re.finditer(r"\$\{OPC_(SERVICE_NAME|USER)(?![A-Za-z0-9_])", t)]
 
 
 def _tab_char(lines, source):
@@ -174,6 +181,7 @@ RULES = (
     _regex_rule("ZSH041", r"alias_get.*Value", "Use alias_get -q."),
     _regex_rule("ZSH047", r"\.LATEST(?!_)", "Use .LATEST_GOOD instead of .LATEST."),
     _tab_char,
+    _opc_braces,
     _regex_rule("ZSH048", r"CFMU_OS", "CFMU_OS is probably obsolete."),
 )
 

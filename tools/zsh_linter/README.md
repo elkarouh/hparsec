@@ -55,9 +55,9 @@ script with comments blanked out, and report with the same `file:line:col: RULE 
 | ZSH046 | `bmw VAR \| awk`; use `bmw -V VAR` |
 | ZSH047 | `.LATEST` alias; use `.LATEST_GOOD` |
 | ZSH048 | `CFMU_OS` |
+| ZSH049 | `${OPC_USER}` or `${OPC_SERVICE_NAME}`; write them without braces |
 
 These rules are line-based, so they can report a pattern inside a string or a multi-line construct. ZSH017
-also reports `==` and `!=` against a number, which is a string test in zsh. Rule numbers skip the ones
-that are not implemented: ZSH009 already covers `$name` without braces, so the ksh rule for
-`$OPC_USER` (braces are forbidden) is not implemented. The variable-flow and return-code checks are
-not implemented either.
+also reports `==` and `!=` against a number, which is a string test in zsh. `OPC_USER` and `OPC_SERVICE_NAME` are exempt from ZSH009 and its `--fix`, because OML/OBM reads them
+as literals. ZSH049 reports their braced form instead. The variable-flow and return-code checks are
+not implemented.

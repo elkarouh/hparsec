@@ -1426,12 +1426,18 @@ _PLAIN_NAME = re.compile(r"^\$[A-Za-z_][A-Za-z0-9_]*$")
 _STRING_NAME = re.compile(r"(?<!\\)\$([A-Za-z_][A-Za-z0-9_]*)(?![A-Za-z0-9_\[])")
 
 
+# Names that OML/OBM reads as literals, so they must stay bare: $OPC_USER, not ${OPC_USER}.
+# The ksh style check ZSH049 reports the braced form.
+UNBRACED_NAMES = frozenset({"OPC_SERVICE_NAME", "OPC_USER"})
+
+
 def _bare_spans(tokens):
     """(token, start, end, name) for each bare name that should be written ${name}.
 
     start and end are offsets inside token.string. A bare $name token is the whole
     token; inside a double-quoted string each match is found with a regex. $1-style
-    positionals, special parameters and a name followed by a subscript are skipped.
+    positionals, special parameters, a name followed by a subscript and the names in
+    UNBRACED_NAMES are skipped.
     """
     spans = []
     for i, tok in enumerate(tokens):
@@ -1439,9 +1445,13 @@ def _bare_spans(tokens):
             nxt = tokens[i + 1] if i + 1 < len(tokens) else None
             if nxt is not None and nxt.glued and nxt.string.startswith("["):
                 continue
+            if tok.string[1:] in UNBRACED_NAMES:
+                continue
             spans.append((tok, 0, len(tok.string), tok.string[1:]))
         elif tok.type == TOKEN_TYPES["STRING"] and tok.string.startswith('"'):
             for m in _STRING_NAME.finditer(tok.string):
+                if m.group(1) in UNBRACED_NAMES:
+                    continue
                 spans.append((tok, m.start(), m.end(), m.group(1)))
     return spans
 
@@ -1736,9 +1746,11 @@ def _run_self_tests():
             ("ZSH047", "x=$VAR.LATEST\n", "x=$VAR.LATEST_GOOD\n"),
             ("ZSH048", "echo $CFMU_OS\n", "echo $OSTYPE\n"),
         ]
+        _style_cases.append(("ZSH049", "echo ${OPC_USER}\n", "echo $OPC_USER\n"))
         for _code, _bad, _good in _style_cases:
             assert any(i["rule"] == _code for i in _style(_bad)), f"{_code} not reported"
             assert not any(i["rule"] == _code for i in _style(_good)), f"{_code} reported on the fix"
+        assert not any(i["rule"] == "ZSH009" for i in lint_zsh_code("echo $OPC_USER\n")), "OPC_USER still braced"
         print("Style rules OK")
 
         print("\n--- Path X tests ---")
