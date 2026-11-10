@@ -357,3 +357,146 @@ These are not style rules. They matter if the script is reused or ported to a pa
 - It exits 1 when anything matches, and the script's comment asks whether it should. Given the expected false
   positives, a non-zero exit is awkward in CI unless there is a way to suppress a finding.
 - The output step `sed "s#${TMP}#${ORIG_FILE}#"` breaks if either path contains `#`.
+
+---
+
+# Second checker: undefined and unused variables
+
+A second awk-based checker reads one ksh file and reports three things: variables that are used but never assigned,
+variables that are assigned but never used, and assignments to ksh or environment-owned read-only variables. Its
+header states its own limits. It parses lines with awk regular expressions and does no real ksh parsing, and it does
+not check order, so a variable assigned after its first use is accepted. Comment stripping uses the same `sed` approach as
+the first checker.
+
+The rules below are the ones it encodes. They are grouped by theme like the first list. Rules 16 to 19 are the
+assignment and use rules, and rules 20 to 22 are read-only and exemption rules.
+
+## Assignment and use
+
+### 16. Assign a variable before using it
+
+```awk
+END { for (val in var_used) if (!generic_var_assigned[val] && !var_assigned[val] && !ENVIRON[val] && !ksh_var_ro[val]) ... }
+```
+
+A variable counts as used when it appears as `$VAR`, `${VAR}`, or `${VAR#...}`, `${VAR%...}`, `${VAR:...}`, `${VAR/...}`
+with a substitution. It counts as assigned when any assignment form in rule 18 appears anywhere in the file, or it is
+in the environment at check time, or it is in the generic exemption list in rule 20.
+
+**Rationale.** The script's header says the check "does not know whether the definition happens before the first usage",
+so the rule is only that the variable is defined somewhere. The message for this check prints "seem to be used not defined".
+
+**False positives.** The script's own message lists two: the variable is set in a file that is sourced, or in a caller that
+exported it. Any variable that comes from the CFMU environment and is not in the exemption list is reported too.
+
+### 17. Use every variable you assign
+
+```awk
+for (val in var_assigned) if (!var_used[val]) ...
+```
+
+**Rationale.** A variable that is assigned and never read is likely dead code. The script's comment notes it may be
+exported for another script, so the report says "There can be false positive, so this shall be double checked".
+
+**Pattern issues.** `export` names are not treated differently from other names. The script's own comment asks for
+a separate check for exported variables and says `export A B C` can declare several names, which is not handled.
+
+### 18. Use an assignment form the script recognises
+
+The script records a variable as assigned for each of these forms:
+
+| Form | Example | Notes |
+|---|---|---|
+| Start of line | `A=1` (leading blanks allowed) | |
+| Export at start of line | `export A=1` | |
+| Inline after a space, `;` or `(` | `A=1 B=2`, `{ A=toot; }` | The first occurrence on each line only. |
+| For loop | `for X in ...` | |
+| Read | `read X Y` | Only when `read` has no option argument. |
+| Eval of a dbt query | `eval $(myquery.info.query X Y)` | `-prefix` is taken into account. |
+| Eval of get_parameter_value | `eval $(get_parameter_value X Y)` | |
+| Select | `select X in ...` | Also sets `REPLY`. |
+| getopts | `getopts "a:" OPT` | Also sets `OPTARG` and `OPTIND`. |
+| Array set | `set -A ARR` | Only `set -A` and `set -a` are matched in the code, not `typeset -A`. |
+| Array element | `A[i]=1` | |
+
+**Pattern issues.**
+- **Only one inline assignment per match.** The inline pattern uses `match`, which finds one occurrence per line, so
+  `A=1; B=2; C=3` only records one of `B` and `C`. The comment says it handles `A=AA B=XX`, which works because the
+  first assignment is found by the start-of-line pattern.
+- **`read` with an option argument is missed.** `read -p "Name: " NAME` does not match, because the `read` pattern expects a
+  lowercase option followed by a name. `NAME` is then not recorded, and any use of it is reported as not defined.
+- **`typeset -A` and `typeset -a` are not matched.** Only `set -A` and `set -a` are, although the comment lists `typeset`.
+- **`$(...)` and `${...}` in the assignment are matched by the start-of-line pattern.** For example `X=$(cmd)` records `X`,
+  which is correct, but a `=` inside a `[[ ... ]]` test with no spaces, such as `[[ a=b ]]`, is recorded as `a`.
+
+### 19. Read a variable with `${VAR}` when it is followed by a subscript-like operator
+
+The script counts as a use these forms: `$VAR` followed by a non-name character or the end of the line, `${VAR}`, and
+`${VAR` followed by `#`, `%`, `:` or `/` and a closing `}`.
+
+**Pattern issues.** These uses are missed, so the variable is reported as assigned and not used (rule 17) or never seen as used.
+- `${#VAR}` (length). The `#` comes right after `{`, so the pattern does not match.
+- `${VAR-default}`, `${VAR+x}`, `${VAR=x}`, `${VAR?msg}`, `${VAR,}`, `${VAR^^}`. Only `#`, `%`, `:` and `/` are listed.
+- `${VAR}` with a `}` that is not on the same line as `${`.
+
+I checked these on sample lines with GNU awk: `${#LEN_VAR}` and `${OPT-DEFAULT_V}` are not counted as uses, while `${A} == 3` is.
+
+## Read-only and environment variables
+
+### 20. Do not assign a variable that the environment already defines
+
+Each of these is listed in the script and reported when it is assigned in a checked file:
+
+- **ksh read-only**: `EGID`, `ENV`, `EUID`, `GID`, `HISTCMD`, `LINENO`, `PPID`, `RANDOM`, `TTYIDLE`, `UID`, `USERNAME`, and
+  the `SUDO_COMMAND`, `SUDO_USER`, `SUDO_UID` and `SUDO_GID` variables set when a user logs on with sudo. The report says
+  "default ksh var assigned, it is likely a bug". The rationale comment: assigning one either "fails loudly (read-only
+  var)" in zsh or "fails silently and does nothing", as in `USERNAME=aa`.
+- **Defined by `define_configuration`**: `PHYSICAL_SERVERS`, `SYSTEM_LOCATION`, `LOCAL_STATIONS`, `SYSTEM_TEMPLATE`,
+  `OTHER_INSTANCE`, `CONFIGURATION_SYSTEM`, `CONFIGURATION_TYPE`, `APPLICATION`, `DB_FUNCTION`, `ENTERPRISE_ID`,
+  `ENV_UPDATE_USER`, `ENV_UPDATE_USER_PASSWD`, `EXER_TITLE`, `REFERENCE_INSTANCE`, `PHYSICAL_HOSTS_ALL`, `PACKAGE_NAME`,
+  `HOSTS_ALL` and `SYSTEM_PAIR`. These may be set only "in very specific circumstances like setting a profile in
+  regression tests". The check is skipped when the checked file name matches the defining name (the script uses
+  `FILE !~ ksh_var_ro[val]`), so a file named after `define_configuration` may assign them.
+
+**Pattern issues.** The file-name test is a regular expression match on the defining name. `define_configuration` is
+a substring match, so any file whose name contains it is exempt. `ENV` is also marked read-only with the value `ksh`, so
+a file named `...ksh...` is not exempt.
+
+### 21. Do not expect the environment or the CFMU setup to define these; the checker exempts them
+
+The script exempts these from rule 16, so using them in a script does not need an assignment:
+
+- **CFMU environment**: `APPLICATION_INSTANCE_KEY`, `CFMU_TEMP_DIR`, `CM_ROOT`, `CM_SYSTEM`, `PATCHES_DIR`, `PATH`, `PWD`,
+  `TMP_ROOT`, `WORK_DIR`, `WORK_ROOT`, `DATA_FILES`, `SHARED_AREA`, `SVLOGS`.
+- **CMA5 environment**: `CMA_WORKSPACE_ROOT`, `CMA_WORKSPACE_DATA_DIRECTORY`, `CMA_WORKSPACE`, `CMA_WORKSPACE_NM_REPOSITORY_DIRECTORY`.
+- **Set by `define_configuration`**: the list in rule 20 (so using them is allowed, assigning them is not).
+- **Coverage and workspace builds**: `GCOV_PREFIX` and `CLEARCASE_ROOT`.
+- **Set by the shell or tools**: `SCRIPT` (used by `Log`), `DISPLAY`, `ENABLE_UPDATE_STATISTICS`, `TZ`, `PS1`, `PS2`,
+  `IFS`, `SECONDS`, `funcfiletrace` (when `zmodload zsh/parameter` is present), `OPTARG` and `OPTIND`, `REPLY` and `PS3`.
+- **awk**: `NF`. It looks like a shell variable in awk code but is not one.
+
+**Pattern issues.**
+- `CFMU_TEMP_DIR` is both in the generic list and marked used, so it is never reported.
+- `PHYSICAL_SERVERS` and `PHYSICAL_HOSTS_ALL` are listed twice in the code. This is harmless.
+- `PATH` and `PWD` are exempt from rule 16 but are not read-only. Assigning `PWD` by hand is not reported.
+
+### 22. Keep the read-only list in alphabetical order
+
+**Rationale.** The comment says "Keep these variables in alphabetical order". The `ksh_var_ro` list is grouped in several
+blocks (ksh, define_configuration, SUDO), so only the first block is kept sorted. This is a convention, not a check.
+
+## Known limitations and stale comments in the checker
+
+- **The header comment is stale.** It says "only the first [variable] is taken into account" in an expression. The
+  `${VAR}` and `$VAR` patterns loop with `while` and do count several per line. The inline assignment pattern is the one
+  that counts only the first per line (rule 18).
+- **`{ A=toot; }` is recorded.** The header says the check "does not yet verify in blocks like `{ A=toot; }`". The inline
+  pattern does match a variable after a space or `;`, so that case works. Only the second and later assignments on one line are missed.
+- **No argument check.** The script reads `$1` without checking that an argument was given. With no argument, `sed`
+  and `awk` get an empty file name and fail.
+- **Comment stripping.** The first `sed` removes `#` only when a space or tab comes before it, so `\t# comment` is removed only
+  by the second `sed`, and a `#` inside a string after a space is cut. This is the same limitation as the first checker.
+- **`\<` is a gawk extension.** The `read` pattern uses `\<`, which is a word boundary in gawk but not in POSIX awk.
+  The script will not run the same way under `mawk` or BSD awk.
+- **Awk's `match` does not reset `a`.** `a` is reused across calls. This is harmless here because each use reads only `a[0]`
+  right after the call, but it would break if the code ever read a capture group.
