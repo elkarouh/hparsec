@@ -108,7 +108,10 @@ class ZshTerminals(Terminals):
     # A word may start with a colon: `getopts :ho SWITCH`.
     colon_word = ignore(filt(lambda tok: tok.string == ":", expect_type_node(TOKEN_TYPES["OP"]))) + argument_identifier[1:]
     _basic_arg = (backtick | cmd_subst | arith_exp | var_exp | heredoc | string | brace_word | dbl_bracket_word | colon_word
-                  | number | glob_qual | subscript | argument_identifier | expect_type_node(TOKEN_TYPES["ASSIGN_EMPTY"])
+                  | number
+                  # Extended glob: an operator before a group is one word, `+([0-9])` or `!(*.log)`.
+                  | (ignore(filt(lambda tok: tok.string in ("+", "*", "?", "!", "@"), expect_type_node(TOKEN_TYPES["OP"]))) + glob_qual)
+                  | glob_qual | subscript | argument_identifier | expect_type_node(TOKEN_TYPES["ASSIGN_EMPTY"])
                   # A "}" glued to a word is a literal: `echo x}.log`. A separate "}" still closes a group.
                   | ignore(filt(lambda tok: tok.glued and tok.string == "}", expect_type_node(TOKEN_TYPES["OP"])))
                   # Bare pattern characters are word parts in zsh: `fd -tx remove$ dir`,
@@ -633,7 +636,8 @@ def _unclosed_construct(tokens):
                "for": "done", "select": "done", "{": "}"}
     closers = {"fi", "esac", "done", "}"}
     after_ident = {"then", "do", "else", "elif"}
-    after_op = {";", ";;", ";&", ";|", "&&", "||", "|", "|&", "&", "(", "{", "!"}
+    # `)` ends a case pattern, so a command may start after it: `pat) if ...`.
+    after_op = {";", ";;", ";&", ";|", "&&", "||", "|", "|&", "&", "(", "{", "!", ")"}
     stack = []
     prev = None
     for tok in tokens:

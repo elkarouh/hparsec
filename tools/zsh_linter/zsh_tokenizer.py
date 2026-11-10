@@ -129,6 +129,9 @@ def tokenize_zsh(source):
         nonlocal col, line
         end = (start_pos[0], start_pos[1] + len(value))
         glued = bool(tokens) and tokens[-1].end == start_pos
+        # `( a = b )]]` closes a double-bracket test: the `]]` is not a glued word part.
+        if glued and value == "]]" and tokens[-1].string == ")" and tokens[-1].type == TOKEN_TYPES["OP"]:
+            glued = False
         tokens.append(Token(TOKEN_TYPES[kind], value, start_pos, end, line_text(start_pos[0]), glued))
         nl_count = value.count("\n")
         if nl_count:
