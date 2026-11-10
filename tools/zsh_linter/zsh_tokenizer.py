@@ -213,8 +213,10 @@ def tokenize_zsh(source):
             continue
 
         # A # right after an opening `((` is arithmetic, not a comment: `(( #$ != 0 ))`.
-        if (ch == "#" and len(tokens) >= 2 and tokens[-1].string == "(" and tokens[-2].string == "("
-                and tokens[-2].end == tokens[-1].start):
+        # A # glued to a `(` opens glob flags or qualifiers: `*(#qN.mh+24)`, `(#i)*.txt`.
+        if ch == "#" and tokens and tokens[-1].string == "(" and (
+                tokens[-1].end == start
+                or (len(tokens) >= 2 and tokens[-2].string == "(" and tokens[-2].end == tokens[-1].start)):
             push("IDENT", "#", start)
             i += 1
             continue
