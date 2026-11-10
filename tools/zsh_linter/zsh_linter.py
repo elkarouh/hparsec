@@ -207,6 +207,108 @@ def _expansion_issues(node, backticks_only=False):
     walk(node, visit)
     return issues
 # ============================================================
+# Source rendering (to_source)
+# ============================================================
+# Each parse node renders itself back to shell text with to_source(). Keywords
+# and statement separators are rebuilt from the tree, so the output is formatted
+# rather than byte-identical. Anonymous combinator nodes are flattened.
+
+_ANON_NODES = ("Sequence_Parser", "Several_Times")
+_KEYWORDS = ("if", "then", "else", "elif", "fi", "while", "until", "for", "in", "do", "done")
+
+
+def _is_leaf(node):
+    return hasattr(node, "string") and not hasattr(node, "nodes")
+
+
+def _flatten_anon(nodes):
+    """Yield the nodes, looking through anonymous combinator nodes."""
+    for n in nodes:
+        if n is None:
+            continue
+        if not isinstance(n, str) and type(n).__name__ in _ANON_NODES:
+            yield from _flatten_anon(children(n))
+        else:
+            yield n
+
+
+def _keyword_of(node):
+    """Return the shell keyword a literal node stands for, or None."""
+    name = type(node).__name__
+    if not name.startswith("Literal_"):
+        return None
+    kids = children(node)
+    if kids and isinstance(kids[0], str):
+        return kids[0]
+    return name[len("Literal_"):]
+
+
+def _render(node):
+    if node is None:
+        return ""
+    if isinstance(node, str):
+        return node
+    if _is_leaf(node):
+        return node.string
+    fn = getattr(node, "to_source", None)
+    return fn() if fn else _join_source(children(node))
+
+
+def _join_source(nodes):
+    """Join rendered pieces with a space, except where the next token is glued."""
+    out = ""
+    for c in nodes:
+        piece = _render(c)
+        if not piece:
+            continue
+        first = token_of(c)
+        glued = bool(getattr(first, "glued", False))
+        if out and not glued:
+            out += " "
+        out += piece
+    return out
+
+
+def _statements_source(nodes):
+    """Render a list of statements, one per line."""
+    return "\n".join(p for p in (_render(c) for c in _flatten_anon(nodes)) if p)
+
+
+def _compound_source(nodes):
+    """Render a control-flow statement from its keyword and body pieces."""
+    out = ""
+    body = False
+    for c in _flatten_anon(nodes):
+        kw = _keyword_of(c)
+        if kw is None:
+            piece = _render(c)
+            if not piece:
+                continue
+            if body:
+                out += piece + "\n"
+            else:
+                out += (" " if out and not out.endswith(" ") else "") + piece
+        elif kw in ("then", "do"):
+            out = out.rstrip(" ") + "; " + kw + "\n"
+            body = True
+        elif kw == "else":
+            out = out if out.endswith("\n") else out + "\n"
+            out += "else\n"
+            body = True
+        elif kw == "elif":
+            out = out if out.endswith("\n") else out + "\n"
+            out += "elif "
+            body = False
+        elif kw in ("fi", "done"):
+            out = out if out.endswith("\n") else out + "\n"
+            out += kw
+            body = False
+        else:
+            out += (" " if out and not out.endswith(" ") else "") + kw + " "
+    return out.rstrip()
+
+
+# ============================================================
 # Grammar
 # ============================================================
 
@@ -314,13 +416,13 @@ class ZshStyleGrammar(Grammar):
     # A zsh descriptor can be a name or a numeric descriptor: `{myfd}` / `{1}`.
     # Try the braced form before the optional traditional numeric prefix; the
     # latter can otherwise succeed empty and prevent the braced form matching.
-    named_fd = ignore(lbrace_vis + identifier + rbrace_vis)
+    named_fd = lbrace_vis + identifier + rbrace_vis
     # Keep the target argument in the AST so argument.lint() can inspect it.
     # Only the descriptor and operator are syntactic details.
     # The here-string operator is kept in the AST so its use can be linted (ZSH008).
     here_string_op = filt(lambda tok: tok.string == "<<<", expect_type_node(TOKEN_TYPES["OP"]))
     # A redirect target may continue with glued word parts: `>${DIR}/x.log` is one word.
-    redir = (named_fd | ignore(number[0:1])) + (here_string_op | redir_op) + argument + ZshTerminals.glued_part[0:]
+    redir = (named_fd | number[0:1]) + (here_string_op | redir_op) + argument + ZshTerminals.glued_part[0:]
     # Zsh permits redirection-only commands, e.g. `{myfd}</dev/null`.
     redir_command = redir[1:]
 
@@ -498,6 +600,9 @@ class ZshStyleGrammar(Grammar):
     # ---------- Lint methods ----------
     class __default__:
         """Fallback for any rule without its own lint: lints the children."""
+        def to_source(self):
+            return _join_source(children(self))
+
         def lint(self):
             # this node doesnt have a lint method, but its children may have.
             issues = []
@@ -612,6 +717,53 @@ class ZshStyleGrammar(Grammar):
                 issues.extend(c.lint())
             return issues
 
+    class function_def:
+        """function_def: header, then the body in braces, one statement per line."""
+        def to_source(self):
+            nodes = list(_flatten_anon(children(self)))
+            header = ""
+            body = []
+            for c in nodes:
+                kw = _keyword_of(c)
+                if not header and kw == "function":
+                    header = "function "
+                    continue
+                if not header and (isinstance(c, str) or _is_leaf(c) or type(c).__name__ == "func_name"):
+                    header = header + _render(c)
+                    continue
+                body.append(c)
+            return header + "() {\n" + _statements_source(body) + "\n}"
+
+    class grouping:
+        """grouping: { statements; }"""
+        def to_source(self):
+            return "{\n" + _statements_source(children(self)) + "\n}"
+
+    class subshell:
+        """subshell: ( statements )"""
+        def to_source(self):
+            return "(\n" + _statements_source(children(self)) + "\n)"
+
+    class if_stmt:
+        """if_stmt: rendered from its keywords and bodies."""
+        def to_source(self):
+            return _compound_source(children(self))
+
+    class while_stmt:
+        """while_stmt: rendered from its keywords and bodies."""
+        def to_source(self):
+            return _compound_source(children(self))
+
+    class until_stmt:
+        """until_stmt: rendered from its keywords and bodies."""
+        def to_source(self):
+            return _compound_source(children(self))
+
+    class for_stmt:
+        """for_stmt: rendered from its keywords and bodies."""
+        def to_source(self):
+            return _compound_source(children(self))
+
     class script:
         """script ::= statement*"""
         def lint(self):
@@ -619,6 +771,9 @@ class ZshStyleGrammar(Grammar):
             for c in children(self):
                 issues.extend(c.lint())                       
             return issues
+
+        def to_source(self):
+            return "\n".join(p for p in (_render(c) for c in _flatten_anon(children(self))) if p) + "\n"
 
 
 # ============================================================

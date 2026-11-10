@@ -729,6 +729,13 @@ class GrammarMeta(type):
                         methods_to_remove.add(k)
                         break
 
+        # Each rule is its own parser class; name it after the rule so a parse
+        # node reports its rule through type(node).__name__.
+        for rname, rule in all_rules.items():
+            if isinstance(rule, type) and rname.isidentifier() and not rname.startswith("_"):
+                rule.__name__ = rname
+                rule.__qualname__ = rname
+
         cls = super().__new__(metacls, name, bases, dict(namespace))
 
         # Auto-register a `__default__` class defined in the grammar body as
