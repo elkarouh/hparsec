@@ -2,9 +2,10 @@
 """Profile hparsec's direct left-recursive expression parser.
 
 Usage:
-    python profile_hparsec.py --source-dir . --terms 3000
+    python benchmarks/profile_hparsec.py --terms 3000
 
-The source directory must contain hparsec.py and ady_tokenizer.py.
+By default the library is loaded from the repository's src/ directory; pass
+--source-dir to point at another copy of hparsec.py and ady_tokenizer.py.
 Tokenization is deliberately excluded from the cProfile measurements.
 """
 from __future__ import annotations
@@ -16,10 +17,12 @@ import pstats
 import sys
 from pathlib import Path
 
+DEFAULT_SOURCE_DIR = Path(__file__).resolve().parent.parent / "src"
+
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--source-dir", default=".",
+    ap.add_argument("--source-dir", default=str(DEFAULT_SOURCE_DIR),
                     help="directory containing hparsec.py and ady_tokenizer.py")
     ap.add_argument("--terms", type=int, default=3000,
                     help="number of numeric terms in the expression")

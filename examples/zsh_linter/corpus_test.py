@@ -2,8 +2,10 @@
 import glob, os, re, sys, traceback
 from zsh_linter import lint_zsh_code
 
+DEFAULT_CORPUS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "corpus")
 
-def run_corpus(directory="corpus", verbose=False):
+
+def run_corpus(directory=DEFAULT_CORPUS, verbose=False):
     paths = sorted(
         glob.glob(os.path.join(directory, "*.zsh"))
         + glob.glob(os.path.join(directory, "*.sh"))
@@ -63,6 +65,6 @@ def run_corpus(directory="corpus", verbose=False):
 
 
 if __name__ == "__main__":
-    directory = sys.argv[1] if len(sys.argv) > 1 else "corpus"
+    directory = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_CORPUS
     verbose = "-v" in sys.argv
     run_corpus(directory, verbose=verbose)
