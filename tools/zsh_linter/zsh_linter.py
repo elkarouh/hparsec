@@ -101,13 +101,13 @@ class ZshTerminals(Terminals):
     # (`test $x = 0`).
     # A brace group in argument position is a brace-expansion word: `{01..$N}`, `{a,b}`.
     # Ignored in the AST, so its contents are not linted as expansions.
-    brace_word = LBRACE + ((~RBRACE) + shift)[:] + RBRACE
+    brace_word = lbrace_vis + ((~rbrace_vis) + shift)[:] + rbrace_vis
     # A `[[ ... ]]` test passed as an argument: `eval [[ -n $x ]]`.
     dbl_bracket_word = (filt(lambda tok: tok.string == "[[", expect_type_node(TOKEN_TYPES["OP"]))
                               + ((~filt(lambda tok: tok.string == "]]", expect_type_node(TOKEN_TYPES["OP"]))) + shift)[:]
                               + filt(lambda tok: tok.string == "]]", expect_type_node(TOKEN_TYPES["OP"])))
     # A word may start with a colon: `getopts :ho SWITCH`.
-    colon_word = filt(lambda tok: tok.string == ":", expect_type_node(TOKEN_TYPES["OP"])) + argument_identifier[1:]
+    colon_word = filt(lambda tok: tok.string == ":", expect_type_node(TOKEN_TYPES["OP"]), shift) + argument_identifier[1:]
     _basic_arg = (backtick | cmd_subst | arith_exp | var_exp | heredoc | string | brace_word | dbl_bracket_word | colon_word
                   | number
                   # Extended glob: an operator before a group is one word, `+([0-9])` or `!(*.log)`.
@@ -300,7 +300,7 @@ class ZshStyleGrammar(Grammar):
         # Try logical chains before their individual operands. Otherwise a
         # declaration such as `local x=1` succeeds as a prefix and leaves &&/||
         # behind for the top-level statement parser.
-        function_def | anon_function
+        try_always | function_def | anon_function
         | and_or | redir_command
         | comment | declaration | declaration2
         | case_stmt
@@ -437,7 +437,7 @@ class ZshStyleGrammar(Grammar):
     not_command = ignore(literal("!")) + (pipeline | assignment | dbl_test_construct | test_construct)
 
     inner_statement = (
-        function_def | anon_function
+        try_always | function_def | anon_function
         | and_or | redir_command
         | comment | declaration | declaration2
         | case_stmt
@@ -575,6 +575,13 @@ class ZshStyleGrammar(Grammar):
 
     subshell = lparen_vis + STATEMENT_SEP[:] + inner_statement[:] + STATEMENT_SEP[:] + rparen_vis
     grouping = LBRACE + STATEMENT_SEP[:] + inner_statement[:] + STATEMENT_SEP[:] + RBRACE
+    # zsh try/always: `{ body } always { cleanup }`. The braces are kept and the
+    # two groups must share one line with `always`.
+    try_always = (
+        (lbrace_vis + STATEMENT_SEP[:] + inner_statement[:] + STATEMENT_SEP[:] + rbrace_vis)
+        + literal("always")
+        + (lbrace_vis + STATEMENT_SEP[:] + inner_statement[:] + STATEMENT_SEP[:] + rbrace_vis)
+    )
 
     # ---------- Lint methods ----------
     class statement:
@@ -868,6 +875,20 @@ class ZshStyleGrammar(Grammar):
                     continue
                 body.append(c)
             return prefix + name + (" ()" if has_parens else "") + " {\n" + "\n".join(p for p in (_render(c) for c in _flatten_anon(body)) if p) + "\n}"
+
+    class try_always:
+        """try_always: { body } always { cleanup }, on one line at the join."""
+        def to_source(self):
+            items = list(_flatten_anon(children(self)))
+            i = next(k for k, c in enumerate(items) if _keyword_of(c) == "always")
+            body = "\n".join(p for p in (_render(c) for c in items[:i]) if p)
+            cleanup = "\n".join(p for p in (_render(c) for c in items[i + 1:]) if p)
+            return body + " always " + cleanup
+
+    class brace_word:
+        """brace_word: {a,b}. Its tokens are contiguous, so they are joined without spaces."""
+        def to_source(self):
+            return "".join(_render(c) for c in _flatten_anon(children(self)))
 
     class grouping:
         """grouping: { statements; }"""
