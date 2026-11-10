@@ -27,11 +27,9 @@ from hparsec import (
     ParserState,
     Terminals,
     TokenStream,
-    as_node,
     filt,
     ignore,
     literal,
-    parts,
     shift,
     SymbolTable,
 )
@@ -201,13 +199,13 @@ class LispGrammar(Grammar):
     class program:
         """program ::= expression* SKIP"""
         def run(self, env):
-            results = [item.evaluate(env) for item in (self.nodes[0].nodes if self.nodes else [])]
+            results = [item.evaluate(env) for more in self.nodes for item in more.nodes]
             return results[-1] if results else None
 
     class symbol:
         """symbol ::= SKIP sym_char+; the characters are a number when they form one, else a name"""
         def text(self):
-            return "".join(char.node for char in self.nodes[0].nodes)
+            return "".join(char.node for char in self.node.nodes)
 
         def evaluate(self, env):
             text = self.text()
@@ -226,7 +224,7 @@ class LispGrammar(Grammar):
     class list_form:
         """list_form ::= LPAREN expression* RPAREN"""
         def evaluate(self, env):
-            items = self.nodes[0].nodes if self.nodes else []
+            items = [item for more in self.nodes for item in more.nodes]
             if not items:
                 raise LispError("the empty combination () cannot be evaluated")
             head = items[0].symbol_name()
@@ -247,7 +245,7 @@ class LispGrammar(Grammar):
             return env.apply(procedure, args)
 
         def datum(self):
-            return [item.datum() for item in (self.nodes[0].nodes if self.nodes else [])]
+            return [item.datum() for more in self.nodes for item in more.nodes]
 
         def symbol_name(self):
             return None

@@ -36,7 +36,7 @@ run('DEF FN SQ(X) = X * X\nPRINT FN SQ(4) + 1\n')   # ['17']
   `NEWLINE` tokens. Comments are dropped.
 - `BasicGrammar` is written as EBNF. Each rule is a class whose docstring holds its rule.
   Statements have `run(env)`; expressions have `evaluate(env)`. Each method handles its
-  own node and calls the methods of its parts, so nothing walks the tree generically.
+  own node and reads its children from `self.nodes`, so nothing walks the tree generically.
 - `Environment` keeps the variables, the functions and the output in hparsec's
   `SymbolTable`. A function call pushes a frame with its parameters, on top of the
   globals, and the frame is popped when the call returns.
