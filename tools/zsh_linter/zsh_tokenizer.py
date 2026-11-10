@@ -33,6 +33,7 @@ TOKEN_TYPES = {
     "NUMBER":      9,
     "OP":         10,
     "NEWLINE":    11,
+    "ASSIGN_EMPTY": 12,
 }
 
 _OP_TOKENS = (
@@ -382,7 +383,12 @@ def tokenize_zsh(source):
         matched = False
         for op in _OP_TOKENS:
             if source.startswith(op, i):
-                push("OP", op, start)
+                # A bare `=` followed by whitespace or a separator is an empty
+                # assignment (`IFS= read`); `x=y` has no space and stays OP.
+                if op == "=" and (i + 1 >= len(source) or source[i + 1] in " \t\r\n;&|)"):
+                    push("ASSIGN_EMPTY", op, start)
+                else:
+                    push("OP", op, start)
                 i += len(op)
                 matched = True
                 break

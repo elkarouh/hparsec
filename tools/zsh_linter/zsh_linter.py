@@ -100,7 +100,11 @@ class ZshTerminals(Terminals):
     # keywords in command position, so `end=$second` is a valid assignment.
     assign_name = filt(lambda tok: tok.string.isidentifier(), expect_type_node(TOKEN_TYPES["IDENT"]))
     # The value may be empty: `RPROMPT=` is a valid assignment.
-    assign_word = assign_name + ASSIGN + (_basic_arg | nothing)
+    # `=` directly followed by a value is an assignment; `=` followed by whitespace
+    # is an empty assignment (ASSIGN_EMPTY), so `IFS= read` never takes `read` as a value.
+    assign_eq = filt(lambda tok: tok.string == "=", expect_type_node(TOKEN_TYPES["OP"]))
+    assign_eq_empty = expect_type_node(TOKEN_TYPES["ASSIGN_EMPTY"])
+    assign_word = (assign_name + assign_eq + _basic_arg) | (assign_name + assign_eq_empty)
 
 # HELPERS
 def _expansion_issues(node, backticks_only=False):
@@ -237,7 +241,13 @@ class ZshStyleGrammar(Grammar):
                     | literal("export") | literal("readonly")) + flag[:] + ((assign_name | var_exp | string) + (ASSIGN_OP + (assign_rhs | nothing))[0:1])[1:]
     
     # One or more `name=value` pairs on a line: `start=$a end=$b`.
-    assignment = assign_target + subscript[0:1] + ASSIGN_OP + (assign_rhs | nothing) + assign_word[:]
+    assignment = (
+        assign_target + subscript[0:1]
+        + (((assign_eq | PLUSEQUAL | MINEQUAL) + assign_rhs)
+           | (assign_eq_empty + (~argument))  # `IFS= read` is a prefix assignment, not this
+           | PLUSEQUAL | MINEQUAL)
+        + assign_word[:]
+    )
 
     # [ ] and [[ ]] content is opaque so test operators remain uninterpreted.
     # The legacy [ ] lint method separately checks raw expansion tokens; [[ ]]
@@ -375,7 +385,8 @@ class ZshStyleGrammar(Grammar):
     )
 
     # Function names may be dynamic: `_widget_${name}() { ... }`.
-    func_name = (identifier | var_exp)[1:]
+    # `= () { ... }` defines a function named "=": the bare `=` is an ASSIGN_EMPTY token.
+    func_name = (identifier | var_exp | ZshTerminals.assign_eq_empty)[1:]
     function_def = (
         (func_name + LPAREN + RPAREN)
         | (literal("function") + func_name + (LPAREN + RPAREN)[0:1])
@@ -659,6 +670,13 @@ def _run_self_tests():
             ("subshell", "( cd /tmp && ls )\n"),
             ("grouping", "{ echo a; echo b; }\n"),
             ("anon function", "() {\n  echo hi\n}\n"),
+            ("while IFS= read", "while IFS= read -r line; do echo $line; done\n"),
+            ("IFS= read in function", "f() {\n  while IFS= read -r line; do files+=(\"$line\"); done\n}\n"),
+            ("IFS= read prefix", "IFS= read -r x\n"),
+            ("IFS=read no space", "IFS=read\n"),
+            ("empty assign before space", "RPROMPT= \n"),
+            ("empty local", "local a=\n"),
+            ("function named =", "= () {\n  bc -l <<< \"$*\"\n}\n"),
             ("for-alt", "for f (*.txt) do\n  echo $f\ndone\n"),
             ("select", "select opt in a b c; do\n  echo $opt\ndone\n"),
             ("heredoc", "cat <<EOF\nhello\nEOF\n"),
