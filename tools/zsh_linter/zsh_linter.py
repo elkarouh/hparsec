@@ -98,7 +98,9 @@ class ZshTerminals(Terminals):
                   | number | glob_qual | subscript | argument_identifier | expect_type_node(TOKEN_TYPES["ASSIGN_EMPTY"])
                   # a bare `$` ends a word literally: `fd -tx remove$ dir`. Ignored so it is
                   # not mistaken for an expansion.
-                  | ignore(filt(lambda tok: tok.string == "$", expect_type_node(TOKEN_TYPES["OP"]))))
+                  | ignore(filt(lambda tok: tok.string == "$", expect_type_node(TOKEN_TYPES["OP"])))
+                  # `^` is a word character in zsh (`grep -v ^N_`), so it is an argument too.
+                  | ignore(filt(lambda tok: tok.string == "^", expect_type_node(TOKEN_TYPES["OP"]))))
     # assign_word matches `name=value` as a single argument (needed for
     # `alias ls='...'`, `export FOO=bar` inline, etc.)
     # Assignment names are plain identifiers; reserved words such as `end` are only
@@ -323,7 +325,9 @@ class ZshStyleGrammar(Grammar):
     # in addition to not_command (`!`), assignment (`x=1 || cmd`), and the previous items.
     and_or_item = (
         test_construct | dbl_test_construct | arith_stmt
-        | not_command | grouping | subshell | assignment | pipeline
+        | not_command | assignment | pipeline
+        # grouping and subshell come through pipeline_item, which also accepts a pipe
+        # after them: `{ a; } | tee`. Listing them here first would stop the choice early.
         | declaration | declaration2
     )    
     and_or = as_node(and_or_item) + ((AND_AND | OR_OR) + NEWLINE[:] + as_node(and_or_item))[:]
@@ -702,6 +706,9 @@ def _run_self_tests():
             ("pipe from redirected while", "while read d; do echo $d; done < f | sort\n"),
             ("bare dollar in word", "fd -tx remove$ /cm\n"),
             ("comment after brace", "rtd() { # remove\n  echo a\n}\n"),
+            ("group before pipe", "{ echo a; } | tee -a f\n"),
+            ("subshell before pipe", "( echo a ) | tee\n"),
+            ("caret word argument", "grep -v ^N_.*$ file\n"),
             ("for-alt", "for f (*.txt) do\n  echo $f\ndone\n"),
             ("select", "select opt in a b c; do\n  echo $opt\ndone\n"),
             ("heredoc", "cat <<EOF\nhello\nEOF\n"),
