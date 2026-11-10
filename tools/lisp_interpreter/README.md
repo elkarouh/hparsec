@@ -38,7 +38,10 @@ run("(begin (define fact (lambda (n) (if (<= n 1) 1 (* n (fact (- n 1)))))) (fac
 
 ## How it is built
 
-- `tokenize` splits the source into `(`, `)`, numbers and symbols.
+- There is no separate tokenizer. hparsec's `TokenStream` reads the source string one
+  character at a time, and the grammar's terminals (`LPAREN`, `sym_char`, and the
+  whitespace and comment rules) match the characters. A `symbol` node decides whether its
+  characters are a number or a name.
 - `LispGrammar` is written as EBNF. Each rule is a class whose docstring holds its rule.
   `datum()` gives the Python value of a piece of source, and `evaluate(env)` gives the
   value of an expression.
