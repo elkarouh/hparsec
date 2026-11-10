@@ -452,8 +452,11 @@ class ZshStyleGrammar(Grammar):
     _pattern_break = filt(lambda tok: (not tok.glued and tok.string != ")")
                           or tok.type in (TOKEN_TYPES["NEWLINE"], TOKEN_TYPES["COMMENT"])
                           or tok.string in (";", ";;", ";&", ";|"), shift)
-    _pattern_group = LPAREN + ((~RPAREN) + shift)[:] + RPAREN + (~_pattern_break)
-    case_pattern = (_pattern_group | ((~rparen_vis) + shift))[:] + rparen_vis
+    # A case pattern sits on one line: it never takes a newline or a comment, so an
+    # arm that starts at a comment cannot scan on through `esac` to a later `)`.
+    _pattern_tok = filt(lambda tok: tok.type not in (TOKEN_TYPES["NEWLINE"], TOKEN_TYPES["COMMENT"]), shift)
+    _pattern_group = LPAREN + ((~RPAREN) + _pattern_tok)[:] + RPAREN + (~_pattern_break)
+    case_pattern = (_pattern_group | ((~rparen_vis) + _pattern_tok))[:] + rparen_vis
     case_body = case_pattern + STATEMENT_SEP[:] + inner_statement[:] + STATEMENT_SEP[:]
     # Arms that end with a terminator, then an optional final arm without one
     # (`*) cmd` directly before `esac`). The optional arm must not start at
@@ -462,8 +465,8 @@ class ZshStyleGrammar(Grammar):
     # NOTE: The guard (~literal("esac")) must be on BOTH case_arm and case_final
     # to prevent case_arm from greedily consuming `esac` and subsequent code.
     # A comment may follow the terminator: `;; # Invalid option`.
-    case_arm = STATEMENT_SEP[:] + (~literal("esac")) + case_body + (DSEMI | SEMI_AMP | SEMI_BAR) + comment[0:1]
-    case_final = STATEMENT_SEP[:] + (~literal("esac")) + case_body
+    case_arm = (STATEMENT_SEP | comment)[:] + (~literal("esac")) + case_body + (DSEMI | SEMI_AMP | SEMI_BAR) + comment[0:1]
+    case_final = (STATEMENT_SEP | comment)[:] + (~literal("esac")) + case_body
     case_stmt = (
         literal("case") + argument + STATEMENT_SEP[:] + literal("in") + STATEMENT_SEP[:]
         + case_arm[:] + case_final[0:1]
