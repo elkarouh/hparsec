@@ -58,12 +58,14 @@ class ZshTerminals(Terminals):
     lparen_vis = filt(lambda tok: tok.string == "(", shift, name="(")
     rparen_vis = filt(lambda tok: tok.string == ")", shift, name=")")
     colon = filt(lambda tok: tok.string == ":", shift, name=":")
+    # An arithmetic expansion may be glued on to a flag: `typeset -L$(( n )) x`.
+    # Only $((...)) is taken: a following ${...} is the declared name.
     flag = filt(
         lambda tok: isinstance(tok.string, str) and len(tok.string) > 1
                     and tok.string.startswith("-") and not tok.string.startswith("--"),
         expect_type_node(TOKEN_TYPES["IDENT"]),
         name="-flag",
-    )
+    ) + ignore(expect_type_node(TOKEN_TYPES["ARITH_EXP"]))[0:1]
 
     number = expect_type_node(TOKEN_TYPES["NUMBER"])
     string = expect_type_node(TOKEN_TYPES["STRING"])
@@ -101,7 +103,9 @@ class ZshTerminals(Terminals):
     dbl_bracket_word = ignore(filt(lambda tok: tok.string == "[[", expect_type_node(TOKEN_TYPES["OP"]))
                               + ((~filt(lambda tok: tok.string == "]]", expect_type_node(TOKEN_TYPES["OP"]))) + shift)[:]
                               + filt(lambda tok: tok.string == "]]", expect_type_node(TOKEN_TYPES["OP"])))
-    _basic_arg = (backtick | cmd_subst | arith_exp | var_exp | heredoc | string | brace_word | dbl_bracket_word
+    # A word may start with a colon: `getopts :ho SWITCH`.
+    colon_word = ignore(filt(lambda tok: tok.string == ":", expect_type_node(TOKEN_TYPES["OP"]))) + argument_identifier[1:]
+    _basic_arg = (backtick | cmd_subst | arith_exp | var_exp | heredoc | string | brace_word | dbl_bracket_word | colon_word
                   | number | glob_qual | subscript | argument_identifier | expect_type_node(TOKEN_TYPES["ASSIGN_EMPTY"])
                   # Bare pattern characters are word parts in zsh: `fd -tx remove$ dir`,
                   # `grep -v ^N_`, `grep .+%U.+`. Ignored so they are not mistaken for expansions.
@@ -227,7 +231,8 @@ class ZshStyleGrammar(Grammar):
     loose_word = (
         (ZshTerminals.assign_name
          | filt(lambda tok: not tok.string.isidentifier(), expect_type_node(TOKEN_TYPES["IDENT"]))
-         | ZshTerminals.string | ZshTerminals.var_exp | ZshTerminals.cmd_subst)[1:]
+         | ZshTerminals.string | ZshTerminals.var_exp | ZshTerminals.cmd_subst
+         | ignore(filt(lambda tok: tok.string == ":", expect_type_node(TOKEN_TYPES["OP"]))))[1:]
         + ZshTerminals.assign_eq + ZshTerminals._basic_arg
     )
     argument = as_node(assign_word | loose_word | ZshTerminals._basic_arg)
@@ -306,7 +311,9 @@ class ZshStyleGrammar(Grammar):
     redir_command = redir[1:]
 
     _two_rparen = RPAREN + RPAREN
-    arith_body = ((~_two_rparen) + shift)[:]
+    # Parentheses nest inside arithmetic: `((A = B - (C)))`. A nested group is one unit.
+    arith_nested = LPAREN + ((~RPAREN) + shift)[:] + RPAREN
+    arith_body = (arith_nested | ((~_two_rparen) + shift))[:]
     arith_stmt = LPAREN + LPAREN + arith_body + RPAREN + RPAREN
 
     # C-style loop: `for ((i=0; i<3; i++)); do ... done`
@@ -344,7 +351,10 @@ class ZshStyleGrammar(Grammar):
         test_construct | dbl_test_construct | arith_stmt
         # `x=$(cmd) | tr a b`: an assignment may be the left side of a pipe, tried first.
         | not_command | (assignment + ((PIPE | PIPE_AMP) + NEWLINE[:] + as_node(pipeline_item))[1:])
-        | assignment | pipeline
+        # An assignment that a command follows is a prefix assignment of that command:
+        # `IFS=\, read -r x`. The lookahead lets the pipeline take it; a plain assignment
+        # is tried first so `x+=(...)` is not cut short.
+        | (assignment + (~command_head)) | pipeline | assignment
         # grouping and subshell come through pipeline_item, which also accepts a pipe
         # after them: `{ a; } | tee`. Listing them here first would stop the choice early.
         | declaration | declaration2
@@ -757,6 +767,11 @@ def _run_self_tests():
             ("escaped dollar before parenthesis", "eval a=\\${b:-\\$(c \\${d})}\n"),
             ("name built from expansion before equals", "eval G_${TYPE}=\\${G_${TYPE}:-x}\n"),
             ("command substitution before equals", "eval $(echo a)=$!\n"),
+            ("prefix assignment then command", "IFS=\\, read -r a b\n"),
+            ("array append", "FAILED+=(\"$name\")\n"),
+            ("nested parentheses in arithmetic", "((A=B-(C)))\n"),
+            ("colon-led argument", "while getopts :ho SWITCH; do echo; done\n"),
+            ("arithmetic glued to a flag", "typeset -L$(( N * 2 )) X\n"),
             ("assignment value then argument", "x=a b\n"),
             ("for-alt", "for f (*.txt) do\n  echo $f\ndone\n"),
             ("select", "select opt in a b c; do\n  echo $opt\ndone\n"),
