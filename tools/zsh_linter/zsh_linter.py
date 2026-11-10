@@ -223,9 +223,11 @@ class ZshStyleGrammar(Grammar):
     # A word such as `alias rg.="..."` or `foo-x=1`: the name is not a plain identifier,
     # so it can only be an argument, never an assignment.
     # A quoted name may also be the left side: `alias -g '${1+"$@"}'='"$@"'`.
+    # The name may be built from pieces: `GENERATED_${TYPE}=...`, `"x"=...`.
     loose_word = (
-        (filt(lambda tok: not tok.string.isidentifier(), expect_type_node(TOKEN_TYPES["IDENT"]))
-         | ZshTerminals.string)
+        (ZshTerminals.assign_name
+         | filt(lambda tok: not tok.string.isidentifier(), expect_type_node(TOKEN_TYPES["IDENT"]))
+         | ZshTerminals.string | ZshTerminals.var_exp)[1:]
         + ZshTerminals.assign_eq + ZshTerminals._basic_arg
     )
     argument = as_node(assign_word | loose_word | ZshTerminals._basic_arg)
@@ -753,6 +755,7 @@ def _run_self_tests():
             ("quoted alias name", "alias -g 'x'='y'\n"),
             ("comparison word in test argument", "test \"x$a\" != x\n"),
             ("escaped dollar before parenthesis", "eval a=\\${b:-\\$(c \\${d})}\n"),
+            ("name built from expansion before equals", "eval G_${TYPE}=\\${G_${TYPE}:-x}\n"),
             ("assignment value then argument", "x=a b\n"),
             ("for-alt", "for f (*.txt) do\n  echo $f\ndone\n"),
             ("select", "select opt in a b c; do\n  echo $opt\ndone\n"),
