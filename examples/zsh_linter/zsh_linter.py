@@ -100,8 +100,11 @@ class ZshTerminals(Terminals):
     assign_word = assign_name + ASSIGN + (_basic_arg | nothing)
 
 # HELPERS
-def _expansion_issues(node):
-    """Find unquoted expansions and legacy backticks below an AST node."""
+def _expansion_issues(node, backticks_only=False):
+    """Find unquoted expansions and legacy backticks below an AST node.
+
+    With backticks_only, report only ZSH003 (used where word splitting does not apply).
+    """
     issues = []
     seen = set()
 
@@ -130,6 +133,8 @@ def _expansion_issues(node):
                 message = (
                     f"Unquoted command substitution '{value}' detected."
                 )
+                if backticks_only:
+                    return
 
             elif value.startswith("$") and not value.startswith(
                 ("${", "$((")
@@ -139,6 +144,8 @@ def _expansion_issues(node):
                     f"Unquoted variable expansion '{value}' detected. "
                     "Risk of word splitting and globbing."
                 )
+                if backticks_only:
+                    return
 
             else:
                 return
@@ -391,8 +398,23 @@ class ZshStyleGrammar(Grammar):
     class prefix_assignment:
         """prefix_assignment ::= assign_word"""
         def lint(self):
-            # `VAR=$x cmd` assigns without word splitting: nothing to lint.
-            return []
+            # `VAR=$x cmd` assigns without word splitting: only backticks apply.
+            return _expansion_issues(self, backticks_only=True)
+
+    class assignment:
+        """assignment ::= assign_target subscript? ASSIGN_OP (assign_rhs | nothing) assign_word*"""
+        def lint(self):
+            return _expansion_issues(self, backticks_only=True)
+
+    class declaration:
+        """declaration ::= 'local' flag* ((assign_name | var_exp | string) (ASSIGN_OP (assign_rhs | nothing))?)+"""
+        def lint(self):
+            return _expansion_issues(self, backticks_only=True)
+
+    class declaration2:
+        """declaration2 ::= ('typeset' | 'declare' | 'export' | 'readonly') flag* ((assign_name | var_exp | string) (ASSIGN_OP (assign_rhs | nothing))?)+"""
+        def lint(self):
+            return _expansion_issues(self, backticks_only=True)
 
 
     class command_head:
