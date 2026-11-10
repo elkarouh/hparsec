@@ -97,7 +97,11 @@ class ZshTerminals(Terminals):
     # A brace group in argument position is a brace-expansion word: `{01..$N}`, `{a,b}`.
     # Ignored in the AST, so its contents are not linted as expansions.
     brace_word = ignore(LBRACE + ((~RBRACE) + shift)[:] + RBRACE)
-    _basic_arg = (backtick | cmd_subst | arith_exp | var_exp | heredoc | string | brace_word
+    # A `[[ ... ]]` test passed as an argument: `eval [[ -n $x ]]`.
+    dbl_bracket_word = ignore(filt(lambda tok: tok.string == "[[", expect_type_node(TOKEN_TYPES["OP"]))
+                              + ((~filt(lambda tok: tok.string == "]]", expect_type_node(TOKEN_TYPES["OP"]))) + shift)[:]
+                              + filt(lambda tok: tok.string == "]]", expect_type_node(TOKEN_TYPES["OP"])))
+    _basic_arg = (backtick | cmd_subst | arith_exp | var_exp | heredoc | string | brace_word | dbl_bracket_word
                   | number | glob_qual | subscript | argument_identifier | expect_type_node(TOKEN_TYPES["ASSIGN_EMPTY"])
                   # Bare pattern characters are word parts in zsh: `fd -tx remove$ dir`,
                   # `grep -v ^N_`, `grep .+%U.+`. Ignored so they are not mistaken for expansions.
@@ -741,6 +745,7 @@ def _run_self_tests():
             ("reserved word as loop variable", "for repeat in x; do echo; done\n"),
             ("positional for loop", "for i do echo $i; done\n"),
             ("comment before do in while", "while [[ $c -lt 3 ]]  # limit\ndo\n  echo\ndone\n"),
+            ("double bracket as argument", "eval [[ -n $x ]]\n"),
             ("assignment value then argument", "x=a b\n"),
             ("for-alt", "for f (*.txt) do\n  echo $f\ndone\n"),
             ("select", "select opt in a b c; do\n  echo $opt\ndone\n"),
