@@ -300,8 +300,8 @@ class ZshStyleGrammar(Grammar):
     arith_stmt = LPAREN + LPAREN + arith_body + RPAREN + RPAREN
 
     # C-style loop: `for ((i=0; i<3; i++)); do ... done`
-    for_arith = (literal("for") + LPAREN + LPAREN + arith_body + RPAREN + RPAREN + STATEMENT_SEP[:]
-                 + literal("do") + STATEMENT_SEP[:] + inner_statement[:]
+    for_arith = (literal("for") + LPAREN + LPAREN + arith_body + RPAREN + RPAREN + (STATEMENT_SEP | comment)[:]
+                 + literal("do") + (STATEMENT_SEP | comment)[:] + inner_statement[:]
                  + STATEMENT_SEP[:] + literal("done"))
     
     # as_node(command) keeps each command a distinct node inside pipelines,
@@ -366,31 +366,31 @@ class ZshStyleGrammar(Grammar):
     # Loop variables are plain names, so reserved words are allowed: `for repeat in ...`.
     # The first name may be any word; later names must not be the keywords `in` or `do`.
     loop_names = assign_name + filt(lambda tok: tok.string not in ("in", "do"), assign_name)[:]
-    for_alt = (literal("for") + loop_names + LPAREN + argument[:] + RPAREN + STATEMENT_SEP[:]
-               + literal("do") + STATEMENT_SEP[:] + inner_statement[:]
+    for_alt = (literal("for") + loop_names + LPAREN + argument[:] + RPAREN + (STATEMENT_SEP | comment)[:]
+               + literal("do") + (STATEMENT_SEP | comment)[:] + inner_statement[:]
                + STATEMENT_SEP[:] + literal("done"))
-    for_stmt = (literal("for") + loop_names + literal("in") + argument[:] + STATEMENT_SEP[:]
-                + literal("do") + STATEMENT_SEP[:] + inner_statement[:]
+    for_stmt = (literal("for") + loop_names + literal("in") + argument[:] + (STATEMENT_SEP | comment)[:]
+                + literal("do") + (STATEMENT_SEP | comment)[:] + inner_statement[:]
                 + STATEMENT_SEP[:] + literal("done"))
     # `for x y; do ...` iterates over the positional parameters (no `in` list).
-    for_positional = (literal("for") + loop_names + STATEMENT_SEP[:]
-                + literal("do") + STATEMENT_SEP[:] + inner_statement[:]
+    for_positional = (literal("for") + loop_names + (STATEMENT_SEP | comment)[:]
+                + literal("do") + (STATEMENT_SEP | comment)[:] + inner_statement[:]
                 + STATEMENT_SEP[:] + literal("done"))
     foreach_stmt = (literal("foreach") + identifier[1:] + LPAREN + argument[:] + RPAREN + STATEMENT_SEP[:]
                     + inner_statement[:] + STATEMENT_SEP[:] + literal("end"))
-    select_stmt = (literal("select") + identifier + literal("in") + argument[:] + STATEMENT_SEP[:]
-                   + literal("do") + STATEMENT_SEP[:] + inner_statement[:]
+    select_stmt = (literal("select") + identifier + literal("in") + argument[:] + (STATEMENT_SEP | comment)[:]
+                   + literal("do") + (STATEMENT_SEP | comment)[:] + inner_statement[:]
                    + STATEMENT_SEP[:] + literal("done"))
 
-    while_stmt = (literal("while") + and_or + STATEMENT_SEP[:]
-                  + literal("do") + STATEMENT_SEP[:] + inner_statement[:]
+    while_stmt = (literal("while") + and_or + (STATEMENT_SEP | comment)[:]
+                  + literal("do") + (STATEMENT_SEP | comment)[:] + inner_statement[:]
                   + STATEMENT_SEP[:] + literal("done"))
-    until_stmt = (literal("until") + and_or + STATEMENT_SEP[:]
-                  + literal("do") + STATEMENT_SEP[:] + inner_statement[:]
+    until_stmt = (literal("until") + and_or + (STATEMENT_SEP | comment)[:]
+                  + literal("do") + (STATEMENT_SEP | comment)[:] + inner_statement[:]
                   + STATEMENT_SEP[:] + literal("done"))
     repeat_stmt = (
-        (literal("repeat") + argument + STATEMENT_SEP[:]
-         + literal("do") + STATEMENT_SEP[:] + inner_statement[:]
+        (literal("repeat") + argument + (STATEMENT_SEP | comment)[:]
+         + literal("do") + (STATEMENT_SEP | comment)[:] + inner_statement[:]
          + STATEMENT_SEP[:] + literal("done"))
         # one-line form: `repeat 3 echo hi`
         | (literal("repeat") + argument + command)
@@ -740,6 +740,7 @@ def _run_self_tests():
             ("brace range word", "for r in {01..$N}; do echo $r; done\n"),
             ("reserved word as loop variable", "for repeat in x; do echo; done\n"),
             ("positional for loop", "for i do echo $i; done\n"),
+            ("comment before do in while", "while [[ $c -lt 3 ]]  # limit\ndo\n  echo\ndone\n"),
             ("assignment value then argument", "x=a b\n"),
             ("for-alt", "for f (*.txt) do\n  echo $f\ndone\n"),
             ("select", "select opt in a b c; do\n  echo $opt\ndone\n"),
