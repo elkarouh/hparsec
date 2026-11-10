@@ -29,7 +29,7 @@ install-pip:
 selftest:
 	$(PYTHON) -B src/hparsec.py
 	$(PYTHON) -B ady_helpers/ady_tokenizer.py
-	$(PYTHON) -B ady_helpers/ada_tokens.py
+	$(PYTHON) -B ady_helpers/ady_tokens.py
 
 # Example grammars (each asserts its own results)
 examples:

@@ -21,7 +21,7 @@ DEFAULT_SOURCE_DIR = Path(__file__).resolve().parent.parent / "src"
 
 
 def build_grammars():
-    from ada_tokens import Input, NUMBER, PLUS
+    from ady_tokens import Input, NUMBER, PLUS
     from hparsec import ParserState, fw
 
     # expr ::= expr '+' NUMBER | NUMBER

@@ -2,7 +2,7 @@
 
 hparsec itself does not import this module. Code that parses AdaScript imports it:
 
-    from ada_tokens import Input, NUMBER, PLUS
+    from ady_tokens import Input, NUMBER, PLUS
 """
 
 import tokenize as tkn
