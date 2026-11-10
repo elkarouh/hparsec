@@ -174,6 +174,13 @@ def tokenize_zsh(source):
             i += 1
             continue
 
+        # A # right after an opening `((` is arithmetic, not a comment: `(( #$ != 0 ))`.
+        if (ch == "#" and len(tokens) >= 2 and tokens[-1].string == "(" and tokens[-2].string == "("
+                and tokens[-2].end == tokens[-1].start):
+            push("IDENT", "#", start)
+            i += 1
+            continue
+
         if ch == "#":
             j = source.find("\n", i)
             if j == -1:
