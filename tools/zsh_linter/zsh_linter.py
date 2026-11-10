@@ -118,7 +118,9 @@ class ZshTerminals(Terminals):
                   # `grep -v ^N_`, `grep .+%U.+`, `cmd 08:00:00`. Ignored so they are not mistaken for expansions.
                   | ignore(filt(lambda tok: tok.string in ("$", "^", "+", "!", ".", ":"), expect_type_node(TOKEN_TYPES["OP"])))
                   # `test "x$a" != x`: comparison operators are plain words to test(1).
-                  | ignore(filt(lambda tok: tok.string in ("!=", "=="), expect_type_node(TOKEN_TYPES["OP"]))))
+                  | ignore(filt(lambda tok: tok.string in ("!=", "=="), expect_type_node(TOKEN_TYPES["OP"])))
+                  # `]]` closes a test only after `[[`; elsewhere it is a word: `is_a_server ${X} ]]`.
+                  | ignore(filt(lambda tok: tok.string == "]]", expect_type_node(TOKEN_TYPES["OP"]))))
     # assign_word matches `name=value` as a single argument (needed for
     # `alias ls='...'`, `export FOO=bar` inline, etc.)
     # Assignment names are plain identifiers; reserved words such as `end` are only
