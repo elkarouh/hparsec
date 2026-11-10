@@ -342,7 +342,8 @@ class ZshStyleGrammar(Grammar):
     # Compound commands can sit on either side of a pipe: `echo x | while read a; do ...; done`.
     # A compound command may carry redirections: `while ...; done < f | sort`.
     # A bare `export` or `typeset` with no names can start a pipeline: `export | grep ^CC_`.
-    pipeline_item = command | declaration2 | ((grouping | subshell | while_stmt | until_stmt | for_stmt | if_stmt | case_stmt) + redir[:])
+    # A declaration may be followed by redirections: `typeset -p x >/dev/null 2>&1`.
+    pipeline_item = command | (declaration2 + redir[0:]) | ((grouping | subshell | while_stmt | until_stmt | for_stmt | if_stmt | case_stmt) + redir[:])
     
     # Operators may be followed by a line break: `a |\n  b` and `a &&\n  b`.
     # `time` is a reserved word that may prefix a pipeline: `time ./job.ksh args`.
