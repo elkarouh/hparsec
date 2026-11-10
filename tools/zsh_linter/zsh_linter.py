@@ -1,6 +1,6 @@
 """Zsh linter — extended grammar for real-ish zsh scripts.
 
-Design: lint methods are attached to grammar nodes through inner classes.
+Design: check methods are attached to grammar nodes through inner classes.
 Argument-level expansion rules live on the explicit `argument` AST node, so
 commands, assignments, declarations, and case subjects share one rule path.
 """
@@ -204,7 +204,7 @@ def _expansion_issues(node, backticks_only=False):
 
     An expansion is a part of the node itself. A composite word (loose_word, argument_value,
     assign_value, array_literal) is not checked here: its own check reports its words, and
-    lint() reaches it.
+    check() reaches it.
     With backticks_only, report only ZSH003 (used where word splitting does not apply).
     """
     issues = []
@@ -415,7 +415,7 @@ class ZshStyleGrammar(Grammar):
     # Try the braced form before the optional traditional numeric prefix; the
     # latter can otherwise succeed empty and prevent the braced form matching.
     named_fd = lbrace_vis + identifier + rbrace_vis
-    # Keep the target argument in the AST so argument.lint() can inspect it.
+    # Keep the target argument in the AST so argument.check() can inspect it.
     # Only the descriptor and operator are syntactic details.
     # The here-string operator is kept in the AST so its use can be linted (ZSH008).
     here_string_op = filt(lambda tok: tok.string == "<<<", expect_type_node(TOKEN_TYPES["OP"]))
@@ -443,7 +443,7 @@ class ZshStyleGrammar(Grammar):
                        + STATEMENT_SEP[:] + RBRACE)))
     
     # as_node(command) keeps each command a distinct node inside pipelines,
-    # so command.lint fires per stage instead of only on bare commands.
+    # so command.check fires per stage instead of only on bare commands.
     # Compound commands can sit on either side of a pipe: `echo x | while read a; do ...; done`.
     # A compound command may carry redirections: `while ...; done < f | sort`.
     # A bare `export` or `typeset` with no names can start a pipeline: `export | grep ^CC_`.
@@ -635,10 +635,10 @@ class ZshStyleGrammar(Grammar):
 
         def check(self):
             if self.kw_function:
-                return []
+                return self.parts_issues()
             # ksh rule 33. Fixed by writing `function NAME {`; in zsh both forms behave the same.
             return [_issue("ZSH033", "Declare a function with the function keyword: function NAME.",
-                           token_of(self.func_name), node=self)]
+                           token_of(self.func_name), node=self)] + self.parts_issues()
 
         def exit_functions(self):
             names = ZshStyleGrammar.__default__.exit_functions(self)
@@ -677,7 +677,7 @@ class ZshStyleGrammar(Grammar):
             # ksh rule 6: {NAME} with no comma or range is a variable that lost its $.
             if re.match(r"^\{[A-Za-z_][A-Za-z0-9_]*\}$", self.to_source()):
                 issues.append(_issue("ZSH015", "Put $ before the variable name in braces.", token_of(self)))
-            return issues
+            return issues + self.parts_issues()
 
     class grouping:
         """grouping ::= '{' inner_statement* '}'"""
@@ -721,9 +721,9 @@ class ZshStyleGrammar(Grammar):
             # A `*)` arm is the fallback; without one, unexpected input is silently ignored.
             arms = self.case_arm_list + self.case_final_list
             if any(re.search(r"(^|[^\w.])\*\)$", arm.case_body.to_source().split("\n")[0]) for arm in arms):
-                return []
+                return self.parts_issues()
             return [_issue("ZSH007", "case without a `*)` fallback — unexpected input silently ignored.",
-                           token_of(self.argument))]
+                           token_of(self.argument))] + self.parts_issues()
 
     class case_body:
         """case_body ::= case_pattern inner_statement*"""
@@ -765,7 +765,7 @@ class ZshStyleGrammar(Grammar):
     class array_literal:
         """array_literal ::= '(' word* ')'"""
         def check(self):
-            return _expansion_issues(self, backticks_only=True)
+            return _expansion_issues(self, backticks_only=True) + self.parts_issues()
 
         def to_source(self, indent=""):
             return "(" + _join_source(self.parts(), indent) + ")"
@@ -1002,19 +1002,21 @@ class ZshStyleGrammar(Grammar):
             """
             return list(parts(self))
 
-        def lint(self):
-            issues = self.check()
-            for c in children(self):
-                if hasattr(c, "lint"):
-                    issues.extend(c.lint())
+        def check(self):
+            """This node's own findings, then those of its parts, which check themselves the same way."""
+            return self.statement_issues() + self.parts_issues()
+
+        def parts_issues(self):
+            """The findings of every part that checks itself, in source order."""
+            issues = []
+            for part in self.parts():
+                if isinstance(part, Parser):
+                    issues.extend(part.check())
             return issues
 
-        def check(self):
-            """This node's own findings.
-
-            A node that holds statements checks what $? holds when a statement tests it
-            (ksh rules 23 to 25).
-            """
+        def statement_issues(self):
+            """A node that holds statements checks what $? holds when a statement tests it
+            (ksh rules 23 to 25)."""
             if type(self).__name__ in ("Sequence_Parser", "Several_Times", "As_Node"):
                 return []
             issues = []
@@ -1113,27 +1115,27 @@ class ZshStyleGrammar(Grammar):
     class loose_word:
         """loose_word ::= (assign_name | string | var_exp | cmd_subst | ...)+ assign_eq _basic_arg"""
         def check(self):
-            return _expansion_issues(self)
+            return _expansion_issues(self) + self.parts_issues()
 
     class dbl_bracket_word:
         """dbl_bracket_word ::= '[[' shift* ']]'"""
         def check(self):
-            return _expansion_issues(self)
+            return _expansion_issues(self) + self.parts_issues()
 
     class argument_value:
         """argument_value ::= (_basic_arg | ':') ((assign_eq _basic_arg) | glued_part)*"""
         def check(self):
-            return _expansion_issues(self)
+            return _expansion_issues(self) + self.parts_issues()
 
     class assign_value:
         """assign_value ::= (_basic_arg | ':') ((assign_eq _basic_arg) | glued_part)*"""
         def check(self):
-            return _expansion_issues(self, backticks_only=True)
+            return _expansion_issues(self, backticks_only=True) + self.parts_issues()
 
     class argument:
         """argument ::= argument_word | loose_word | _basic_arg"""
         def check(self):
-            return _expansion_issues(self)
+            return _expansion_issues(self) + self.parts_issues()
 
         def variables(self):
             # NAME=value as an argument (alias, env, make) assigns no shell variable.
@@ -1143,7 +1145,7 @@ class ZshStyleGrammar(Grammar):
         """prefix_assignment ::= assign_word"""
         def check(self):
             # `VAR=$x cmd` assigns without word splitting: only backticks apply.
-            return _expansion_issues(self, backticks_only=True)
+            return _expansion_issues(self, backticks_only=True) + self.parts_issues()
 
         def variables(self):
             # VAR=x cmd sets the variable in the command's environment.
@@ -1153,7 +1155,7 @@ class ZshStyleGrammar(Grammar):
     class assignment:
         """assignment ::= assign_target subscript? assign_op (assign_rhs | nothing) assign_word*"""
         def check(self):
-            return _expansion_issues(self, backticks_only=True)
+            return _expansion_issues(self, backticks_only=True) + self.parts_issues()
 
     class assign_name:
         """assign_name ::= IDENT, where the text is a plain identifier"""
@@ -1184,7 +1186,7 @@ class ZshStyleGrammar(Grammar):
                             and token_of(eq).type == TOKEN_TYPES["ASSIGN_EMPTY"]):
                         issues.append(_issue("ZSH018", "Give typeset -i an explicit value, e.g. typeset -i N=0.",
                                              token_of(eq), replace="=0"))
-            return issues
+            return issues + self.parts_issues()
 
         def last_status(self):
             return ("declaration",) if re.search(r"\$\(|`", self.to_source()) else None
@@ -1220,7 +1222,7 @@ class ZshStyleGrammar(Grammar):
             """Rules on one simple command: its name, its arguments and its redirections."""
             name = self.name()
             if name is None:
-                return []
+                return self.parts_issues()
             issues = []
             head = token_of(self.command_head)
             args = self.argument_list
@@ -1269,7 +1271,7 @@ class ZshStyleGrammar(Grammar):
                 elif dup is not None and r.operator() in (">", ">>", ">|") and r.descriptor() in (None, "1"):
                     issues.append(_issue("ZSH035", "Redirect 2>&1 after > file, not before it.", token_of(dup)))
                     break
-            return issues
+            return issues + self.parts_issues()
 
         def variables(self):
             found = ZshStyleGrammar.__default__.variables(self)
@@ -1307,7 +1309,7 @@ class ZshStyleGrammar(Grammar):
                 if stage.name() == "tee" and any(r.descriptor() == "2" and r.operator() == ">&" for r in stage.redir_list):
                     issues.append(_issue("ZSH030", "Redirect stderr before tee (e.g. cmd 2>&1 | tee f), so the file holds it.",
                                          token_of(stage.command_head)))
-            return issues
+            return issues + self.parts_issues()
 
         def tests_status(self):
             stages = [p for p in self.parts() if p is not self.kw_time]
@@ -1330,7 +1332,7 @@ class ZshStyleGrammar(Grammar):
                     # ksh rule 32.
                     issues.append(_issue("ZSH032", "Combine the tests into one [[ ... ]] with && or ||.",
                                          token_of(right)))
-            return issues
+            return issues + self.parts_issues()
 
         def tests_status(self):
             return self.parts()[0].tests_status()
@@ -1342,7 +1344,7 @@ class ZshStyleGrammar(Grammar):
     class command_head:
         """command_head ::= identifier | colon | backtick | cmd_subst | arith_exp | var_exp | string | number"""
         def check(self):
-            return _expansion_issues(self)
+            return _expansion_issues(self) + self.parts_issues()
 
     class test_construct:
         """test_construct ::= lbracket (~rbracket shift)* rbracket"""
@@ -1360,7 +1362,7 @@ class ZshStyleGrammar(Grammar):
             )]
             issues.extend(_expansion_issues(self))
             issues.extend(_test_issues(self.words(), single=True))
-            return issues
+            return issues + self.parts_issues()
 
         def to_source(self, indent=""):
             if _fixing(self, "ZSH004"):
@@ -1382,14 +1384,14 @@ class ZshStyleGrammar(Grammar):
         def check(self):
             if self.here_string_op:
                 return [_issue("ZSH008", "Do not use the here-string '<<<'; use a pipe or a here-document.",
-                               token_of(self.here_string_op))]
-            return []
+                               token_of(self.here_string_op))] + self.parts_issues()
+            return self.parts_issues()
 
     class dbl_test_construct:
         """dbl_test_construct ::= dlbracket (~drbracket shift)* drbracket"""
         # [[ ... ]] performs no word splitting, so ZSH002 does not apply.
         def check(self):
-            return _test_issues([token_of(p) for p in self.shift_list], single=False)
+            return _test_issues([token_of(p) for p in self.shift_list], single=False) + self.parts_issues()
 
     class script:
         """script ::= statement*"""
@@ -1403,7 +1405,7 @@ class ZshStyleGrammar(Grammar):
 # ============================================================
 # Style rules from the ksh checkers (docs/ksh-style-rules.md)
 # ============================================================
-# The grammar's lint methods above call these helpers with their own node. A finding
+# The grammar's check methods above call these helpers with their own node. A finding
 # that names a node in "node" can be fixed: with --fix, that node's to_source asks
 # _fixing() and writes the fixed form. A finding with "replace" fixes its one token.
 
@@ -1869,7 +1871,7 @@ def format_zsh_code(source, fix=False):
         return ast.to_source()
     fixed = {rule for rule, _how in AUTO_FIXES}
     _FIX_TOKENS.update(_token_fixes(tokens))
-    for issue in ast.lint():
+    for issue in ast.check():
         if issue["rule"] not in fixed:
             continue
         if "node" in issue:
@@ -1887,7 +1889,7 @@ def lint_zsh_code(source, filename=""):
     ast, tokens = _parse(source)
     global _EXIT_FUNCTIONS
     _EXIT_FUNCTIONS = ast.exit_functions()
-    issues = (ast.lint() + _bare_variable_issues(tokens) + _word_issues(tokens)
+    issues = (ast.check() + _bare_variable_issues(tokens) + _word_issues(tokens)
               + _whitespace_issues(source, tokens) + _variable_issues(ast, filename))
     # A finding without a fix carries node=None; drop the keys main() does not print.
     for issue in issues:

@@ -19,8 +19,8 @@ ZSH003, ZSH004 and ZSH008 cover ksh rules 49 (backticks), 1 (`[ ]` instead of `[
 
 The rules ported from the ksh checker scripts are lint methods on the grammar's nodes, so they read the parse
 tree: `command` checks the command name and its arguments, `pipeline` its stages, `test_construct` and
-`dbl_test_construct` the words of a test, and so on. A node's `check()` returns its own findings, and
-`__default__.lint()` visits the children. The rules on single words (ZSH016, ZSH022, ZSH023, ZSH029, ZSH034,
+`dbl_test_construct` the words of a test, and so on. A node's `check()` returns its own findings and those of its
+parts, which check themselves the same way. The rules on single words (ZSH016, ZSH022, ZSH023, ZSH029, ZSH034,
 ZSH038, ZSH047 to ZSH049) read the tokens, like ZSH009. Trailing blanks and tabs (ZSH021, ZSH044) read the source
 lines, because the tree has no whitespace; here-document bodies are skipped.
 
