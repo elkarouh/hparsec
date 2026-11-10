@@ -214,13 +214,13 @@ class LispGrammar(Grammar):
     class expression:
         """expression ::= symbol | list_form"""
         def evaluate(self, env):
-            return self.parts()[0].evaluate(env)
+            return self.nodes[0].evaluate(env)
 
         def datum(self):
-            return self.parts()[0].datum()
+            return self.nodes[0].datum()
 
         def symbol_name(self):
-            return self.parts()[0].symbol_name()
+            return self.nodes[0].symbol_name()
 
     class symbol:
         """symbol ::= SKIP sym_char+; the characters are a number when they form one, else a name"""
