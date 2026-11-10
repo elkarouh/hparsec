@@ -566,6 +566,19 @@ if __name__ == "__main__":
         for issue in _double_test
     ), "[[ ]] expansion exemption regressed"
 
+    # Here-strings: an unquoted word is a (mild) ZSH002 warning; a quoted one is not.
+    _herestring_bare = lint_zsh_code("cat <<< $line\n")
+    assert any(
+        issue["rule"] == "ZSH002"
+        for issue in _herestring_bare
+    ), "unquoted here-string word not linted"
+
+    _herestring_quoted = lint_zsh_code('cat <<< "$line"\n')
+    assert not any(
+        issue["rule"] == "ZSH002"
+        for issue in _herestring_quoted
+    ), "quoted here-string word wrongly linted"
+
     test_scripts = [
         ("While loop", "while [ $count -lt 5 ]; do\n  echo $count\n  count=$((count + 1))\ndone\n"),
         ("blank line in while", "while true; do\n  echo a\n\n  echo b\n\ndone\n"),
