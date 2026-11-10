@@ -30,7 +30,7 @@ script with comments blanked out, and report with the same `file:line:col: RULE 
 | ZSH017 | numeric comparison with `<`, `>`, `=` or `!=`; use `-lt` and the like |
 | ZSH018 | `typeset -i N=` with no value |
 | ZSH019 | `>>&`; use `>&` |
-| ZSH020 | `wc | awk` with nothing between them |
+| ZSH020 | `wc \| awk` with nothing between them |
 | ZSH021 | trailing blanks |
 | ZSH022 | braces around `$0`, `$1`, `$?`, `$@`, `$*` and the like |
 | ZSH023 | `$*`; use `$@` |
@@ -50,7 +50,7 @@ script with comments blanked out, and report with the same `file:line:col: RULE 
 | ZSH043 | unquoted first argument of `tr` |
 | ZSH044 | tab character |
 | ZSH045 | unquoted file mask in `cfmu_ftps_list` or `cfmu_ftps_get` |
-| ZSH046 | `bmw VAR | awk`; use `bmw -V VAR` |
+| ZSH046 | `bmw VAR \| awk`; use `bmw -V VAR` |
 | ZSH047 | `.LATEST` alias; use `.LATEST_GOOD` |
 | ZSH048 | `CFMU_OS` |
 
