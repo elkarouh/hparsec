@@ -5,6 +5,7 @@ Argument-level expansion rules live on the explicit `argument` AST node, so
 commands, assignments, declarations, and case subjects share one rule path.
 """
 
+import re
 import sys
 
 from hparsec import (
@@ -29,6 +30,7 @@ from zsh_tokenizer import tokenize_zsh, TOKEN_TYPES, _RESERVED
 # lint findings that have no entry here are only reported.
 AUTO_FIXES = (
     ("ZSH002", "quote_assignment_expansion"),
+    ("ZSH009", "braces_for_variables"),
 )
 
 # ============================================================
@@ -1417,6 +1419,51 @@ def apply_auto_fixes(source):
     return source
 
 
+_PLAIN_NAME = re.compile(r"^\$[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def _bare_variable_tokens(tokens):
+    """Indexes of $name tokens that should be written ${name}.
+
+    $1, $#, $? and the like are not names, so they are not included. A name followed
+    by a subscript ($a[2]) is not included either, because ${a}[2] means something else.
+    """
+    found = []
+    for i, tok in enumerate(tokens):
+        if tok.type != TOKEN_TYPES["VAR_EXP"] or not _PLAIN_NAME.match(tok.string):
+            continue
+        nxt = tokens[i + 1] if i + 1 < len(tokens) else None
+        if nxt is not None and nxt.glued and nxt.string.startswith("["):
+            continue
+        found.append(i)
+    return found
+
+
+def _bare_variable_issues(tokens):
+    """ZSH009 findings for each bare $name token."""
+    return [
+        {
+            "rule": "ZSH009",
+            "message": f"Write '${{{tokens[i].string[1:]}}}' instead of '{tokens[i].string}'.",
+            "token": tokens[i],
+        }
+        for i in _bare_variable_tokens(tokens)
+    ]
+
+
+def braces_for_variables(source):
+    """Rewrite $name as ${name} for each bare variable token that ZSH009 reports."""
+    tokens = tokenize_zsh(source)
+    spans = [
+        (_offset_of(source, tokens[i].start), _offset_of(source, tokens[i].end),
+         "${" + tokens[i].string[1:] + "}")
+        for i in _bare_variable_tokens(tokens)
+    ]
+    for start, end, text in reversed(spans):
+        source = source[:start] + text + source[end:]
+    return source
+
+
 def format_zsh_code(source):
     """Return the script rendered from its parse tree (see each rule's to_source)."""
     ParserState.reset()
@@ -1457,7 +1504,7 @@ def lint_zsh_code(source):
         tok = stream.tokens[index]
         raise SyntaxError(f"Unexpected token {tok.string!r} at position {tok.start}")
 
-    return ast.lint()
+    return ast.lint() + _bare_variable_issues(tokens)
 
 
 # ============================================================
