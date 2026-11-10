@@ -125,6 +125,8 @@ def tokenize_zsh(source):
     def line_text(ln):
         return lines[ln - 1] if 0 < ln <= len(lines) else ""
 
+    brace_depth = [0]
+
     def push(kind, value, start_pos):
         nonlocal col, line
         end = (start_pos[0], start_pos[1] + len(value))
@@ -132,6 +134,17 @@ def tokenize_zsh(source):
         # `( a = b )]]` closes a double-bracket test: the `]]` is not a glued word part.
         if glued and value == "]]" and tokens[-1].string == ")" and tokens[-1].type == TOKEN_TYPES["OP"]:
             glued = False
+        # `{ cmd; exit ${RC}}` closes an open group: a `}` right after a ${...} expansion is
+        # a closer only while a `{` group is open; otherwise it is literal text (`echo ${A}}`).
+        if glued and value == "}" and tokens[-1].type == TOKEN_TYPES["VAR_EXP"] and brace_depth[0] > 0:
+            glued = False
+        if kind in ("IDENT", "OP") and not glued:
+            if value == "{":
+                brace_depth[0] += 1
+            elif value == "}":
+                brace_depth[0] = max(0, brace_depth[0] - 1)
+        elif kind in ("IDENT", "OP") and glued and value == "}" and tokens and tokens[-1].type == TOKEN_TYPES["VAR_EXP"] and brace_depth[0] > 0:
+            brace_depth[0] -= 1
         tokens.append(Token(TOKEN_TYPES[kind], value, start_pos, end, line_text(start_pos[0]), glued))
         nl_count = value.count("\n")
         if nl_count:
