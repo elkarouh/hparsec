@@ -80,6 +80,22 @@ def _case_keyword(source, j):
     return 1 if word == "case" else -1
 
 
+def _first_odd_quote_line(source):
+    """Line number of the first non-comment line with an odd count of quote characters.
+
+    A hint for an unterminated quote: the scan of quotes goes wrong at the line
+    that holds the unbalanced one. A legitimate multi-line string can also show here.
+    """
+    for number, line in enumerate(source.split("\n"), 1):
+        if line.lstrip().startswith("#"):
+            continue
+        doubles = sum(1 for i, c in enumerate(line) if c == '"' and (i == 0 or line[i - 1] != "\\"))
+        singles = line.count("'")
+        if doubles % 2 or singles % 2:
+            return number
+    return "unknown"
+
+
 def _skip_paren_group(source, j):
     """Return the index just past the parenthesized group that starts at source[j] == '('.
 
@@ -373,6 +389,7 @@ def tokenize_zsh(source):
         if ch in ('"', "'"):
             q = ch
             j = i + 1
+            closed = False
             while j < n:
                 if source[j] == "\\" and q == '"' and j + 1 < n:
                     j += 2
@@ -383,8 +400,13 @@ def tokenize_zsh(source):
                     continue
                 if source[j] == q:
                     j += 1
+                    closed = True
                     break
                 j += 1
+            if not closed:
+                # Report the quote that never closes, where it opens, not at end of file.
+                raise SyntaxError(f"unterminated {q} quote near {start}; "
+                                  f"the first line with an odd number of quotes is {_first_odd_quote_line(source)}")
             push("STRING", source[i:j], start)
             i = j
             continue
