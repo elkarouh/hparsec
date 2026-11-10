@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Benchmark hparsec left recursion against an equivalent repetition grammar.
 
-Run from the directory containing hek_parsec.py and hek_tokenize.py, or pass
---source-dir to point at them.  The benchmark excludes tokenization from the
-reported parse time and checks that every expression token was consumed.
+By default the library is loaded from the repository's src/ directory; pass
+--source-dir to point at another copy of hek_parsec.py and hek_tokenize.py.
+
+The benchmark excludes tokenization from the reported parse time and checks
+that every expression token was consumed.
 """
 from __future__ import annotations
 
@@ -14,6 +16,8 @@ import sys
 import time
 import tracemalloc
 from pathlib import Path
+
+DEFAULT_SOURCE_DIR = Path(__file__).resolve().parent.parent / "src"
 
 
 def build_grammars():
@@ -69,7 +73,7 @@ def one_run(parser, n, Input, ParserState, measure_memory=False):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--source-dir", default=".", help="directory containing hparsec modules")
+    ap.add_argument("--source-dir", default=str(DEFAULT_SOURCE_DIR), help="directory containing hparsec modules")
     ap.add_argument("--sizes", nargs="+", type=int,
                     default=[100, 1000, 5000, 10000])
     ap.add_argument("--repeat", type=int, default=3)

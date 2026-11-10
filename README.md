@@ -9,13 +9,72 @@ can be given output methods via the `@method` decorator.
 
 ---
 
-## Files
+## Repository layout
 
-| File | Purpose |
+```
+hparsec/
+├── src/                      # the library (standard library only)
+│   ├── hek_parsec.py         # core combinators and parse machinery
+│   ├── hek_tokenize.py       # Python-tokenize based Tokenizer used by Input()
+│   └── hek_helpers.py        # helpers shared by translator backends
+├── examples/
+│   ├── expression_parser.py      # expression grammar written with repetition
+│   ├── expression_parser_lr.py   # same grammar written with left recursion
+│   └── zsh_linter/               # a larger application: a zsh linter
+│       ├── zsh_tokenizer.py      # hand-written zsh scanner
+│       ├── zsh_linter.py         # grammar + lint rules, with inline test cases
+│       ├── corpus_test.py        # runs the linter over a corpus of real scripts
+│       └── corpus/               # oh-my-zsh and zsh-syntax-highlighting samples
+├── benchmarks/
+│   ├── benchmark_hparsec.py  # left recursion vs. repetition timing/memory
+│   └── profile_hparsec.py    # cProfile of a left-recursive parse
+├── tests/
+│   └── test_scripts.py       # unittest wrapper around every self-test above
+├── pyproject.toml
+└── Makefile
+```
+
+| Module | Purpose |
 |------|---------|
-| `hek_parsec.py` | Core combinators: `Parser`, `ParserState`, `SymbolTable`, `forward`, `method`, `filt`, `fmap`, `ignore`, `expect`, `literal`, … |
-| `hek_tokenize.py` | `Tokenizer` — wraps Python's `tokenize` module; handles tick-attributes, range operators, bash-isms, f-string interpolation, `RichNL` comment bundling |
-| `hek_helpers.py` | Shared helpers: indentation (`_ind`), `RichNL` extraction, block statement utilities |
+| `hek_parsec` | Core combinators: `Parser`, `ParserState`, `SymbolTable`, `Grammar`, `Terminals`, `forward`/`fw`, `method`, `filt`, `fmap`, `ignore`, `expect`, `literal`, … |
+| `hek_tokenize` | `Tokenizer` — wraps Python's `tokenize` module; handles tick-attributes, range operators, bash-isms, f-string interpolation, `RichNL` comment bundling |
+| `hek_helpers` | Shared helpers: indentation (`_ind`), `RichNL` extraction, block statement utilities |
+
+The modules keep their flat `hek_*` names, so existing code that does
+`from hek_parsec import ...` keeps working unchanged.
+
+---
+
+## Installation
+
+hparsec has no third-party dependencies. Either install it (editable, so
+changes in `src/` are picked up immediately):
+
+```sh
+pip install -e .
+```
+
+or just put `src/` on the path:
+
+```sh
+export PYTHONPATH=/path/to/hparsec/src
+```
+
+Python 3.10 or newer is required.
+
+---
+
+## Running the tests
+
+```sh
+make test                          # all self-tests, examples, zsh linter and corpus
+python -m unittest discover tests  # the same checks as a unittest suite
+```
+
+Individual targets: `make selftest` (library modules), `make examples`,
+`make zsh`, `make corpus` (`make verbose` for per-file detail), plus
+`make bench` and `make profile`. The Makefile sets `PYTHONPATH=src` itself, so
+no install is needed to run them.
 
 ---
 
@@ -76,7 +135,7 @@ def to_py(self, indent=0):
     ...
 ```
 
-### `forward(name)`
+### `forward(name)` / `fw(name)`
 Creates a lazy forward reference for mutually recursive grammar rules.
 The name is resolved in the calling module's namespace at parse time:
 
@@ -102,12 +161,42 @@ term = NUMBER
 # "10 - 4 - 2" parses left-associatively as ((10 - 4) - 2)
 ```
 
-### `filt(predicate, parser)`
-Wraps a parser so it only succeeds when the matched token satisfies a
-predicate. Used for context-sensitive matching:
+### `Grammar` and `Terminals` (declarative style)
+Subclassing `Grammar` lets rules reference each other in any order without
+`forward()` declarations, and lets AST methods live next to the rules as
+inner classes (or as `<action>_<rule>` / `<rule>_<action>` functions).
+`Terminals` turns string attributes into `literal()` parsers; UPPERCASE
+names are wrapped in `ignore()` so they never appear in the AST. Both export
+their rules to the defining module's globals. Any token list works as input,
+so you can bring your own tokenizer (see `examples/expression_parser.py`):
 
 ```python
-keyword = filt(lambda tok: tok.string in KEYWORDS, IDENTIFIER)
+number = expect_type(NUMBER_TOKEN_TYPE)   # whatever your tokenizer emits
+
+class Terminals(Terminals):
+    LPAREN = "("                      # ignored in the AST
+    RPAREN = ")"
+    add_op = literal("+") | literal("-")   # kept in the AST
+
+class ExpressionGrammar(Grammar):
+    expression = additive
+    additive   = (additive + add_op + primary) | primary
+    primary    = number | LPAREN + expression + RPAREN
+
+    class additive:
+        def evaluate(self):
+            ...
+
+ast, stream = expression.parse(tokenize("1 + (2 - 3)"))
+```
+
+### `filt(predicate, parser)`
+Wraps a parser so it only succeeds when the matched value satisfies a
+predicate (the predicate receives the matched node's value, e.g. the token
+string). Used for context-sensitive matching:
+
+```python
+keyword = filt(lambda value: value in KEYWORDS, IDENTIFIER)
 ```
 
 ### `fmap(func, parser)`
@@ -203,3 +292,27 @@ These are reversed by the backend's output methods on the relevant AST nodes.
 - **Error reporting**: the tokenizer tracks the farthest position reached
   and the set of expected tokens at that point, producing useful parse-error
   messages even on complex failures.
+
+---
+
+## Examples
+
+- `examples/expression_parser.py` and `examples/expression_parser_lr.py`
+  define the same small expression language (arithmetic, comparisons,
+  `and`/`or`/`not`, function calls) with a custom regex tokenizer. The first
+  uses repetition (`A + (op + A)[:]`), the second direct left recursion
+  (`A = (A + op + B) | B`). Running either prints its parse and evaluation
+  tests.
+- `examples/zsh_linter/` is a full zsh grammar with lint rules attached to
+  AST nodes. `zsh_linter.py` runs its inline cases; `corpus_test.py` lints
+  every script in `corpus/` and reports any parse failure with context.
+
+## Benchmarks
+
+```sh
+python benchmarks/benchmark_hparsec.py --sizes 100 1000 5000
+python benchmarks/profile_hparsec.py --terms 3000
+```
+
+Both load the library from `src/` by default; pass `--source-dir` to compare
+against another copy.
