@@ -231,11 +231,12 @@ class ZshStyleGrammar(Grammar):
         | number
     )
 
+    # Redirections and arguments may interleave: `cat >&2 <<EOF` has a redirect
+    # before the heredoc word. redir is tried first so `2>&1` is not read as the word `2`.
     command = (
         prefix_assignment[:]
         + command_head
-        + argument[:]
-        + redir[:]
+        + (redir | argument)[:]
     )    
     ############################################ NEW
 
@@ -711,6 +712,8 @@ def _run_self_tests():
             ("subshell before pipe", "( echo a ) | tee\n"),
             ("caret word argument", "grep -v ^N_.*$ file\n"),
             ("export array element", "export NAME[$i]=$INSTANCE\n"),
+            ("heredoc after redirect", "cat >&2 <<EOF\nhi\nEOF\n"),
+            ("redirect between arguments", "cmd 2>&1 arg\n"),
             ("for-alt", "for f (*.txt) do\n  echo $f\ndone\n"),
             ("select", "select opt in a b c; do\n  echo $opt\ndone\n"),
             ("heredoc", "cat <<EOF\nhello\nEOF\n"),
