@@ -1130,6 +1130,15 @@ def expect_re(regex):
     return parser
 
 
+class Kept(str):
+    """Marks a terminal string that must stay in the AST.
+
+    Uppercase terminals are ignored by default. Assigning ``Kept("&&")`` keeps
+    the token, for operators whose text carries meaning and cannot be rebuilt
+    from the tree shape.
+    """
+
+
 class TerminalsNamespace(dict):
     """Namespace mapping for Terminals class body execution.
 
@@ -1141,7 +1150,9 @@ class TerminalsNamespace(dict):
 
     def __setitem__(self, key, value):
         if key.isupper() and not key.startswith('_'):
-            if isinstance(value, str):
+            if isinstance(value, Kept):
+                value = literal(str(value))
+            elif isinstance(value, str):
                 value = ignore(literal(value))
             elif hasattr(value, 'parse') and getattr(value, '__name__', '') != 'ignore_parser':
                 value = ignore(value)
@@ -1363,6 +1374,7 @@ __all__ = [
     "children",
     "token_of",
     "walk",
+    "Kept",
     "Cut",
     "ParserMeta",
     "Grammar",

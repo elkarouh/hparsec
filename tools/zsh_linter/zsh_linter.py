@@ -8,6 +8,7 @@ commands, assignments, declarations, and case subjects share one rule path.
 import sys
 
 from hparsec import (
+    Kept,
     Grammar,
     ParserState,
     Terminals,
@@ -31,22 +32,22 @@ from zsh_tokenizer import tokenize_zsh, TOKEN_TYPES, _RESERVED
 class ZshTerminals(Terminals):
     ASSIGN = "="
     SEMICOL = ";"
-    PIPE = "|"
-    PIPE_AMP = "|&"
+    PIPE = Kept("|")
+    PIPE_AMP = Kept("|&")
     LPAREN = "("
     RPAREN = ")"
     LBRACE = "{"
     RBRACE = "}"
-    AND_AND = "&&"
-    OR_OR = "||"
-    DSEMI = ";;"
-    SEMI_AMP = ";&"
-    SEMI_BAR = ";|"
-    PLUSEQUAL = "+="
-    MINEQUAL = "-="
-    AMP = "&"
-    AMP_PIPE = "&|"
-    AMP_BANG = "&!"
+    AND_AND = Kept("&&")
+    OR_OR = Kept("||")
+    DSEMI = Kept(";;")
+    SEMI_AMP = Kept(";&")
+    SEMI_BAR = Kept(";|")
+    PLUSEQUAL = Kept("+=")
+    MINEQUAL = Kept("-=")
+    AMP = Kept("&")
+    AMP_PIPE = Kept("&|")
+    AMP_BANG = Kept("&!")
     ASSIGN_OP = ASSIGN | PLUSEQUAL | MINEQUAL
     
     # Visible punctuation (appear in the AST)
@@ -320,7 +321,7 @@ class ZshStyleGrammar(Grammar):
     # The here-string operator is kept in the AST so its use can be linted (ZSH008).
     here_string_op = filt(lambda tok: tok.string == "<<<", expect_type_node(TOKEN_TYPES["OP"]))
     # A redirect target may continue with glued word parts: `>${DIR}/x.log` is one word.
-    redir = (named_fd | ignore(number[0:1])) + (here_string_op | ignore(redir_op)) + argument + ZshTerminals.glued_part[0:]
+    redir = (named_fd | ignore(number[0:1])) + (here_string_op | redir_op) + argument + ZshTerminals.glued_part[0:]
     # Zsh permits redirection-only commands, e.g. `{myfd}</dev/null`.
     redir_command = redir[1:]
 
