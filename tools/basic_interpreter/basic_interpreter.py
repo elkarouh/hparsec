@@ -6,8 +6,8 @@ and ' comments. Variables are global; a function body sees its parameters and th
 global variables.
 
 Design: every grammar rule is a class whose docstring gives its EBNF rule. A rule's
-run() (statements) or evaluate() (expressions) handles only that node and calls the
-methods of its parts, the same way zsh_linter's check() and to_source() do.
+run() (statements) or evaluate() (expressions) handles only that node and reads its
+children from self.nodes (self.node is the first one).
 
 Usage:
     python3 basic_interpreter.py program.bas
@@ -20,12 +20,10 @@ from hparsec import (
     Grammar,
     ParserState,
     Terminals,
-    as_node,
     expect_type,
     literal,
     nothing,
     SymbolTable,
-    parts,
 )
 
 KEYWORDS = {"LET", "PRINT", "DEF", "FN"}
@@ -164,6 +162,17 @@ def _arithmetic(left, op, right):
     raise BasicError(f"unknown operator {op!r}")
 
 
+def _left_to_right(node, env):
+    """Evaluate `operand (operator operand)*`: nodes[0] is the first operand, and the
+    repetition after it, when there is one, holds the (operator, operand) pairs."""
+    value = node.node.evaluate(env)
+    for more in node.nodes[1:]:
+        for pair in more.nodes:
+            operator, operand = pair.nodes
+            value = _arithmetic(value, operator.node, operand.evaluate(env))
+    return value
+
+
 # ============================================================
 # Terminals
 # ============================================================
@@ -195,108 +204,103 @@ class BasicTerminals(Terminals):
 # ============================================================
 
 class BasicGrammar(Grammar):
-    class __default__:
-        """Methods every node has."""
-        def parts(self):
-            """The node's parts in source order (see hparsec.parts)."""
-            return list(parts(self))
-
     program = line[:]
     line = (statement | nothing) + NEWLINE
-    statement = as_node(let_stmt | print_stmt | def_stmt)
+    statement = let_stmt | print_stmt | def_stmt
     let_stmt = LET + identifier + EQ + expression
-    print_stmt = PRINT + ((expression + (COMMA + expression)[:]) | nothing)
-    def_stmt = DEF + FN + identifier + LPAREN + ((identifier + (COMMA + identifier)[:]) | nothing) + RPAREN + EQ + expression
+    print_stmt = PRINT + (arguments | nothing)
+    def_stmt = DEF + FN + identifier + LPAREN + (parameters | nothing) + RPAREN + EQ + expression
+    parameters = identifier + (COMMA + identifier)[:]
+    arguments = expression + (COMMA + expression)[:]
     expression = term + (add_op + term)[:]
     term = factor + (mul_op + factor)[:]
-    factor = as_node((unary_op + factor) | primary)
-    primary = as_node(number | string | fn_call | identifier | group)
+    factor = negation | primary
+    negation = unary_op + factor
+    primary = number | string | fn_call | identifier | group
     group = LPAREN + expression + RPAREN
-    fn_call = FN + identifier + LPAREN + ((expression + (COMMA + expression)[:]) | nothing) + RPAREN
+    fn_call = FN + identifier + LPAREN + (arguments | nothing) + RPAREN
+
+    # statement, factor and primary are choices: the node is the alternative that
+    # matched, so they need no methods of their own.
 
     class program:
         """program ::= line*"""
         def run(self, env):
-            for line in self.line_list:
+            for line in self.nodes:
                 line.run(env)
 
     class line:
         """line ::= (statement | nothing) NEWLINE"""
         def run(self, env):
-            if self.statement is not None:
-                self.statement.run(env)
-
-    class statement:
-        """statement ::= let_stmt | print_stmt | def_stmt"""
-        def run(self, env):
-            self.parts()[0].run(env)
+            for statement in self.nodes:
+                statement.run(env)
 
     class let_stmt:
         """let_stmt ::= LET identifier EQ expression"""
         def run(self, env):
-            env.set(self.identifier.node, self.expression.evaluate(env))
+            name, value = self.nodes
+            env.set(name.node, value.evaluate(env))
 
     class print_stmt:
-        """print_stmt ::= PRINT ((expression (COMMA expression)*) | nothing)"""
+        """print_stmt ::= PRINT (arguments | nothing)"""
         def run(self, env):
-            values = [item.evaluate(env) for item in self.expression_list]
+            values = [value for arguments in self.nodes for value in arguments.values(env)]
             env.output.append(" ".join(_text(value) for value in values))
 
     class def_stmt:
-        """def_stmt ::= DEF FN identifier LPAREN ((identifier (COMMA identifier)*) | nothing) RPAREN EQ expression"""
+        """def_stmt ::= DEF FN identifier LPAREN (parameters | nothing) RPAREN EQ expression"""
         def run(self, env):
-            name, *params = [part.node for part in self.identifier_list]
-            env.define(name, params, self.expression)
+            name, *parameters, body = self.nodes
+            env.define(name.node, [param for part in parameters for param in part.names()], body)
+
+    class parameters:
+        """parameters ::= identifier (COMMA identifier)*"""
+        def names(self):
+            return [self.node.node] + [item.node.node for more in self.nodes[1:] for item in more.nodes]
+
+    class arguments:
+        """arguments ::= expression (COMMA expression)*"""
+        def values(self, env):
+            first = self.node.evaluate(env)
+            return [first] + [item.node.evaluate(env) for more in self.nodes[1:] for item in more.nodes]
 
     class expression:
         """expression ::= term (add_op term)*"""
         def evaluate(self, env):
-            parts = self.parts()
-            value = parts[0].evaluate(env)
-            for i in range(1, len(parts), 2):
-                value = _arithmetic(value, parts[i].node, parts[i + 1].evaluate(env))
-            return value
+            return _left_to_right(self, env)
 
     class term:
         """term ::= factor (mul_op factor)*"""
         def evaluate(self, env):
-            parts = self.parts()
-            value = parts[0].evaluate(env)
-            for i in range(1, len(parts), 2):
-                value = _arithmetic(value, parts[i].node, parts[i + 1].evaluate(env))
-            return value
+            return _left_to_right(self, env)
 
-    class factor:
-        """factor ::= (unary_op factor) | primary"""
+    class negation:
+        """negation ::= unary_op factor"""
         def evaluate(self, env):
-            parts = self.parts()
-            if len(parts) == 2:
-                return -parts[1].evaluate(env)
-            return parts[0].evaluate(env)
+            return -self.nodes[1].evaluate(env)
 
-    class primary:
-        """primary ::= number | string | fn_call | identifier | group"""
+    class number:
         def evaluate(self, env):
-            if self.number is not None:
-                return _number(self.number.node)
-            if self.string is not None:
-                return self.string.node[1:-1]
-            if self.fn_call is not None:
-                return self.fn_call.evaluate(env)
-            if self.identifier is not None:
-                return env.get(self.identifier.node)
-            return self.group.evaluate(env)
+            return _number(self.node)
+
+    class string:
+        def evaluate(self, env):
+            return self.node[1:-1]
+
+    class identifier:
+        def evaluate(self, env):
+            return env.get(self.node)
 
     class group:
         """group ::= LPAREN expression RPAREN"""
         def evaluate(self, env):
-            return self.expression.evaluate(env)
+            return self.node.evaluate(env)
 
     class fn_call:
-        """fn_call ::= FN identifier LPAREN ((expression (COMMA expression)*) | nothing) RPAREN"""
+        """fn_call ::= FN identifier LPAREN (arguments | nothing) RPAREN"""
         def evaluate(self, env):
-            args = [item.evaluate(env) for item in self.expression_list]
-            return env.call(self.identifier.node, args)
+            name, *arguments = self.nodes
+            return env.call(name.node, [value for part in arguments for value in part.values(env)])
 
 
 # ============================================================

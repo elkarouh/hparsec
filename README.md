@@ -130,6 +130,32 @@ for node in result[0].nodes:
 
 ## Key concepts
 
+### Reading the tree
+Every node has `nodes`, its children, and `node`, the first of them (`nodes[0]`).
+An ignored token leaves no child, so `nodes` holds only what a method needs:
+
+| Rule | What the node holds |
+|------|---------------------|
+| `A + B` | `nodes == [a, b]` |
+| `IGNORED + A` | `nodes == [a]` |
+| `A \| B` | no node of its own: the result is the node of the alternative that matched, so a choice needs no method |
+| `A[1:]` | `nodes == [a, a, ...]` |
+| `A[:]` | the same, and no node at all when nothing matched |
+| `A + (SEP + A)[:]` | `nodes == [a]` or `[a, more]`; each item of `more.nodes` holds one `A` as `item.node` |
+
+A method is written with `self.nodes[i]`, `self.node` and `for x in self.nodes`:
+
+```python
+names = IDENT + (SEP + IDENT)[:]
+
+@method(names)
+def to_py(self):
+    return [self.node.to_py()] + [item.node.to_py() for more in self.nodes[1:] for item in more.nodes]
+```
+
+The self-tests at the end of `src/hparsec.py` show each case, and
+`tools/basic_interpreter` and `tools/lisp_interpreter` are written this way.
+
 ### `method(parser_class)`
 Decorator that attaches an output method to a parser class after the grammar
 has been defined. Used to add `to_py()`, `to_nim()`, or any backend-specific
@@ -196,30 +222,9 @@ class ExpressionGrammar(Grammar):
 ast, stream = expression.parse(tokenize("1 + (2 - 3)"))
 ```
 
-A node reaches its parts by rule name: `self.if_condition` is its part of rule
-`if_condition`, or `None` when the rule matched nothing, and `self.elif_branch_list`
-is every such part in source order. Anonymous combinator nodes are looked through,
-and a named rule always stays its own node, even on the left of `+`, so a handler
-sees the parts its rule names, as an EBNF reading would:
-
-```python
-class if_stmt:
-    def to_source(self):
-        output = "if " + self.if_condition.to_source() + "; then\n"
-        for statement in self.inner_statement_list:
-            output += statement.to_source() + "\n"
-        for branch in self.elif_branch_list:
-            output += branch.to_source()
-        if self.else_branch:
-            output += self.else_branch.to_source()
-        return output + "fi"
-```
-
-`parts(node)` is the function behind that access. It yields the node's children in source
-order, looking through the anonymous combinator nodes, so `parts(node)` gives the same
-objects as `node.<rule>` and `node.<rule>_list` do. A node built by `as_node()` marks a
-boundary: the node it wraps is one part, even when that node is an anonymous sequence.
-`children(node)` is the same list without the looking-through.
+A named rule always stays its own node, even on the left of `+`, so a handler reads
+its children from `self.nodes` in the order the rule lists them. `children(node)` is
+the same list without the `None` entries.
 
 ### `filt(predicate, parser)`
 Wraps a parser so it only succeeds when the matched value satisfies a

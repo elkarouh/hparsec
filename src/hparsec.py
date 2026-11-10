@@ -26,17 +26,30 @@ Quick example (the token names and Input() come from ady_helpers/ady_tokens.py):
     ast, rest = keyvalue.parse(Input("x=789;"))
     print(ast.to_py())  # x:789
 
-IMPORTANT — sequence flattening
--------------------------------
-`A + B` where A is already a Sequence_Parser produces a NEW Sequence_Parser
-whose `.parsers` is `A.parsers + [B]` — i.e. A's children are hoisted into
-the parent, and the intermediate `A` node does NOT appear in the resulting
-AST. Likewise `A | B` flattens when A is a Choice_Parser.
+Reading the tree
+----------------
+Every node has `nodes`, its children, and `node`, the first of them (`nodes[0]`).
+An ignored token leaves no child, so `nodes` holds only what a method needs:
 
-Consequence: if you need an intermediate rule to remain visible in the AST,
-wrap it with `as_node()` before composing it into a parent. The wrapper
-retains the complete result as one child and therefore prevents sequence or
-choice flattening from erasing that grammar boundary.
+    A + B              nodes == [a, b]
+    IGNORED + A        nodes == [a]
+    A | B              no node of its own: the result is the node of the
+                       alternative that matched, so a choice needs no method
+    A[1:]              nodes == [a, a, ...]
+    A[:]               the same, and no node at all when nothing matched
+    A + (SEP + A)[:]   nodes == [a] or [a, more]; each item of more.nodes
+                       holds one A as item.node
+
+A method is written with `self.nodes[i]`, `self.node` and `for x in self.nodes`;
+the self-tests at the end of this file show each case.
+
+Sequence flattening
+-------------------
+`A + B` where A is an unnamed sequence produces one sequence whose parsers are
+A's parsers followed by B: A's children are hoisted into the parent and A has
+no node of its own. Likewise `A | B` flattens when A is a choice. A rule keeps
+its node once it has a name: every rule of a `Grammar` class does, and so does
+a rule given a method with `@method`.
 
 todo: replace tokenizer with own lexer
 """
@@ -585,14 +598,9 @@ class Parser(metaclass=ParserMeta):
         nodes: List of all AST nodes produced by this parser.
     """
     _default_class = None
-    _rule_names = set()
 
     def __getattr__(self, name):
-        """Delegate missing attributes to the registered default class.
-
-        A rule name gives the node's part of that rule, or None: `node.if_condition`.
-        The rule name with `_list` gives all of them: `node.elif_branch_list`.
-        """
+        """Delegate missing attributes to the registered default class."""
         dc = Parser._default_class
         if dc is not None:
             attr = getattr(dc, name, None)
@@ -600,10 +608,6 @@ class Parser(metaclass=ParserMeta):
                 if callable(attr):
                     return attr.__get__(self, type(self))
                 return attr
-        rule = name[:-len("_list")] if name.endswith("_list") else name
-        if rule in Parser._rule_names:
-            found = [p for p in parts(self) if type(p).__name__ == rule]
-            return found if rule != name else next(iter(found), None)
         raise AttributeError(
             f"{type(self).__name__!r} object has no attribute {name!r}"
         )
@@ -750,7 +754,6 @@ class GrammarMeta(type):
             if isinstance(rule, type) and rname.isidentifier() and not rname.startswith("_"):
                 rule.__name__ = rname
                 rule.__qualname__ = rname
-                Parser._rule_names.add(rname)
 
         cls = super().__new__(metacls, name, bases, dict(namespace))
 
@@ -887,32 +890,6 @@ def choice(p1, p2):
     return Choice_Parser
 
 
-def as_node(parser):
-    """Wrap the result of *parser* in a distinct AST node.
-
-    Unlike a one-alternative choice, this creates an explicit AST boundary:
-    the wrapped parser's complete result is retained as the wrapper's single
-    child.  This works uniformly for choices, sequences, repetitions,
-    terminals, and other parser expressions.
-
-    The wrapper has its own parsing context, so it participates in the normal
-    packrat memoization and left-recursion machinery.  The wrapped parser is
-    still responsible for recognition; a failed match remains a failure and
-    the parsing-context decorator restores the wrapper's starting position.
-    """
-
-    class As_Node(Parser):
-        @apply_parsing_context
-        def parse(cls, token_stream):
-            result = parser.parse(token_stream)
-            if not result:
-                return False
-
-            ast, token_stream = result
-            return cls([ast]), token_stream
-
-    return As_Node
-
 def children(node):
     """Return the non-null direct AST children of *node*.
 
@@ -930,49 +907,21 @@ def children(node):
     return [child] if child is not None and child is not node else []
 
 
-_ANONYMOUS_NODES = ("Sequence_Parser", "Several_Times", "As_Node")
-
-
-def parts(node):
-    """Yield the parts of a node: its children, looking through anonymous combinator nodes.
-
-    as_node() marks a node boundary on purpose, so the node it wraps is a part even
-    when that node is an anonymous sequence.
-    """
-    for child in children(node):
-        kind = type(child).__name__ if isinstance(child, Parser) else None
-        if kind == "As_Node":
-            yield from children(child)
-        elif kind in _ANONYMOUS_NODES:
-            yield from parts(child)
-        else:
-            yield child
-
-
 def token_of(node):
-    """Return the first leaf token wrapped by *node*, or ``None``.
+    """Return the first leaf token under *node*, or ``None`` when it holds none.
 
-    An identity guard prevents malformed or cyclic node structures from
-    causing an infinite loop.
+    A leaf is anything that is not a parser node: a token, or the string a
+    literal keeps. Empty nodes are skipped, so an optional part that matched
+    nothing at the front of a rule does not hide the token after it.
     """
-    current = node
-    seen = set()
-
-    while current is not None and id(current) not in seen:
-        seen.add(id(current))
-
-        if isinstance(current, str):
-            return current
-
-        if not isinstance(current, Parser):
-            return current
-
-        kids = children(current)
-        if kids:
-            current = kids[0]
-        else:
-            return None
-
+    if node is None:
+        return None
+    if not isinstance(node, Parser):
+        return node
+    for child in children(node):
+        leaf = token_of(child)
+        if leaf is not None:
+            return leaf
     return None
 
 def walk(node, visitor):
@@ -1159,7 +1108,6 @@ def literal(mylit: str) -> type[Parser]:
         filt(lambda tok: getattr(tok, "string", tok) == mylit, shift, name=repr(mylit)),
     )
     parser.__name__ = f"Literal_{mylit}"
-    Parser._rule_names.add(parser.__name__)
     return parser
 
 
@@ -1233,7 +1181,6 @@ __all__ = [
     "G",
     "children",
     "token_of",
-    "parts",
     "walk",
     "Cut",
     "ParserMeta",
@@ -1256,7 +1203,6 @@ __all__ = [
     "filt",
     "fmap",
     "choice",
-    "as_node",
     "sequence",
     "several_times_parser",
     "ignore",
@@ -1277,82 +1223,72 @@ __all__ = [
 ########################################################################################################################
 ##########################################
 if __name__ == "__main__":
-    # --- as_node() AST-boundary tests ---
+    # --- Plain usage: a method reads self.nodes and self.node, nothing else ---
     ParserState.reset()
 
-    choice_node = as_node(shift | shift)
-    choice_match = choice_node.parse(TokenStream(["choice"]))
-    assert choice_match, "as_node(choice): parse failed"
-    choice_ast, choice_stream = choice_match
-    assert type(choice_ast) is choice_node, "as_node(choice): wrapper node missing"
-    assert len(choice_ast.nodes) == 1, "as_node(choice): expected exactly one child"
-    assert choice_ast.node is not choice_ast, "as_node(choice): child boundary missing"
-    assert choice_stream.pos == 1
+    def _tokens(text):
+        return TokenStream(re.findall(r"\d+\.\d+|\w+|\S", text))
 
-    # A failed first alternative must backtrack before the second is tried.
-    rejecting_tail = filt(lambda _token: False, shift)
-    backtracking_node = as_node((shift + rejecting_tail) | shift)
-    backtracking_stream = TokenStream(["fallback"])
-    backtracking_match = backtracking_node.parse(backtracking_stream)
-    assert backtracking_match and backtracking_stream.pos == 1, (
-        "as_node(choice): wrapped choice did not preserve backtracking"
-    )
+    IDENT = expect_re(r"[A-Za-z_]\w*$")
+    NUM = expect_re(r"\d+(\.\d+)?$")
+    EQ, SEMI, LP, RP, SEP = (ignore(literal(char)) for char in "=;(),")
 
-    sequence_node = as_node(shift + shift)
-    sequence_match = sequence_node.parse(TokenStream(["left", "right"]))
-    assert sequence_match, "as_node(sequence): parse failed"
-    sequence_ast, _ = sequence_match
-    assert type(sequence_ast) is sequence_node
-    assert type(sequence_ast.node).__name__ == "Sequence_Parser"
-    assert len(sequence_ast.node.nodes) == 2, "as_node(sequence): sequence structure lost"
+    keyvalue = IDENT + EQ + NUM + SEMI
+    keyvalues = keyvalue[1:]
 
-    nested_node = as_node(as_node(shift))
-    nested_match = nested_node.parse(TokenStream(["nested"]))
-    assert nested_match, "as_node(nested): parse failed"
-    nested_ast, _ = nested_match
-    assert type(nested_ast) is nested_node
-    assert type(nested_ast.node).__name__ == "As_Node"
+    @method(keyvalue)
+    def to_py(self):
+        return f"{self.nodes[0].to_py()}:{self.nodes[1].to_py()}"
 
-    repeated_node = as_node(shift[:])
-    repeated_match = repeated_node.parse(TokenStream(["one", "two"]))
-    assert repeated_match, "as_node(repetition): parse failed"
-    repeated_ast, repeated_stream = repeated_match
-    assert type(repeated_ast) is repeated_node
-    assert type(repeated_ast.node).__name__ == "Several_Times"
-    assert len(repeated_ast.node.nodes) == 2 and repeated_stream.pos == 2
+    @method(keyvalues)
+    def to_py(self):
+        return "{ " + ", ".join(ast.to_py() for ast in self.nodes) + " }"
 
-    failed_stream = TokenStream([])
-    assert not as_node(shift).parse(failed_stream), "as_node(failure): expected failure"
-    assert failed_stream.pos == 0, "as_node(failure): failure consumed input"
+    ast, _ = keyvalue.parse(_tokens("x=789;"))
+    assert type(ast).__name__ == "keyvalue" and len(ast.nodes) == 2, "A + B: one child per kept part"
+    assert ast.node is ast.nodes[0], "node is nodes[0]"
+    assert ast.to_py() == "x:789"
+    ast, _ = keyvalues.parse(_tokens("x=2; y=3.4;"))
+    assert ast.to_py() == "{ x:2, y:3.4 }", "A[1:]: nodes are the repeated items"
 
-    class AsNodeMethodGrammar(Grammar):
-        wrapped_rule = as_node(shift | shift)
+    # A choice has no node of its own, and an empty A[:] leaves no node.
+    atom = fw("atom")
+    s_expr = LP + atom[:] + RP
+    atom = IDENT | NUM | s_expr
 
-        class wrapped_rule:
-            def marker(self):
-                return "method attached to wrapper"
+    @method(s_expr)
+    def to_py(self):
+        return "(" + " ".join(member.to_py() for res in self.nodes for member in res.nodes) + ")"
 
-    method_match = wrapped_rule.parse(TokenStream(["method"]))
-    assert method_match, "as_node(grammar method): parse failed"
-    assert method_match[0].marker() == "method attached to wrapper"
+    ast, _ = atom.parse(_tokens("x"))
+    assert type(ast) is IDENT, "A | B: the node is the alternative that matched"
+    ast, _ = s_expr.parse(_tokens("()"))
+    assert ast.nodes == [] and ast.to_py() == "()", "empty A[:]: no child"
+    ast, _ = s_expr.parse(_tokens("(a b (c 3) 7)"))
+    assert len(ast.nodes) == 1 and len(ast.node.nodes) == 4, "IGNORED + A[:] + IGNORED: one child, the repetition"
+    assert ast.to_py() == "(a b (c 3) 7)"
 
-    memo_stream = TokenStream(["memo"])
-    memo_parser = as_node(shift)
-    memo_match = memo_parser.parse(memo_stream)
-    assert memo_match, "as_node(memo): initial parse failed"
-    memo_stream.reset(0)
-    memo_match_again = memo_parser.parse(memo_stream)
-    assert memo_match_again and memo_stream.pos == 1, "as_node(memo): memoized parse failed"
-    assert any(key[0][0] == id(memo_parser) for key in memo_stream.memos), "as_node(memo): wrapper not memoized"
+    # A separated list: the first item, then a repetition whose items each hold one more.
+    names = IDENT + (SEP + IDENT)[:]
 
-    # The wrapper itself can be a left-recursive grammar rule.
-    ParserState.reset()
-    as_node_lr_expr = fw("as_node_lr_expr")
-    plus_token = filt(lambda token: token == "+", shift)
-    as_node_lr_expr = as_node((as_node_lr_expr + plus_token + shift) | shift)
-    lr_stream = TokenStream(["a", "+", "b", "+", "c"])
-    lr_match = as_node_lr_expr.parse(lr_stream)
-    assert lr_match and lr_stream.pos == 5, "as_node(left recursion): failed to grow parse"
+    @method(names)
+    def to_py(self):
+        return [self.node.to_py()] + [item.node.to_py() for more in self.nodes[1:] for item in more.nodes]
+
+    ast, _ = names.parse(_tokens("a"))
+    assert len(ast.nodes) == 1 and ast.to_py() == ["a"]
+    ast, _ = names.parse(_tokens("a, b, c"))
+    assert len(ast.nodes) == 2 and ast.to_py() == ["a", "b", "c"]
+    print("plain usage: self.nodes and self.node for sequences, choices, repetitions and lists OK")
+
+    # token_of(): the first leaf, skipping an empty optional part at the front.
+    optional_first = filt(lambda token: token == "absent", shift)[0:1] + shift
+    ast, _ = optional_first.parse(TokenStream(["only"]))
+    assert len(ast.nodes) == 2 and ast.nodes[0].nodes == [], "A[0:1]: an empty node when A is absent"
+    assert token_of(ast) == "only", "token_of: skips the empty node in front"
+    assert token_of(ast.nodes[0]) is None, "token_of: None for a node without tokens"
+    print("token_of(): first leaf, empty nodes skipped OK")
+
     # SymbolTable: scopes, lookup order, and the value field
     table = SymbolTable()
     table.push_scope("outer")
@@ -1365,7 +1301,5 @@ if __name__ == "__main__":
     table.add("m", kind="func", value=("p", None))
     assert table.lookup("m")["value"] == ("p", None) and table.lookup("m")["type"] is None
     print("SymbolTable(): scopes, shadowing and the value field OK")
-
-    print("as_node(): AST boundaries, backtracking, grammar methods, memoization, and left recursion OK")
 
     print("\nAll tests passed.")
