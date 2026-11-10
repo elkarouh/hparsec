@@ -23,6 +23,7 @@ hparsec/
 │   ├── expression_parser.py      # expression grammar written with repetition
 │   └── expression_parser_lr.py   # same grammar written with left recursion
 ├── tools/
+│   ├── basic_interpreter/        # a small BASIC interpreter built on hparsec (proof of concept)
 │   └── zsh_linter/               # zsh-lint: a zsh linter built on hparsec
 │       ├── pyproject.toml        # installs the zsh-lint command
 │       ├── zsh_tokenizer.py      # hand-written zsh scanner
@@ -332,6 +333,9 @@ These are reversed by the backend's output methods on the relevant AST nodes.
   uses repetition (`A + (op + A)[:]`), the second direct left recursion
   (`A = (A + op + B) | B`). Running either prints its parse and evaluation
   tests.
+- `tools/basic_interpreter/` is a small BASIC interpreter, a proof of concept with
+  variables, `PRINT`, and single-line functions (`DEF FN`). Run it on a program with
+  `python3 tools/basic_interpreter/basic_interpreter.py tools/basic_interpreter/examples/functions.bas`.
 - `tools/zsh_linter/` is `zsh-lint`, a full zsh grammar with lint rules
   attached to AST nodes. Run `make install` from the repository root, which
   puts a `zsh-lint` command in `~/.local/bin`. Then lint scripts directly:

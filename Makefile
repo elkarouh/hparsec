@@ -3,9 +3,9 @@ export PYTHONPATH := $(CURDIR)/src:$(CURDIR)/ady_helpers$(if $(PYTHONPATH),:$(PY
 
 ZSH := tools/zsh_linter
 
-.PHONY: test selftest examples zsh corpus verbose syntax bench profile install install-pip
+.PHONY: test selftest examples zsh corpus basic verbose syntax bench profile install install-pip
 
-test: selftest examples zsh corpus
+test: selftest examples zsh corpus basic
 
 # Install a zsh-lint command into ~/.local/bin. The launcher runs the linter from this
 # checkout, so there is no venv and no pip: hparsec is standard-library only.
@@ -35,6 +35,11 @@ selftest:
 examples:
 	$(PYTHON) -B examples/expression_parser.py
 	$(PYTHON) -B examples/expression_parser_lr.py
+
+# BASIC interpreter self-tests and its example program
+basic:
+	$(PYTHON) -B tools/basic_interpreter/basic_interpreter.py
+	$(PYTHON) -B tools/basic_interpreter/basic_interpreter.py tools/basic_interpreter/examples/functions.bas
 
 # Zsh linter unit cases and corpus run
 zsh:
