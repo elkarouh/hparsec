@@ -249,6 +249,9 @@ def _render(node):
     if isinstance(node, str):
         return node
     if _is_leaf(node):
+        # A comment runs to the end of its line, so it must end the line.
+        if getattr(node, "type", None) == TOKEN_TYPES["COMMENT"]:
+            return node.string + "\n"
         return node.string
     fn = getattr(node, "to_source", None)
     return fn() if fn else _join_source(children(node))
@@ -732,7 +735,7 @@ class ZshStyleGrammar(Grammar):
                     header = header + _render(c)
                     continue
                 body.append(c)
-            return header + "() {\n" + _statements_source(body) + "\n}"
+            return header + " () {\n" + _statements_source(body) + "\n}"
 
     class grouping:
         """grouping: { statements; }"""
@@ -743,6 +746,94 @@ class ZshStyleGrammar(Grammar):
         """subshell: ( statements )"""
         def to_source(self):
             return "(\n" + _statements_source(children(self)) + "\n)"
+
+    class case_stmt:
+        """case_stmt: header, one arm per line, then esac."""
+        def to_source(self):
+            word = []
+            arms = []
+            for c in _flatten_anon(children(self)):
+                kw = _keyword_of(c)
+                if kw in ("case", "in", "esac"):
+                    continue
+                if type(c).__name__ in ("case_arm", "case_final"):
+                    arms.append(_render(c))
+                elif kw is None:
+                    word.append(c)
+            header = "case " + _join_source(word) + " in"
+            return header + "\n" + "\n".join(a for a in arms if a) + "\nesac"
+
+    class case_body:
+        """case_body: pattern followed by its statements."""
+        def to_source(self):
+            # The pattern is the leading words (tokens or a case_pattern node);
+            # everything after it is the arm's statements.
+            items = list(_flatten_anon(children(self)))
+            n = next((i + 1 for i, c in enumerate(items) if type(c).__name__ == "rparen_vis"), 0)
+            pattern = _join_source(items[:n]).rstrip()
+            stmts = items[n:]
+            if not pattern.endswith(")"):
+                pattern += ")"
+            return pattern + "\n" + _statements_source(stmts)
+
+    class case_arm:
+        """case_arm: body and its terminator (;;, ;&, ;|)."""
+        def to_source(self):
+            parts = []
+            term = ";;"
+            for c in _flatten_anon(children(self)):
+                piece = _render(c).strip()
+                if piece in (";;", ";&", ";|"):
+                    term = piece
+                elif piece:
+                    parts.append(piece)
+            return "\n".join(parts) + "\n" + term
+
+    class case_final:
+        """case_final: last arm, which may have no terminator."""
+        def to_source(self):
+            parts = []
+            for c in _flatten_anon(children(self)):
+                piece = _render(c)
+                if piece:
+                    parts.append(piece)
+            return "\n".join(parts)
+
+    class named_fd:
+        """named_fd: {name} before a redirection."""
+        def to_source(self):
+            inner = "".join(_render(c) for c in _flatten_anon(children(self)))
+            return "{" + inner.strip("{} ") + "}"
+
+    class arith_stmt:
+        """arith_stmt: (( expression ))"""
+        def to_source(self):
+            return "(( " + _join_source(children(self)) + " ))"
+
+    class for_alt:
+        """for name (list); do ... done (zsh form)"""
+        def to_source(self):
+            items = list(_flatten_anon(children(self)))
+            k = next((i for i, c in enumerate(items) if _keyword_of(c) == "do"), len(items))
+            head = [c for c in items[:k] if _keyword_of(c) is None]
+            name = _render(head[0]) if head else ""
+            words = _join_source(head[1:])
+            return "for " + name + " (" + words + ")" + _compound_source(items[k:])
+
+    class for_positional:
+        """for name; do ... done (positional form)"""
+        def to_source(self):
+            return _compound_source(children(self))
+
+    class elif_branch:
+        """elif_branch: elif condition; then body"""
+        def to_source(self):
+            return _compound_source(children(self))
+
+    class else_branch:
+        """else_branch: else body"""
+        def to_source(self):
+            return _compound_source(children(self))
 
     class if_stmt:
         """if_stmt: rendered from its keywords and bodies."""
