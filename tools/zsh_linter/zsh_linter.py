@@ -318,7 +318,8 @@ class ZshStyleGrammar(Grammar):
     # Only the descriptor and operator are syntactic details.
     # The here-string operator is kept in the AST so its use can be linted (ZSH008).
     here_string_op = filt(lambda tok: tok.string == "<<<", expect_type_node(TOKEN_TYPES["OP"]))
-    redir = (named_fd | ignore(number[0:1])) + (here_string_op | ignore(redir_op)) + argument
+    # A redirect target may continue with glued word parts: `>${DIR}/x.log` is one word.
+    redir = (named_fd | ignore(number[0:1])) + (here_string_op | ignore(redir_op)) + argument + ZshTerminals.glued_part[0:]
     # Zsh permits redirection-only commands, e.g. `{myfd}</dev/null`.
     redir_command = redir[1:]
 
