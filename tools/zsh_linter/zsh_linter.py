@@ -402,8 +402,11 @@ class ZshStyleGrammar(Grammar):
     for_positional = (literal("for") + loop_names + (STATEMENT_SEP | comment)[:]
                 + literal("do") + (STATEMENT_SEP | comment)[:] + inner_statement[:]
                 + STATEMENT_SEP[:] + literal("done"))
-    foreach_stmt = (literal("foreach") + identifier[1:] + LPAREN + argument[:] + RPAREN + STATEMENT_SEP[:]
-                    + inner_statement[:] + STATEMENT_SEP[:] + literal("end"))
+    # zsh accepts both `foreach x (...) ... end` and the `do ... done` form.
+    foreach_stmt = (literal("foreach") + identifier[1:] + LPAREN + argument[:] + RPAREN + (STATEMENT_SEP | comment)[:]
+                    + ((inner_statement[:] + STATEMENT_SEP[:] + literal("end"))
+                       | (literal("do") + (STATEMENT_SEP | comment)[:] + inner_statement[:]
+                          + STATEMENT_SEP[:] + literal("done"))))
     select_stmt = (literal("select") + identifier + literal("in") + argument[:] + (STATEMENT_SEP | comment)[:]
                    + literal("do") + (STATEMENT_SEP | comment)[:] + inner_statement[:]
                    + STATEMENT_SEP[:] + literal("done"))
