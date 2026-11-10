@@ -22,7 +22,6 @@ from hparsec import (
     children,
     parts,
     token_of,
-    walk,
 )
 from zsh_tokenizer import tokenize_zsh, TOKEN_TYPES, _RESERVED
 
@@ -189,69 +188,56 @@ class ZshTerminals(Terminals):
                       and tok.type not in (TOKEN_TYPES["NEWLINE"], TOKEN_TYPES["COMMENT"]), shift)
     assign_value = (_basic_arg | assign_value_colon) + ((assign_eq + _basic_arg) | glued_part)[0:]
     assign_word = (assign_name + subscript[0:1] + assign_eq + assign_value) | (assign_name + assign_eq + assign_value) | (assign_name + assign_eq_empty)
+    # The same name=value as an argument, with its own value rule: the value of an argument is
+    # word-split, while an assignment's value is not, so the two rules check different things.
+    argument_value = (_basic_arg | assign_value_colon) + ((assign_eq + _basic_arg) | glued_part)[0:]
+    argument_word = (assign_name + subscript[0:1] + assign_eq + argument_value) | (assign_name + assign_eq + argument_value) | (assign_name + assign_eq_empty)
 
 # HELPERS
-def _expansion_issues(node, backticks_only=False):
-    """Find unquoted expansions and legacy backticks below an AST node.
+# The nodes that hold one expansion each: a variable, a command substitution, a backtick.
+# A word of a [ ] test is a shift node holding a token.
+_EXPANSION_NODES = ("var_exp", "cmd_subst", "backtick", "shift")
 
+
+def _expansion_issues(node, backticks_only=False):
+    """Find unquoted expansions and legacy backticks among a node's direct parts.
+
+    An expansion is a part of the node itself. A composite word (loose_word, argument_value,
+    assign_value, array_literal) is not checked here: its own check reports its words, and
+    lint() reaches it.
     With backticks_only, report only ZSH003 (used where word splitting does not apply).
     """
     issues = []
-    seen = set()
-
-    def visit(current):
-        # A token is a leaf: it has a string attribute but no AST children.
-        if not isinstance(current, Parser):
-            tok = current
-            value = getattr(tok, "string", None)
-
-            if not isinstance(value, str) or not value:
-                return
-
-            if value.startswith("`") and value.endswith("`"):
-                rule = "ZSH003"
-                message = "Use $( ) instead of backticks; backticks are hard to read and cannot be nested."
-
-            elif (
-                value.startswith("$(")
-                and value.endswith(")")
-                and not value.startswith("$((")
-            ):
-                rule = "ZSH002"
-                message = (
-                    f"Unquoted command substitution '{value}' detected."
-                )
-                if backticks_only:
-                    return
-
-            elif value.startswith("$") and len(value) > 1 and not value.startswith(
-                ("${", "$((")
-            ):
-                rule = "ZSH002"
-                message = (
-                    f"Unquoted variable expansion '{value}' detected. "
-                    "Risk of word splitting and globbing."
-                )
-                if backticks_only:
-                    return
-
-            else:
-                return
-
-            marker = (rule, getattr(tok, "start", None), value)
-
-            if marker not in seen:
-                seen.add(marker)
-                issues.append({
-                    "rule": rule,
-                    "message": message,
-                    "token": tok,
-                })
-
-            return
-
-    walk(node, visit)
+    for part in node.parts():
+        if _is_leaf(part):
+            value, tok = part.string, part
+        elif type(part).__name__ in _EXPANSION_NODES:
+            value, tok = part.to_source(), token_of(part)
+        else:
+            continue
+        issue = _expansion_issue(value, tok, backticks_only)
+        if issue:
+            issues.append(issue)
     return issues
+
+
+def _expansion_issue(value, tok, backticks_only):
+    """The ZSH002 or ZSH003 finding for one word's text, or None."""
+    if not isinstance(value, str) or not value:
+        return None
+    if value.startswith("`") and value.endswith("`"):
+        return {"rule": "ZSH003", "message": "Use $( ) instead of backticks; backticks are hard to read and cannot be nested.",
+                "token": tok}
+    if backticks_only:
+        return None
+    if value.startswith("$(") and value.endswith(")") and not value.startswith("$(("):
+        return {"rule": "ZSH002", "message": f"Unquoted command substitution '{value}' detected.", "token": tok}
+    if value.startswith("$") and len(value) > 1 and not value.startswith(("${", "$((")):
+        return {"rule": "ZSH002", "message": (f"Unquoted variable expansion '{value}' detected. "
+                                               "Risk of word splitting and globbing."), "token": tok}
+    return None
+
+
 # ============================================================
 # Source rendering (to_source)
 # ============================================================
@@ -358,7 +344,7 @@ class ZshStyleGrammar(Grammar):
          | ignore(filt(lambda tok: tok.string == ":", expect_type_node(TOKEN_TYPES["OP"]))))[1:]
         + ZshTerminals.assign_eq + ZshTerminals._basic_arg
     )
-    argument = as_node(assign_word | loose_word | ZshTerminals._basic_arg)
+    argument = as_node(argument_word | loose_word | ZshTerminals._basic_arg)
 
     prefix_assignment = as_node(assign_word)
 
@@ -687,10 +673,11 @@ class ZshStyleGrammar(Grammar):
             return "".join(part.to_source(indent) for part in self.parts())
 
         def check(self):
+            issues = _expansion_issues(self)
             # ksh rule 6: {NAME} with no comma or range is a variable that lost its $.
             if re.match(r"^\{[A-Za-z_][A-Za-z0-9_]*\}$", self.to_source()):
-                return [_issue("ZSH015", "Put $ before the variable name in braces.", token_of(self))]
-            return []
+                issues.append(_issue("ZSH015", "Put $ before the variable name in braces.", token_of(self)))
+            return issues
 
     class grouping:
         """grouping ::= '{' inner_statement* '}'"""
@@ -777,6 +764,9 @@ class ZshStyleGrammar(Grammar):
 
     class array_literal:
         """array_literal ::= '(' word* ')'"""
+        def check(self):
+            return _expansion_issues(self, backticks_only=True)
+
         def to_source(self, indent=""):
             return "(" + _join_source(self.parts(), indent) + ")"
 
@@ -1120,8 +1110,28 @@ class ZshStyleGrammar(Grammar):
         def tests_status(self):
             return self.and_or.tests_status()
 
+    class loose_word:
+        """loose_word ::= (assign_name | string | var_exp | cmd_subst | ...)+ assign_eq _basic_arg"""
+        def check(self):
+            return _expansion_issues(self)
+
+    class dbl_bracket_word:
+        """dbl_bracket_word ::= '[[' shift* ']]'"""
+        def check(self):
+            return _expansion_issues(self)
+
+    class argument_value:
+        """argument_value ::= (_basic_arg | ':') ((assign_eq _basic_arg) | glued_part)*"""
+        def check(self):
+            return _expansion_issues(self)
+
+    class assign_value:
+        """assign_value ::= (_basic_arg | ':') ((assign_eq _basic_arg) | glued_part)*"""
+        def check(self):
+            return _expansion_issues(self, backticks_only=True)
+
     class argument:
-        """argument ::= assign_word | loose_word | _basic_arg"""
+        """argument ::= argument_word | loose_word | _basic_arg"""
         def check(self):
             return _expansion_issues(self)
 
@@ -2148,6 +2158,14 @@ def _run_self_tests():
         # Unsafe forms are reported but left as they are.
         for _code, _bad in (("ZSH004", "[ $x = a ]\n"), ("ZSH004", "[ -f a -a -f b ]\n"), ("ZSH010", "test a* = b\n")):
             assert _code in [i["rule"] for i in lint_zsh_code(format_zsh_code(_bad, fix=True))], f"{_code} fixed unsafely"
+        # Each word reports its own expansions, by the context it is in: an argument is
+        # word-split (ZSH002 and ZSH003), an assignment value only reports backticks (ZSH003).
+        for _bad, _want, _not in (("alias g=$b\n", "ZSH002", None), ("[ $(c) = x ]\n", "ZSH002", None),
+                                  ("eval $(echo a)=$!\n", "ZSH002", None), ("for r in {01..$N}; do :; done\n", "ZSH002", None),
+                                  ("x=$a\n", None, "ZSH002"), ("typeset z=`e`\n", "ZSH003", None)):
+            _rules = [i["rule"] for i in lint_zsh_code(_bad)]
+            assert _want is None or _want in _rules, f"{_bad!r}: {_want} not reported: {_rules}"
+            assert _not is None or _not not in _rules, f"{_bad!r}: {_not} reported"
         # Formatting keeps what the script does: background jobs and a flag's number.
         _kept = "sleep 1 &\nwl-copy &>/dev/null &|\nfoo &!\ntypeset -F 2 SECONDS\ntypeset -L$(( N * 2 )) X\n"
         assert format_zsh_code(_kept) == _kept, format_zsh_code(_kept)
