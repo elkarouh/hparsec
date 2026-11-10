@@ -21,8 +21,8 @@ hparsec/
 │   ├── expression_parser.py      # expression grammar written with repetition
 │   └── expression_parser_lr.py   # same grammar written with left recursion
 ├── tools/
-│   └── zsh_linter/               # zsh-lint: a zsh linter built on hparsec
-│       ├── pyproject.toml        # installs the zsh-lint command
+│   └── zsh_linter/               # a zsh linter built on hparsec
+│       ├── pyproject.toml        # installs the zsh_linter module
 │       ├── zsh_tokenizer.py      # hand-written zsh scanner
 │       ├── zsh_linter.py         # grammar + lint rules, with inline test cases
 │       ├── count_rule.py         # counts one rule's findings across a codebase
@@ -306,20 +306,20 @@ These are reversed by the backend's output methods on the relevant AST nodes.
   uses repetition (`A + (op + A)[:]`), the second direct left recursion
   (`A = (A + op + B) | B`). Running either prints its parse and evaluation
   tests.
-- `tools/zsh_linter/` is `zsh-lint`, a full zsh grammar with lint rules
+- `tools/zsh_linter/` is a full zsh grammar with lint rules
   attached to AST nodes. Install it with `pip install . ./tools/zsh_linter`
   from the repository root, then lint scripts directly:
 
   ```sh
-  zsh-lint ~/.zshrc deploy.zsh
-  cat script.zsh | zsh-lint -
+  python -m zsh_linter ~/.zshrc deploy.zsh
+  cat script.zsh | python -m zsh_linter -
   ```
 
   Findings print as `file:line:col: RULE message`. The exit status is 0 when
   clean, 1 when there are findings, and 2 on a parse error. Without arguments
   it runs the inline self-tests. `corpus_test.py` lints every script in
   `corpus/`. `count_rule.py` counts how often one rule fires across a codebase,
-  for example to count here-strings: `zsh-lint` has `ZSH008` for them, so
+  for example to count here-strings: `zsh_linter` has `ZSH008` for them, so
   `python tools/zsh_linter/count_rule.py ZSH008 ~/dotfiles` gives the total.
 
 ## Benchmarks
