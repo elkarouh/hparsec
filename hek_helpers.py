@@ -4,7 +4,7 @@
 Used by both TO_PYTHON/hek_py3_parser.py and TO_NIM/hek_nim_parser.py.
 """
 
-from hek_tokenize import RichNL
+from ady_tokenizer import RichNL
 
 ###############################################################################
 # Indentation

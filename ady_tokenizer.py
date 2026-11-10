@@ -1,4 +1,4 @@
-"""hek_tokenize.py — Custom AdaScript tokenizer.
+"""ady_tokenizer.py — Custom AdaScript tokenizer.
 
 Replaces Python's built-in tokenize module with a hand-written single-pass
 lexer that handles AdaScript extensions (tick, dollar-vars, bash operators,

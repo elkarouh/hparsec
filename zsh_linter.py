@@ -5,7 +5,7 @@ Argument-level expansion rules live on the explicit `argument` AST node, so
 commands, assignments, declarations, and case subjects share one rule path.
 """
 
-from hek_parsec import (
+from hparsec import (
     Grammar,
     ParserState,
     Terminals,

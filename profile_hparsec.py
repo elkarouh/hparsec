@@ -4,7 +4,7 @@
 Usage:
     python profile_hparsec.py --source-dir . --terms 3000
 
-The source directory must contain hek_parsec.py and hek_tokenize.py.
+The source directory must contain hparsec.py and ady_tokenizer.py.
 Tokenization is deliberately excluded from the cProfile measurements.
 """
 from __future__ import annotations
@@ -20,7 +20,7 @@ from pathlib import Path
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--source-dir", default=".",
-                    help="directory containing hek_parsec.py and hek_tokenize.py")
+                    help="directory containing hparsec.py and ady_tokenizer.py")
     ap.add_argument("--terms", type=int, default=3000,
                     help="number of numeric terms in the expression")
     ap.add_argument("--limit", type=int, default=30,
@@ -30,7 +30,7 @@ def main() -> None:
         ap.error("--terms must be at least 1")
 
     sys.path.insert(0, str(Path(args.source_dir).resolve()))
-    from hek_parsec import Input, NUMBER, PLUS, ParserState, fw
+    from hparsec import Input, NUMBER, PLUS, ParserState, fw
 
     # expr ::= expr '+' NUMBER | NUMBER
     expr = fw("expr")

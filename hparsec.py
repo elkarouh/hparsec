@@ -1156,7 +1156,7 @@ class Terminals(metaclass=TerminalsMeta):
 
 
 ###############################################################################
-# Lazy-loaded legacy tokens and adapters for tokenize / hek_tokenize
+# Lazy-loaded legacy tokens and adapters for tokenize / ady_tokenizer
 _LEGACY_TOKEN_NAMES = {
     "Tokenizer",
     "Input",
@@ -1186,14 +1186,14 @@ _LEGACY_TOKEN_NAMES = {
 
 
 def _init_legacy_tokens():
-    """Lazily initialize legacy token parsers and Input() that depend on tokenize / hek_tokenize."""
+    """Lazily initialize legacy token parsers and Input() that depend on tokenize / ady_tokenizer."""
     if "Input" in globals():
         return
     import tokenize as tkn
 
     def Input(string: str):
-        """Create a token stream using hek_tokenize (loaded on demand)."""
-        from hek_tokenize import Tokenizer
+        """Create a token stream using ady_tokenizer (loaded on demand)."""
+        from ady_tokenizer import Tokenizer
 
         gen = Tokenizer(string)
         next(gen)  # skip the encoding token
@@ -1209,7 +1209,7 @@ def _init_legacy_tokens():
     def _visible_op(symbol: str):
         return expect(tkn.OP, symbol)
 
-    # Synthetic token type numbers reserved by hek_tokenize
+    # Synthetic token type numbers reserved by ady_tokenizer
     _TICK_TOKEN          = 90
     _DOLLAR_TOKEN        = 91
     _BASH_TEST_TOKEN     = 92
@@ -1319,7 +1319,7 @@ def _init_legacy_tokens():
 def __getattr__(name):
     """Load legacy tokens, Input(), and Tokenizer on demand."""
     if name == "Tokenizer":
-        from hek_tokenize import Tokenizer
+        from ady_tokenizer import Tokenizer
         return Tokenizer
     if name in _LEGACY_TOKEN_NAMES:
         _init_legacy_tokens()
@@ -1530,7 +1530,7 @@ if __name__ == "__main__":
 
     # The tokenizer and legacy token definitions are needed only by this test harness.
     _init_legacy_tokens()
-    from hek_tokenize import Tokenizer
+    from ady_tokenizer import Tokenizer
 
     # THE ADASCRIPT_GRAMMAR
     keyvalue = IDENTIFIER + EQUAL + NUMBER + SEMICOLON

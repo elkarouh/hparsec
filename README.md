@@ -13,8 +13,8 @@ can be given output methods via the `@method` decorator.
 
 | File | Purpose |
 |------|---------|
-| `hek_parsec.py` | Core combinators: `Parser`, `ParserState`, `SymbolTable`, `forward`, `method`, `filt`, `fmap`, `ignore`, `expect`, `literal`, … |
-| `hek_tokenize.py` | `Tokenizer` — wraps Python's `tokenize` module; handles tick-attributes, range operators, bash-isms, f-string interpolation, `RichNL` comment bundling |
+| `hparsec.py` | Core combinators: `Parser`, `ParserState`, `SymbolTable`, `forward`, `method`, `filt`, `fmap`, `ignore`, `expect`, `literal`, … |
+| `ady_tokenizer.py` | `Tokenizer` — wraps Python's `tokenize` module; handles tick-attributes, range operators, bash-isms, f-string interpolation, `RichNL` comment bundling |
 | `hek_helpers.py` | Shared helpers: indentation (`_ind`), `RichNL` extraction, block statement utilities |
 
 ---
@@ -35,7 +35,7 @@ can be given output methods via the `@method` decorator.
 ## Quick start
 
 ```python
-from hek_parsec import (
+from hparsec import (
     Input, ParserState, method, forward,
     IDENTIFIER, EQUAL, NUMBER, SEMICOLON,
 )
@@ -171,7 +171,7 @@ the state an explicit object passed through every rule and output method
 would lift that, at the cost of touching every call site in the grammar
 and both backends.
 
-### `RichNL` (in `hek_tokenize`)
+### `RichNL` (in `ady_tokenizer`)
 A newline token enriched with any preceding inline comments. Allows comments
 to travel naturally with the parse tree so backends can reproduce them in
 generated output.

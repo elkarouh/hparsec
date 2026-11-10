@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Benchmark hparsec left recursion against an equivalent repetition grammar.
 
-Run from the directory containing hek_parsec.py and hek_tokenize.py, or pass
+Run from the directory containing hparsec.py and ady_tokenizer.py, or pass
 --source-dir to point at them.  The benchmark excludes tokenization from the
 reported parse time and checks that every expression token was consumed.
 """
@@ -17,7 +17,7 @@ from pathlib import Path
 
 
 def build_grammars():
-    from hek_parsec import Input, NUMBER, PLUS, ParserState, fw
+    from hparsec import Input, NUMBER, PLUS, ParserState, fw
 
     # expr ::= expr '+' NUMBER | NUMBER
     lr_expr = fw("lr_expr")

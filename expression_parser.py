@@ -1,7 +1,7 @@
 
 import re
 
-from hek_parsec import (
+from hparsec import (
     Grammar,
     ParserState,
     Terminals,
