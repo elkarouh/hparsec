@@ -254,7 +254,9 @@ class ZshStyleGrammar(Grammar):
     named_fd = ignore(lbrace_vis + identifier + rbrace_vis)
     # Keep the target argument in the AST so argument.lint() can inspect it.
     # Only the descriptor and operator are syntactic details.
-    redir = (named_fd | ignore(number[0:1])) + ignore(redir_op) + argument
+    # The here-string operator is kept in the AST so its use can be linted (ZSH008).
+    here_string_op = filt(lambda tok: tok.string == "<<<", expect_type_node(TOKEN_TYPES["OP"]))
+    redir = (named_fd | ignore(number[0:1])) + (here_string_op | ignore(redir_op)) + argument
     # Zsh permits redirection-only commands, e.g. `{myfd}</dev/null`.
     redir_command = redir[1:]
 
@@ -438,6 +440,22 @@ class ZshStyleGrammar(Grammar):
             issues.extend(_expansion_issues(self))
             return issues
 
+    class redir:
+        """redir ::= (named_fd | number)? ('<<<' | redir_op) argument"""
+        def lint(self):
+            issues = []
+            for c in children(self):
+                tok = token_of(c)
+                if getattr(tok, "string", None) == "<<<":
+                    issues.append({
+                        "rule": "ZSH008",
+                        "message": "Here-string '<<<' used; consider a pipe or a file.",
+                        "token": tok,
+                    })
+                elif hasattr(c, "lint"):
+                    issues.extend(c.lint())
+            return issues
+
     class dbl_test_construct:
         """dbl_test_construct ::= dlbracket (~drbracket shift)* drbracket"""
         # [[ ... ]] performs no word splitting — suppress ZSH002 for its args.
@@ -566,8 +584,12 @@ if __name__ == "__main__":
         for issue in _double_test
     ), "[[ ]] expansion exemption regressed"
 
-    # Here-strings: an unquoted word is a (mild) ZSH002 warning; a quoted one is not.
+    # Here-strings: every one is a mild ZSH008; an unquoted word is also ZSH002.
     _herestring_bare = lint_zsh_code("cat <<< $line\n")
+    assert any(
+        issue["rule"] == "ZSH008"
+        for issue in _herestring_bare
+    ), "here-string not counted by ZSH008"
     assert any(
         issue["rule"] == "ZSH002"
         for issue in _herestring_bare

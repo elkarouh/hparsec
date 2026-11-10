@@ -306,6 +306,9 @@ These are reversed by the backend's output methods on the relevant AST nodes.
 - `examples/zsh_linter/` is a full zsh grammar with lint rules attached to
   AST nodes. `zsh_linter.py` runs its inline cases; `corpus_test.py` lints
   every script in `corpus/` and reports any parse failure with context.
+  `count_rule.py` counts how often one rule fires across a codebase, for
+  example `PYTHONPATH=src python examples/zsh_linter/count_rule.py ZSH008 ~/dotfiles`
+  to count here-strings.
 
 ## Benchmarks
 
