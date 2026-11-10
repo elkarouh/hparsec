@@ -99,8 +99,8 @@ class Environment:
 
     The table's stack holds the globals scope, and while a function body runs, one
     frame for its parameters on top of it. Variables have kind "var" (LET) or "param"
-    (a function parameter), and functions have kind "func". The table's "type" field
-    holds the value of a variable, or (parameters, body) of a function.
+    (a function parameter), and functions have kind "func". A symbol's "value" holds
+    the variable's value, or (parameters, body) for a function.
     """
 
     MAX_CALL_DEPTH = 50
@@ -113,23 +113,23 @@ class Environment:
 
     def set(self, name, value):
         """LET: assign a global variable."""
-        self.symbols.add(name, value, kind="var")
+        self.symbols.add(name, kind="var", value=value)
 
     def get(self, name):
         symbol = self.symbols.lookup(name)
         if symbol is None or symbol["kind"] not in ("var", "param"):
             raise BasicError(f"undefined variable {name}")
-        return symbol["type"]
+        return symbol["value"]
 
     def define(self, name, params, body):
         """DEF FN: functions live in the same table under the key FN:name."""
-        self.symbols.add(f"FN:{name}", (params, body), kind="func")
+        self.symbols.add(f"FN:{name}", kind="func", value=(params, body))
 
     def call(self, name, args):
         symbol = self.symbols.lookup(f"FN:{name}")
         if symbol is None:
             raise BasicError(f"undefined function FN {name}")
-        params, body = symbol["type"]
+        params, body = symbol["value"]
         if len(params) != len(args):
             raise BasicError(f"FN {name} takes {len(params)} argument(s), got {len(args)}")
         if self.depth >= self.MAX_CALL_DEPTH:
@@ -137,7 +137,7 @@ class Environment:
         # The body sees the globals and its own parameters only, not the caller's frame.
         saved = self.symbols.stack
         frame = {"name": f"FN {name}", "symbols": {
-            param: {"type": value, "kind": "param"} for param, value in zip(params, args)}}
+            param: {"type": None, "kind": "param", "value": value} for param, value in zip(params, args)}}
         self.symbols.stack = [saved[0], frame]
         self.depth += 1
         try:

@@ -496,8 +496,8 @@ if __name__ == "__main__":
     assert st.depth() == 1
     st.add("x", "int", "var")
     st.add("main", None, "func")
-    assert st.lookup("x") == {"type": "int", "kind": "var"}
-    assert st.lookup("main") == {"type": None, "kind": "func"}
+    assert st.lookup("x") == {"type": "int", "kind": "var", "value": None}
+    assert st.lookup("main") == {"type": None, "kind": "func", "value": None}
     assert st.lookup("y") is None
     print("  push_scope / add / lookup: ok")
 
@@ -506,9 +506,9 @@ if __name__ == "__main__":
     assert st.depth() == 2
     st.add("x", "str", "param")
     st.add("y", "float", "var")
-    assert st.lookup("x") == {"type": "str", "kind": "param"}, "inner x shadows outer"
-    assert st.lookup("y") == {"type": "float", "kind": "var"}
-    assert st.lookup("main") == {"type": None, "kind": "func"}, "outer func visible"
+    assert st.lookup("x") == {"type": "str", "kind": "param", "value": None}, "inner x shadows outer"
+    assert st.lookup("y") == {"type": "float", "kind": "var", "value": None}
+    assert st.lookup("main") == {"type": None, "kind": "func", "value": None}, "outer func visible"
     print("  nested scope / shadowing: ok")
 
     # Pop function scope
@@ -516,7 +516,7 @@ if __name__ == "__main__":
     assert scope["name"] == "main"
     assert "x" in scope["symbols"] and "y" in scope["symbols"]
     assert st.depth() == 1
-    assert st.lookup("x") == {"type": "int", "kind": "var"}, "x restored after pop"
+    assert st.lookup("x") == {"type": "int", "kind": "var", "value": None}, "x restored after pop"
     assert st.lookup("y") is None, "y gone after pop"
     print("  pop_scope / restore: ok")
 

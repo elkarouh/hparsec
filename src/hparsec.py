@@ -138,8 +138,9 @@ def method(KLASS: type) -> Callable:
 class SymbolTable:
     """A stack-based symbol table for tracking variable names and types across scopes.
 
-    Each scope is a dict mapping names to {"type": type_str, "kind": kind_str}.
-    kind is one of: "var", "param", "func", "class".
+    Each scope is a dict mapping names to {"type": type_str, "kind": kind_str, "value": value}.
+    kind is one of: "var", "param", "func", "class". value is an optional run-time value
+    (for example a variable's content), None when the symbol has none.
     """
 
     def __init__(self):
@@ -155,10 +156,10 @@ class SymbolTable:
             return self.stack.pop()
         return None
 
-    def add(self, name, type_info=None, kind="var"):
+    def add(self, name, type_info=None, kind="var", value=None):
         """Add a symbol to the current scope."""
         if self.stack:
-            self.stack[-1]["symbols"][name] = {"type": type_info, "kind": kind}
+            self.stack[-1]["symbols"][name] = {"type": type_info, "kind": kind, "value": value}
 
     def lookup(self, name):
         """Look up a symbol from innermost scope outward. Returns dict or None."""
@@ -1352,6 +1353,19 @@ if __name__ == "__main__":
     lr_stream = TokenStream(["a", "+", "b", "+", "c"])
     lr_match = as_node_lr_expr.parse(lr_stream)
     assert lr_match and lr_stream.pos == 5, "as_node(left recursion): failed to grow parse"
+    # SymbolTable: scopes, lookup order, and the value field
+    table = SymbolTable()
+    table.push_scope("outer")
+    table.add("n", "int", "var", value=1)
+    table.push_scope("inner")
+    table.add("n", "int", "param", value=2)
+    assert table.lookup("n") == {"type": "int", "kind": "param", "value": 2}, "SymbolTable: inner scope shadows outer"
+    table.pop_scope()
+    assert table.lookup("n")["value"] == 1, "SymbolTable: outer value restored after pop"
+    table.add("m", kind="func", value=("p", None))
+    assert table.lookup("m")["value"] == ("p", None) and table.lookup("m")["type"] is None
+    print("SymbolTable(): scopes, shadowing and the value field OK")
+
     print("as_node(): AST boundaries, backtracking, grammar methods, memoization, and left recursion OK")
 
     print("\nAll tests passed.")
