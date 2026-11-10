@@ -592,7 +592,8 @@ class ZshStyleGrammar(Grammar):
     # NOTE: The guard (~kw_esac) must be on BOTH case_arm and case_final
     # to prevent case_arm from greedily consuming `esac` and subsequent code.
     # A comment may follow the terminator: `;; # Invalid option`.
-    case_arm = (STATEMENT_SEP | comment)[:] + (~kw_esac) + case_body + (dsemi | semi_amp | semi_bar) + comment[0:1]
+    case_terminator = (dsemi | semi_amp | semi_bar) + comment[0:1]
+    case_arm = (STATEMENT_SEP | comment)[:] + (~kw_esac) + case_body + case_terminator
     case_final = (STATEMENT_SEP | comment)[:] + (~kw_esac) + case_body
     case_stmt = (
         kw_case + argument + ZshTerminals.glued_part[0:] + STATEMENT_SEP[:] + kw_in + STATEMENT_SEP[:]
@@ -619,13 +620,9 @@ class ZshStyleGrammar(Grammar):
 
     subshell = lparen_vis + STATEMENT_SEP[:] + inner_statement[:] + STATEMENT_SEP[:] + rparen_vis
     grouping = LBRACE + STATEMENT_SEP[:] + inner_statement[:] + STATEMENT_SEP[:] + RBRACE
-    # zsh try/always: `{ body } always { cleanup }`. The braces are kept and the
-    # two groups must share one line with `always`.
-    try_always = (
-        (lbrace_vis + STATEMENT_SEP[:] + inner_statement[:] + STATEMENT_SEP[:] + rbrace_vis)
-        + kw_always
-        + (lbrace_vis + STATEMENT_SEP[:] + inner_statement[:] + STATEMENT_SEP[:] + rbrace_vis)
-    )
+    # zsh try/always: `{ body } always { cleanup }`. The two groups share one line
+    # with `always`.
+    try_always = grouping + kw_always + grouping
 
     # ---------- Node methods ----------
     # One class per rule: to_source() renders the node from its rule, check() reports
@@ -669,17 +666,10 @@ class ZshStyleGrammar(Grammar):
             return names
 
     class try_always:
-        """'{' inner_statement* '}' 'always' '{' inner_statement* '}'"""
+        """grouping 'always' grouping"""
         def to_source(self):
-            body = self.parts()
-            always = body.index(self.kw_always)
-            output = "{\n"
-            for statement in body[1:always - 1]:
-                output += statement.to_source() + "\n"
-            output += "} always {\n"
-            for statement in body[always + 2:-1]:
-                output += statement.to_source() + "\n"
-            return output + "}"
+            body, cleanup = self.grouping_list
+            return body.to_source() + " always " + cleanup.to_source()
 
     class brace_word:
         """'{' word* '}': the tokens are contiguous, so they are joined without spaces."""
@@ -736,26 +726,20 @@ class ZshStyleGrammar(Grammar):
                            token_of(self.argument))]
 
     class case_body:
-        """case_pattern inner_statement*. The case_pattern sequence is flattened into this node."""
+        """case_pattern inner_statement*"""
         def to_source(self):
-            body = self.parts()
-            output = _join_source(body[:len(body) - len(self.inner_statement_list)])
+            output = self.case_pattern.to_source()
             for statement in self.inner_statement_list:
                 output += "\n" + statement.to_source()
             return output
 
     class case_arm:
-        """comment* case_body (';;' | ';&' | ';|') comment?"""
+        """comment* case_body case_terminator"""
         def to_source(self):
-            arm = self.parts()
-            body = arm.index(self.case_body)
             output = ""
-            for comment in arm[:body]:
+            for comment in self.comment_list:
                 output += comment.to_source() + "\n"
-            output += self.case_body.to_source() + "\n" + arm[body + 1].to_source()
-            for comment in arm[body + 2:]:
-                output += " " + comment.to_source()
-            return output
+            return output + self.case_body.to_source() + "\n" + self.case_terminator.to_source()
 
     class case_final:
         """comment* case_body: the last arm, which may have no terminator."""
@@ -1065,12 +1049,8 @@ class ZshStyleGrammar(Grammar):
             return children(self)[0].last_status()
 
     class if_condition:
-        def check(self):
-            # The condition holds its and_or chain directly.
-            return and_or.check(self)
-
         def tests_status(self):
-            return self.parts()[0].tests_status()
+            return self.and_or.tests_status()
 
     class argument:
         """argument ::= assign_word | _basic_arg"""
@@ -1140,20 +1120,11 @@ class ZshStyleGrammar(Grammar):
     class pipeline_item:
         """pipeline_item ::= command | declaration2 redir* | compound redir*
 
-        These methods go to the two sequence forms. In a pipeline a declaration is part
-        of the sequence `declaration2 redir*`, so it is checked here.
+        This method goes to the two sequence forms: their status is the status of
+        the declaration or compound command they start with.
         """
-        def declares(self):
-            return bool(self.kw_typeset or self.kw_declare or self.kw_export or self.kw_readonly)
-
-        def check(self):
-            return declaration2.check(self) if self.declares() else []
-
-        def variables(self):
-            return declaration2.variables(self)
-
         def last_status(self):
-            return declaration2.last_status(self) if self.declares() else None
+            return self.parts()[0].last_status()
 
     class command:
         """command ::= prefix_assignment* command_head (redir | argument)*"""

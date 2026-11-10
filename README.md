@@ -196,7 +196,8 @@ ast, stream = expression.parse(tokenize("1 + (2 - 3)"))
 A node reaches its parts by rule name: `self.if_condition` is its part of rule
 `if_condition`, or `None` when the rule matched nothing, and `self.elif_branch_list`
 is every such part in source order. Anonymous combinator nodes are looked through,
-so a handler sees the parts its rule names, as an EBNF reading would:
+and a named rule always stays its own node, even on the left of `+`, so a handler
+sees the parts its rule names, as an EBNF reading would:
 
 ```python
 class if_stmt:
