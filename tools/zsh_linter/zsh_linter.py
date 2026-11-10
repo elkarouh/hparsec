@@ -621,6 +621,44 @@ class ZshStyleGrammar(Grammar):
 # Public entry point
 # ============================================================
 
+def _unclosed_construct(tokens):
+    """Name the construct that is still open at the end of a failed parse.
+
+    Only keywords and braces in command position count. Returns a message for the
+    innermost unclosed opener, or for the first closer that does not match the
+    innermost opener. Returns None when the brackets balance, so the caller can
+    fall back to the farthest-token report.
+    """
+    openers = {"if": "fi", "case": "esac", "while": "done", "until": "done",
+               "for": "done", "select": "done", "{": "}"}
+    closers = {"fi", "esac", "done", "}"}
+    after_ident = {"then", "do", "else", "elif"}
+    after_op = {";", ";;", ";&", ";|", "&&", "||", "|", "|&", "&", "(", "{", "!"}
+    stack = []
+    prev = None
+    for tok in tokens:
+        if tok.type == TOKEN_TYPES["COMMENT"]:
+            continue
+        in_word = tok.type in (TOKEN_TYPES["IDENT"], TOKEN_TYPES["OP"])
+        at_command = (prev is None or prev.type == TOKEN_TYPES["NEWLINE"]
+                      or (prev.type == TOKEN_TYPES["OP"] and prev.string in after_op)
+                      or (prev.type == TOKEN_TYPES["IDENT"] and prev.string in after_ident))
+        if in_word and at_command:
+            if tok.string in openers:
+                stack.append(tok)
+            elif tok.string in closers and stack:
+                top = stack[-1]
+                if openers[top.string] != tok.string:
+                    return (f"{tok.string!r} at {tok.start} does not close "
+                            f"{top.string!r} opened at {top.start}")
+                stack.pop()
+        prev = tok
+    if stack:
+        top = stack[-1]
+        return f"unclosed {top.string!r} opened at {top.start}, expected {openers[top.string]!r}"
+    return None
+
+
 def lint_zsh_code(source):
     ParserState.reset()
     tokens = tokenize_zsh(source)
@@ -634,6 +672,10 @@ def lint_zsh_code(source):
         stream.pos += 1
 
     if stream.pos < len(stream.tokens):
+        # An unclosed or mismatched construct is the real problem; report it first.
+        construct = _unclosed_construct(stream.tokens)
+        if construct:
+            raise SyntaxError(construct)
         # The statement parser stops at the first statement it cannot finish, so
         # stream.pos is that statement's first token. The farthest token any rule
         # examined is usually where the real problem is.
