@@ -29,7 +29,7 @@ from zsh_tokenizer import tokenize_zsh, TOKEN_TYPES, _RESERVED
 # ============================================================
 
 class ZshTerminals(Terminals):
-    ASSIGN = "="
+    assign = filt(lambda tok: tok.string == "=" and tok.type in (TOKEN_TYPES["OP"], TOKEN_TYPES["ASSIGN_EMPTY"]), shift)
     SEMICOL = ";"
     pipe = "|"
     pipe_amp = "|&"
@@ -42,12 +42,12 @@ class ZshTerminals(Terminals):
     dsemi = ";;"
     semi_amp = ";&"
     semi_bar = ";|"
-    plusequal = "+="
-    minequal = "-="
+    plusequal = filt(lambda tok: tok.string == "+=", expect_type_node(TOKEN_TYPES["OP"]))
+    minequal = filt(lambda tok: tok.string == "-=", expect_type_node(TOKEN_TYPES["OP"]))
     amp = "&"
     amp_pipe = "&|"
     amp_bang = "&!"
-    ASSIGN_OP = ASSIGN | plusequal | minequal
+    assign_op = assign | plusequal | minequal
     
     # Visible punctuation (appear in the AST)
     lbrace_vis = filt(lambda tok: tok.string == "{", shift, name="{")
@@ -101,27 +101,27 @@ class ZshTerminals(Terminals):
     # (`test $x = 0`).
     # A brace group in argument position is a brace-expansion word: `{01..$N}`, `{a,b}`.
     # Ignored in the AST, so its contents are not linted as expansions.
-    brace_word = ignore(LBRACE + ((~RBRACE) + shift)[:] + RBRACE)
+    brace_word = LBRACE + ((~RBRACE) + shift)[:] + RBRACE
     # A `[[ ... ]]` test passed as an argument: `eval [[ -n $x ]]`.
-    dbl_bracket_word = ignore(filt(lambda tok: tok.string == "[[", expect_type_node(TOKEN_TYPES["OP"]))
+    dbl_bracket_word = (filt(lambda tok: tok.string == "[[", expect_type_node(TOKEN_TYPES["OP"]))
                               + ((~filt(lambda tok: tok.string == "]]", expect_type_node(TOKEN_TYPES["OP"]))) + shift)[:]
                               + filt(lambda tok: tok.string == "]]", expect_type_node(TOKEN_TYPES["OP"])))
     # A word may start with a colon: `getopts :ho SWITCH`.
-    colon_word = ignore(filt(lambda tok: tok.string == ":", expect_type_node(TOKEN_TYPES["OP"]))) + argument_identifier[1:]
+    colon_word = filt(lambda tok: tok.string == ":", expect_type_node(TOKEN_TYPES["OP"])) + argument_identifier[1:]
     _basic_arg = (backtick | cmd_subst | arith_exp | var_exp | heredoc | string | brace_word | dbl_bracket_word | colon_word
                   | number
                   # Extended glob: an operator before a group is one word, `+([0-9])` or `!(*.log)`.
-                  | (ignore(filt(lambda tok: tok.string in ("+", "*", "?", "!", "@"), expect_type_node(TOKEN_TYPES["OP"]))) + glob_qual)
+                  | (filt(lambda tok: tok.string in ("+", "*", "?", "!", "@"), expect_type_node(TOKEN_TYPES["OP"])) + glob_qual)
                   | glob_qual | subscript | argument_identifier | expect_type_node(TOKEN_TYPES["ASSIGN_EMPTY"])
                   # A "}" glued to a word is a literal: `echo x}.log`. A separate "}" still closes a group.
-                  | ignore(filt(lambda tok: tok.glued and tok.string == "}", expect_type_node(TOKEN_TYPES["OP"])))
+                  | filt(lambda tok: tok.glued and tok.string == "}", expect_type_node(TOKEN_TYPES["OP"]))
                   # Bare pattern characters are word parts in zsh: `fd -tx remove$ dir`,
                   # `grep -v ^N_`, `grep .+%U.+`, `cmd 08:00:00`. Ignored so they are not mistaken for expansions.
-                  | ignore(filt(lambda tok: tok.string in ("$", "^", "+", "!", ".", ":"), expect_type_node(TOKEN_TYPES["OP"])))
+                  | filt(lambda tok: tok.string in ("$", "^", "+", "!", ".", ":"), expect_type_node(TOKEN_TYPES["OP"]))
                   # `test "x$a" != x`: comparison operators are plain words to test(1).
-                  | ignore(filt(lambda tok: tok.string in ("!=", "=="), expect_type_node(TOKEN_TYPES["OP"])))
+                  | filt(lambda tok: tok.string in ("!=", "=="), expect_type_node(TOKEN_TYPES["OP"]))
                   # `]]` closes a test only after `[[`; elsewhere it is a word: `is_a_server ${X} ]]`.
-                  | ignore(filt(lambda tok: tok.string == "]]", expect_type_node(TOKEN_TYPES["OP"]))))
+                  | filt(lambda tok: tok.string == "]]", expect_type_node(TOKEN_TYPES["OP"])))
     # assign_word matches `name=value` as a single argument (needed for
     # `alias ls='...'`, `export FOO=bar` inline, etc.)
     # Assignment names are plain identifiers; reserved words such as `end` are only
@@ -178,7 +178,7 @@ def _expansion_issues(node, backticks_only=False):
                 if backticks_only:
                     return
 
-            elif value.startswith("$") and not value.startswith(
+            elif value.startswith("$") and len(value) > 1 and not value.startswith(
                 ("${", "$((")
             ):
                 rule = "ZSH002"
@@ -257,6 +257,19 @@ def _render(node):
     return fn() if fn else _join_source(children(node))
 
 
+def _first_leaf(node):
+    """Return the first token (or str) under node, skipping empty branches."""
+    if node is None:
+        return None
+    if isinstance(node, str) or _is_leaf(node):
+        return node
+    for c in children(node):
+        leaf = _first_leaf(c)
+        if leaf is not None:
+            return leaf
+    return None
+
+
 def _join_source(nodes):
     """Join rendered pieces with a space, except where the next token is glued."""
     out = ""
@@ -264,7 +277,7 @@ def _join_source(nodes):
         piece = _render(c)
         if not piece:
             continue
-        first = token_of(c)
+        first = _first_leaf(c)
         glued = bool(getattr(first, "glued", False))
         if out and not glued:
             out += " "
@@ -387,9 +400,9 @@ class ZshStyleGrammar(Grammar):
     # A declared name may be an array element: `export NAME[$i]=$x`.
     # FIX 1: The declared name may be dynamic: `typeset -ga ${cache_place}` or `"${var}"`.
     # Added `string` to allow quoted variable expansions as declaration targets.
-    declaration = literal("local") + flag[:] + (((assign_name + subscript[0:1]) | var_exp | string) + (ASSIGN_OP + (assign_rhs | nothing))[0:1])[1:]
+    declaration = literal("local") + flag[:] + (((assign_name + subscript[0:1]) | var_exp | string) + (assign_op + (assign_rhs | nothing))[0:1])[1:]
     declaration2 = (literal("typeset") | literal("declare")
-                    | literal("export") | literal("readonly")) + flag[:] + (((assign_name + subscript[0:1]) | var_exp | string) + (ASSIGN_OP + (assign_rhs | nothing))[0:1])[0:]
+                    | literal("export") | literal("readonly")) + flag[:] + (((assign_name + subscript[0:1]) | var_exp | string) + (assign_op + (assign_rhs | nothing))[0:1])[0:]
     
     # One or more `name=value` pairs on a line: `start=$a end=$b`.
     assignment = (
@@ -627,17 +640,17 @@ class ZshStyleGrammar(Grammar):
             return _expansion_issues(self, backticks_only=True)
 
     class assignment:
-        """assignment ::= assign_target subscript? ASSIGN_OP (assign_rhs | nothing) assign_word*"""
+        """assignment ::= assign_target subscript? assign_op (assign_rhs | nothing) assign_word*"""
         def lint(self):
             return _expansion_issues(self, backticks_only=True)
 
     class declaration:
-        """declaration ::= 'local' flag* ((assign_name | var_exp | string) (ASSIGN_OP (assign_rhs | nothing))?)+"""
+        """declaration ::= 'local' flag* ((assign_name | var_exp | string) (assign_op (assign_rhs | nothing))?)+"""
         def lint(self):
             return _expansion_issues(self, backticks_only=True)
 
     class declaration2:
-        """declaration2 ::= ('typeset' | 'declare' | 'export' | 'readonly') flag* ((assign_name | var_exp | string) (ASSIGN_OP (assign_rhs | nothing))?)+"""
+        """declaration2 ::= ('typeset' | 'declare' | 'export' | 'readonly') flag* ((assign_name | var_exp | string) (assign_op (assign_rhs | nothing))?)+"""
         def lint(self):
             return _expansion_issues(self, backticks_only=True)
 
@@ -724,18 +737,19 @@ class ZshStyleGrammar(Grammar):
         """function_def: header, then the body in braces, one statement per line."""
         def to_source(self):
             nodes = list(_flatten_anon(children(self)))
-            header = ""
+            prefix = ""
+            name = None
             body = []
             for c in nodes:
                 kw = _keyword_of(c)
-                if not header and kw == "function":
-                    header = "function "
+                if kw == "function" and name is None and not prefix:
+                    prefix = "function "
                     continue
-                if not header and (isinstance(c, str) or _is_leaf(c) or type(c).__name__ == "func_name"):
-                    header = header + _render(c)
+                if name is None and (isinstance(c, str) or _is_leaf(c) or type(c).__name__ == "func_name"):
+                    name = _render(c)
                     continue
                 body.append(c)
-            return header + " () {\n" + _statements_source(body) + "\n}"
+            return prefix + name + " () {\n" + _statements_source(body) + "\n}"
 
     class grouping:
         """grouping: { statements; }"""
