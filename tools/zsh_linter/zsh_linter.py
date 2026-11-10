@@ -95,7 +95,10 @@ class ZshTerminals(Terminals):
     # A bare `=` followed by a space is ASSIGN_EMPTY; as an argument it is just a word
     # (`test $x = 0`).
     _basic_arg = (backtick | cmd_subst | arith_exp | var_exp | heredoc | string
-                  | number | glob_qual | subscript | argument_identifier | expect_type_node(TOKEN_TYPES["ASSIGN_EMPTY"]))
+                  | number | glob_qual | subscript | argument_identifier | expect_type_node(TOKEN_TYPES["ASSIGN_EMPTY"])
+                  # a bare `$` ends a word literally: `fd -tx remove$ dir`. Ignored so it is
+                  # not mistaken for an expansion.
+                  | ignore(filt(lambda tok: tok.string == "$", expect_type_node(TOKEN_TYPES["OP"]))))
     # assign_word matches `name=value` as a single argument (needed for
     # `alias ls='...'`, `export FOO=bar` inline, etc.)
     # Assignment names are plain identifiers; reserved words such as `end` are only
@@ -296,7 +299,8 @@ class ZshStyleGrammar(Grammar):
     # as_node(command) keeps each command a distinct node inside pipelines,
     # so command.lint fires per stage instead of only on bare commands.
     # Compound commands can sit on either side of a pipe: `echo x | while read a; do ...; done`.
-    pipeline_item = command | grouping | subshell | while_stmt | until_stmt | for_stmt | if_stmt | case_stmt
+    # A compound command may carry redirections: `while ...; done < f | sort`.
+    pipeline_item = command | ((grouping | subshell | while_stmt | until_stmt | for_stmt | if_stmt | case_stmt) + redir[:])
     
     # Operators may be followed by a line break: `a |\n  b` and `a &&\n  b`.
     pipeline = as_node(pipeline_item) + ((PIPE | PIPE_AMP) + NEWLINE[:] + as_node(pipeline_item))[:]
@@ -695,6 +699,9 @@ def _run_self_tests():
             ("assign colon value", "FS=: read -ra s\n"),
             ("colon as argument", "sd : '\\n'\n"),
             ("pipe into while", "echo x | while read p; do echo $p; done\n"),
+            ("pipe from redirected while", "while read d; do echo $d; done < f | sort\n"),
+            ("bare dollar in word", "fd -tx remove$ /cm\n"),
+            ("comment after brace", "rtd() { # remove\n  echo a\n}\n"),
             ("for-alt", "for f (*.txt) do\n  echo $f\ndone\n"),
             ("select", "select opt in a b c; do\n  echo $opt\ndone\n"),
             ("heredoc", "cat <<EOF\nhello\nEOF\n"),
