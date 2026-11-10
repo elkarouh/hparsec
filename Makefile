@@ -7,9 +7,14 @@ ZSH := tools/zsh_linter
 
 test: selftest examples zsh corpus
 
-# Editable install of hparsec and the zsh-lint command (pip needs -e before each path)
+# Editable install of hparsec and the zsh-lint command into a project-local venv,
+# so it works with externally managed Pythons (PEP 668). Run .venv/bin/zsh-lint afterwards.
+# pip needs -e before each path.
+VENV ?= .venv
+
 install:
-	$(PYTHON) -m pip install -e . -e ./tools/zsh_linter
+	$(PYTHON) -m venv $(VENV)
+	$(VENV)/bin/pip install -e . -e ./tools/zsh_linter
 
 # Built-in self-tests of the library modules
 selftest:
