@@ -370,6 +370,7 @@ class ZshStyleGrammar(Grammar):
 
     # ---------- Lint methods ----------
     class __default__:
+        """Fallback for any rule without its own lint: lints the children."""
         def lint(self):
             # this node doesnt have a lint method, but its children may have.
             issues = []
@@ -379,21 +380,25 @@ class ZshStyleGrammar(Grammar):
             return issues
             
     class argument:
+        """argument ::= assign_word | _basic_arg"""
         def lint(self):
             return _expansion_issues(self)
 
 
     class prefix_assignment:
+        """prefix_assignment ::= assign_word"""
         def lint(self):
             return _expansion_issues(self)
 
 
     class command_head:
+        """command_head ::= identifier | colon | backtick | cmd_subst | arith_exp | var_exp | string | number"""
         def lint(self):
             return _expansion_issues(self)
 
         
     class test_construct:
+        """test_construct ::= lbracket (~rbracket shift)* rbracket"""
         def lint(self):
             issues = [{
                 "rule": "ZSH004",
@@ -408,12 +413,14 @@ class ZshStyleGrammar(Grammar):
             return issues
 
     class dbl_test_construct:
+        """dbl_test_construct ::= dlbracket (~drbracket shift)* drbracket"""
         # [[ ... ]] performs no word splitting — suppress ZSH002 for its args.
         # Also suppresses ZSH004 (this is the recommended form).
         def lint(self):
             return []   # [[ ]] does no word splitting; recommended form
 
     class case_stmt:
+        """case_stmt ::= 'case' argument 'in' STATEMENT_SEP* case_arm* case_final? STATEMENT_SEP* 'esac'"""
         # The case word (nodes[1]) is subject to splitting — check it.
         # Then recurse into bodies.
         def lint(self):
@@ -451,6 +458,7 @@ class ZshStyleGrammar(Grammar):
             return issues
 
     class script:
+        """script ::= statement*"""
         def lint(self):
             issues = []
             for c in children(self):
