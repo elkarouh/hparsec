@@ -24,6 +24,7 @@ from hparsec import (
     expect_type,
     literal,
     nothing,
+    SymbolTable,
     parts,
 )
 
@@ -94,35 +95,56 @@ def _text(value):
 
 
 class Environment:
-    """Variables, functions and output of one run. A function call gets a child
-    environment holding only its parameters; the globals stay visible."""
+    """The state of one run, kept in hparsec's SymbolTable.
+
+    The table's stack holds the globals scope, and while a function body runs, one
+    frame for its parameters on top of it. Variables have kind "var" (LET) or "param"
+    (a function parameter), and functions have kind "func". The table's "type" field
+    holds the value of a variable, or (parameters, body) of a function.
+    """
 
     MAX_CALL_DEPTH = 50
 
-    def __init__(self, variables=None, functions=None, output=None, parameters=None, depth=0):
-        self.variables = {} if variables is None else variables
-        self.functions = {} if functions is None else functions
-        self.output = [] if output is None else output
-        self.parameters = parameters
-        self.depth = depth
+    def __init__(self):
+        self.symbols = SymbolTable()
+        self.symbols.push_scope("globals")
+        self.output = []
+        self.depth = 0
+
+    def set(self, name, value):
+        """LET: assign a global variable."""
+        self.symbols.add(name, value, kind="var")
 
     def get(self, name):
-        if self.parameters is not None and name in self.parameters:
-            return self.parameters[name]
-        if name in self.variables:
-            return self.variables[name]
-        raise BasicError(f"undefined variable {name}")
+        symbol = self.symbols.lookup(name)
+        if symbol is None or symbol["kind"] not in ("var", "param"):
+            raise BasicError(f"undefined variable {name}")
+        return symbol["type"]
+
+    def define(self, name, params, body):
+        """DEF FN: functions live in the same table under the key FN:name."""
+        self.symbols.add(f"FN:{name}", (params, body), kind="func")
 
     def call(self, name, args):
-        if name not in self.functions:
+        symbol = self.symbols.lookup(f"FN:{name}")
+        if symbol is None:
             raise BasicError(f"undefined function FN {name}")
-        params, body = self.functions[name]
+        params, body = symbol["type"]
         if len(params) != len(args):
             raise BasicError(f"FN {name} takes {len(params)} argument(s), got {len(args)}")
         if self.depth >= self.MAX_CALL_DEPTH:
             raise BasicError(f"FN {name}: more than {self.MAX_CALL_DEPTH} nested calls (recursion is not supported)")
-        local = Environment(self.variables, self.functions, self.output, dict(zip(params, args)), self.depth + 1)
-        return body.evaluate(local)
+        # The body sees the globals and its own parameters only, not the caller's frame.
+        saved = self.symbols.stack
+        frame = {"name": f"FN {name}", "symbols": {
+            param: {"type": value, "kind": "param"} for param, value in zip(params, args)}}
+        self.symbols.stack = [saved[0], frame]
+        self.depth += 1
+        try:
+            return body.evaluate(self)
+        finally:
+            self.depth -= 1
+            self.symbols.stack = saved
 
 
 def _arithmetic(left, op, right):
@@ -212,7 +234,7 @@ class BasicGrammar(Grammar):
     class let_stmt:
         """let_stmt ::= LET identifier EQ expression"""
         def run(self, env):
-            env.variables[self.identifier.node] = self.expression.evaluate(env)
+            env.set(self.identifier.node, self.expression.evaluate(env))
 
     class print_stmt:
         """print_stmt ::= PRINT ((expression (COMMA expression)*) | nothing)"""
@@ -224,7 +246,7 @@ class BasicGrammar(Grammar):
         """def_stmt ::= DEF FN identifier LPAREN ((identifier (COMMA identifier)*) | nothing) RPAREN EQ expression"""
         def run(self, env):
             name, *params = [part.node for part in self.identifier_list]
-            env.functions[name] = (params, self.expression)
+            env.define(name, params, self.expression)
 
     class expression:
         """expression ::= term (add_op term)*"""
@@ -344,6 +366,7 @@ if __name__ == "__main__":
         ('PRINT 1 +\n', "syntax error"),
         ('PRINT 1 @ 2\n', "unexpected character"),
         ('DEF FN F(X) = FN F(X)\nPRINT FN F(1)\n', "recursion is not supported"),
+        ('DEF FN G() = X\nDEF FN F(X) = FN G()\nPRINT FN F(5)\n', "undefined variable X"),
     ]
     for source, message in errors:
         try:

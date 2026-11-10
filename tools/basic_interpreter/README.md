@@ -37,7 +37,8 @@ run('DEF FN SQ(X) = X * X\nPRINT FN SQ(4) + 1\n')   # ['17']
 - `BasicGrammar` is written as EBNF. Each rule is a class whose docstring holds its rule.
   Statements have `run(env)`; expressions have `evaluate(env)`. Each method handles its
   own node and calls the methods of its parts, so nothing walks the tree generically.
-- `Environment` holds the variables, the functions and the output. A function call
-  gets a child environment with its parameters.
+- `Environment` keeps the variables, the functions and the output in hparsec's
+  `SymbolTable`. A function call pushes a frame with its parameters, on top of the
+  globals, and the frame is popped when the call returns.
 - Errors are raised as `BasicError`. A syntax error names the token where the parse
   stopped, which is often the start of the statement rather than the exact spot.
