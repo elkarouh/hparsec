@@ -19,7 +19,9 @@ from hparsec import (
     nothing,
     ignore,
     shift,
-    children, 
+    Parser,
+    children,
+    parts,
     token_of,
     walk,
 )
@@ -169,7 +171,7 @@ def _expansion_issues(node, backticks_only=False):
 
     def visit(current):
         # A token is a leaf: it has a string attribute but no AST children.
-        if hasattr(current, "string") and not hasattr(current, "nodes"):
+        if not isinstance(current, Parser):
             tok = current
             value = getattr(tok, "string", None)
 
@@ -228,7 +230,7 @@ def _expansion_issues(node, backticks_only=False):
 # rather than byte-identical. Anonymous combinator nodes are flattened.
 
 def _is_leaf(node):
-    return hasattr(node, "string") and not hasattr(node, "nodes")
+    return not isinstance(node, (Parser, str))
 
 
 def _render(node):
@@ -240,9 +242,6 @@ def _render(node):
         # With --fix, a token may have a new text (see format_zsh_code).
         if id(node) in _FIX_TOKENS:
             return _FIX_TOKENS[id(node)]
-        # A comment runs to the end of its line, so it must end the line.
-        if getattr(node, "type", None) == TOKEN_TYPES["COMMENT"]:
-            return node.string + "\n"
         # A heredoc token carries the newline that ends its terminator line; the
         # statement joiner supplies that newline, so it is dropped here.
         if getattr(node, "type", None) == TOKEN_TYPES["HEREDOC"]:
@@ -250,37 +249,6 @@ def _render(node):
         return node.string
     fn = getattr(node, "to_source", None)
     return fn() if fn else _join_source(children(node))
-
-
-_PART_WRAPPERS = ("Sequence_Parser", "Several_Times", "As_Node")
-
-
-def _parts(node):
-    """Yield the parts of a node: its children, looking through anonymous combinator nodes.
-
-    as_node() marks a node boundary on purpose, so the node it wraps is a part even
-    when that node is an anonymous sequence (`declaration2 redir*` in a pipeline).
-    """
-    for c in children(node):
-        if c is None:
-            continue
-        kind = None if isinstance(c, str) or _is_leaf(c) else type(c).__name__
-        if kind == "As_Node":
-            yield from children(c)
-        elif kind in _PART_WRAPPERS:
-            yield from _parts(c)
-        else:
-            yield c
-
-
-def _lines(nodes):
-    """Render each node on its own line."""
-    out = ""
-    for node in nodes:
-        piece = _render(node)
-        if piece:
-            out += piece if piece.endswith("\n") else piece + "\n"
-    return out
 
 
 def _first_leaf(node):
@@ -296,9 +264,24 @@ def _first_leaf(node):
     return None
 
 
+def _last_leaf(node):
+    """Return the last token (or str) under node, skipping empty branches."""
+    if node is None or isinstance(node, str) or _is_leaf(node):
+        return node
+    for c in reversed(children(node)):
+        leaf = _last_leaf(c)
+        if leaf is not None:
+            return leaf
+    return None
+
+
 def _join_source(nodes):
-    """Join rendered pieces with a space, except where the next token is glued."""
+    """Join rendered pieces with a space, except where the next token is glued.
+
+    A comment runs to the end of its line, so a line break follows it.
+    """
     out = ""
+    after_comment = False
     for c in nodes:
         piece = _render(c)
         if not piece:
@@ -307,9 +290,12 @@ def _join_source(nodes):
             glued = bool(getattr(c, "glued", False))
         else:
             glued = c.is_glued()
-        if out and not glued:
+        if after_comment:
+            out += "\n"
+        elif out and not glued:
             out += " "
         out += piece
+        after_comment = getattr(_last_leaf(c), "type", None) == TOKEN_TYPES["COMMENT"]
     return out
 
 
@@ -618,76 +604,115 @@ class ZshStyleGrammar(Grammar):
     class anon_function:
         """lparen_vis rparen_vis '{' inner_statement* '}'"""
         def to_source(self):
-            return "() {\n" + _lines(self.parts("comment", "inner_statement")) + "}"
+            output = "() {\n"
+            for statement in self.inner_statement_list:
+                output += statement.to_source() + "\n"
+            return output + "}"
 
     class function_def:
-        """(func_name '(' ')' | 'function' func_name ('(' ')')?) '{' inner_statement* '}'"""
+        """(func_name '(' ')' | 'function' func_name ('(' ')')?) comment* '{' inner_statement* '}'"""
         def to_source(self):
             fixed = _fixing(self, "ZSH033")
-            output = "function " if self.part("Literal_function") or fixed else ""
-            output += _render(self.part("func_name"))
-            if self.part("lparen_vis") and not fixed:
+            output = "function " if self.Literal_function or fixed else ""
+            output += self.func_name.to_source()
+            if self.lparen_vis and not fixed:
                 output += " ()"
-            return output + " {\n" + _lines(self.parts("comment", "inner_statement")) + "}"
+            output += " {\n"
+            for comment in self.comment_list:
+                output += comment.to_source() + "\n"
+            for statement in self.inner_statement_list:
+                output += statement.to_source() + "\n"
+            return output + "}"
 
     class try_always:
         """'{' inner_statement* '}' 'always' '{' inner_statement* '}'"""
         def to_source(self):
-            items = self.parts("comment", "inner_statement", "Literal_always")
-            i = items.index(self.part("Literal_always"))
-            return "{\n" + _lines(items[:i]) + "} always {\n" + _lines(items[i + 1:]) + "}"
+            body = self.parts()
+            always = body.index(self.Literal_always)
+            output = "{\n"
+            for statement in body[1:always - 1]:
+                output += statement.to_source() + "\n"
+            output += "} always {\n"
+            for statement in body[always + 2:-1]:
+                output += statement.to_source() + "\n"
+            return output + "}"
 
     class brace_word:
         """'{' word* '}': the tokens are contiguous, so they are joined without spaces."""
         def to_source(self):
-            return "".join(_render(c) for c in self.parts())
+            return "".join(part.to_source() for part in self.parts())
 
     class grouping:
         """'{' inner_statement* '}'"""
         def to_source(self):
-            return "{\n" + _lines(self.parts("comment", "inner_statement")) + "}"
+            output = "{\n"
+            for statement in self.inner_statement_list:
+                output += statement.to_source() + "\n"
+            return output + "}"
 
     class subshell:
         """'(' inner_statement* ')'"""
         def to_source(self):
-            return "(\n" + _lines(self.parts("comment", "inner_statement")) + ")"
+            output = "(\n"
+            for statement in self.inner_statement_list:
+                output += statement.to_source() + "\n"
+            return output + ")"
 
     class case_stmt:
-        """'case' argument glued_part* 'in' case_arm* case_final? 'esac'"""
+        """'case' argument glued_part* 'in' case_arm* case_final? comment* 'esac'"""
         def to_source(self):
-            word = _join_source(self.parts("argument", "glued_part"))
-            return "case " + word + " in\n" + _lines(self.parts("case_arm", "case_final", "comment")) + "esac"
+            output = "case " + self.argument.to_source()
+            for glued in self.glued_part_list:
+                output += glued.to_source()
+            output += " in\n"
+            for arm in self.case_arm_list:
+                output += arm.to_source() + "\n"
+            if self.case_final:
+                output += self.case_final.to_source() + "\n"
+            for comment in self.comment_list:
+                output += comment.to_source() + "\n"
+            return output + "esac"
 
     class case_body:
-        """case_pattern inner_statement*"""
+        """case_pattern inner_statement*. The case_pattern sequence is flattened into this node."""
         def to_source(self):
-            statements = self.parts("comment", "inner_statement")
-            pattern = [p for p in self.parts() if p not in statements]
-            return _join_source(pattern) + "\n" + _lines(statements)
+            body = self.parts()
+            output = _join_source(body[:len(body) - len(self.inner_statement_list)])
+            for statement in self.inner_statement_list:
+                output += "\n" + statement.to_source()
+            return output
 
     class case_arm:
         """comment* case_body (';;' | ';&' | ';|') comment?"""
         def to_source(self):
-            items = self.parts("comment", "case_body", "dsemi", "semi_amp", "semi_bar")
-            i = items.index(self.part("case_body"))
-            leading, (terminator, *trailing) = items[:i + 1], items[i + 1:]
-            return (_lines(leading) + _render(terminator)
-                    + "".join(" " + _render(c).rstrip("\n") for c in trailing))
+            arm = self.parts()
+            body = arm.index(self.case_body)
+            output = ""
+            for comment in arm[:body]:
+                output += comment.to_source() + "\n"
+            output += self.case_body.to_source() + "\n" + arm[body + 1].to_source()
+            for comment in arm[body + 2:]:
+                output += " " + comment.to_source()
+            return output
 
     class case_final:
         """comment* case_body: the last arm, which may have no terminator."""
         def to_source(self):
-            return _lines(self.parts("comment", "case_body"))
+            output = ""
+            for comment in self.comment_list:
+                output += comment.to_source() + "\n"
+            return output + self.case_body.to_source()
 
     class named_fd:
         """'{' identifier '}' before a redirection."""
         def to_source(self):
-            return "{" + _render(self.part("identifier")) + "}"
+            return "{" + self.identifier.to_source() + "}"
 
     class not_command:
-        """'!' (pipeline | assignment | test). The '!' is not kept in the tree."""
+        """'!' (pipeline | assignment | dbl_test_construct | test_construct). The '!' is not kept in the tree."""
         def to_source(self):
-            return "! " + _join_source(self.parts())
+            negated = self.pipeline or self.assignment or self.dbl_test_construct or self.test_construct
+            return "! " + negated.to_source()
 
     class array_literal:
         """'(' word* ')'. The parentheses are not kept in the tree."""
@@ -701,103 +726,158 @@ class ZshStyleGrammar(Grammar):
     class arith_stmt:
         """'((' arith_body '))'"""
         def to_source(self):
-            return "(( " + _render(self.part("arith_body")) + " ))"
+            return "(( " + self.arith_body.to_source() + " ))"
 
     class arith_body:
-        """The expression inside (( )), tokens separated by spaces."""
+        """(arith_nested | token)*: the tokens of the expression, separated by spaces."""
         def to_source(self):
-            return " ".join(p for p in (_render(c) for c in self.parts()) if p)
+            return " ".join(part.to_source() for part in self.parts())
 
     class arith_nested:
         """'(' token* ')' inside an arithmetic expression."""
         def to_source(self):
-            return "(" + " ".join(p for p in (_render(c) for c in self.parts()) if p) + ")"
+            return "(" + " ".join(part.to_source() for part in self.parts()) + ")"
 
     class for_arith:
         """'for' '((' arith_body '))' ('do' inner_statement* 'done' | '{' inner_statement* '}')"""
         def to_source(self):
-            return ("for ((" + _render(self.part("arith_body")) + ")); do\n"
-                    + _lines(self.parts("comment", "inner_statement")) + "done")
+            output = "for ((" + self.arith_body.to_source() + ")); do\n"
+            for comment in self.comment_list:
+                output += comment.to_source() + "\n"
+            for statement in self.inner_statement_list:
+                output += statement.to_source() + "\n"
+            return output + "done"
 
     class for_alt:
         """'for' loop_names '(' argument* ')' 'do' inner_statement* 'done'"""
         def to_source(self):
-            return ("for " + _render(self.part("loop_names")) + " (" + _join_source(self.parts("argument"))
-                    + "); do\n" + _lines(self.parts("comment", "inner_statement")) + "done")
+            output = "for " + self.loop_names.to_source() + " ("
+            output += _join_source(self.argument_list) + "); do\n"
+            for comment in self.comment_list:
+                output += comment.to_source() + "\n"
+            for statement in self.inner_statement_list:
+                output += statement.to_source() + "\n"
+            return output + "done"
 
     class for_positional:
         """'for' loop_names 'do' inner_statement* 'done'"""
         def to_source(self):
-            return ("for " + _render(self.part("loop_names")) + "; do\n"
-                    + _lines(self.parts("comment", "inner_statement")) + "done")
+            output = "for " + self.loop_names.to_source() + "; do\n"
+            for comment in self.comment_list:
+                output += comment.to_source() + "\n"
+            for statement in self.inner_statement_list:
+                output += statement.to_source() + "\n"
+            return output + "done"
 
     class for_stmt:
         """'for' loop_names 'in' argument* 'do' inner_statement* 'done'"""
         def to_source(self):
-            output = "for " + _render(self.part("loop_names")) + " in"
-            for word in self.parts("argument"):
-                output += " " + _render(word)
-            return output + "; do\n" + _lines(self.parts("comment", "inner_statement")) + "done"
+            output = "for " + self.loop_names.to_source() + " in"
+            for word in self.argument_list:
+                output += " " + word.to_source()
+            output += "; do\n"
+            for comment in self.comment_list:
+                output += comment.to_source() + "\n"
+            for statement in self.inner_statement_list:
+                output += statement.to_source() + "\n"
+            return output + "done"
 
     class foreach_stmt:
         """'foreach' identifier+ '(' argument* ')' (inner_statement* 'end' | 'do' inner_statement* 'done')"""
         def to_source(self):
-            output = ("foreach " + _join_source(self.parts("identifier"))
-                      + " (" + _join_source(self.parts("argument")) + ")")
-            body = _lines(self.parts("comment", "inner_statement"))
-            if self.part("Literal_do"):
-                return output + "; do\n" + body + "done"
-            return output + "\n" + body + "end"
+            output = "foreach " + " ".join(name.to_source() for name in self.identifier_list)
+            output += " (" + _join_source(self.argument_list) + ")"
+            output += "; do\n" if self.Literal_do else "\n"
+            for comment in self.comment_list:
+                output += comment.to_source() + "\n"
+            for statement in self.inner_statement_list:
+                output += statement.to_source() + "\n"
+            return output + ("done" if self.Literal_do else "end")
 
     class select_stmt:
         """'select' identifier 'in' argument* 'do' inner_statement* 'done'"""
         def to_source(self):
-            output = "select " + _render(self.part("identifier")) + " in"
-            for word in self.parts("argument"):
-                output += " " + _render(word)
-            return output + "; do\n" + _lines(self.parts("comment", "inner_statement")) + "done"
+            output = "select " + self.identifier.to_source() + " in"
+            for word in self.argument_list:
+                output += " " + word.to_source()
+            output += "; do\n"
+            for comment in self.comment_list:
+                output += comment.to_source() + "\n"
+            for statement in self.inner_statement_list:
+                output += statement.to_source() + "\n"
+            return output + "done"
 
     class repeat_stmt:
         """'repeat' argument ('do' inner_statement* 'done' | command)"""
         def to_source(self):
-            output = "repeat " + _render(self.part("argument"))
-            if self.part("Literal_do"):
-                return output + "; do\n" + _lines(self.parts("comment", "inner_statement")) + "done"
-            return output + " " + _render(self.part("command"))
+            output = "repeat " + self.argument.to_source()
+            if self.command:
+                return output + " " + self.command.to_source()
+            output += "; do\n"
+            for comment in self.comment_list:
+                output += comment.to_source() + "\n"
+            for statement in self.inner_statement_list:
+                output += statement.to_source() + "\n"
+            return output + "done"
 
     class while_stmt:
         """'while' and_or? 'do' inner_statement* 'done'"""
         def to_source(self):
-            return ("while " + _render(self.part("and_or")) + "; do\n"
-                    + _lines(self.parts("comment", "inner_statement")) + "done")
+            output = "while"
+            if self.and_or:
+                output += " " + self.and_or.to_source()
+            output += "; do\n"
+            for comment in self.comment_list:
+                output += comment.to_source() + "\n"
+            for statement in self.inner_statement_list:
+                output += statement.to_source() + "\n"
+            return output + "done"
 
     class until_stmt:
         """'until' and_or? 'do' inner_statement* 'done'"""
         def to_source(self):
-            return ("until " + _render(self.part("and_or")) + "; do\n"
-                    + _lines(self.parts("comment", "inner_statement")) + "done")
+            output = "until"
+            if self.and_or:
+                output += " " + self.and_or.to_source()
+            output += "; do\n"
+            for comment in self.comment_list:
+                output += comment.to_source() + "\n"
+            for statement in self.inner_statement_list:
+                output += statement.to_source() + "\n"
+            return output + "done"
 
     class if_stmt:
         """'if' if_condition 'then' inner_statement* elif_branch* else_branch? 'fi'"""
         def to_source(self):
-            output = "if " + _render(self.part("if_condition")) + "; then\n"
-            output += _lines(self.parts("comment", "inner_statement"))
-            for branch in self.parts("elif_branch"):
-                output += _render(branch)
-            if else_branch := self.part("else_branch"):
-                output += _render(else_branch)
+            output = "if " + self.if_condition.to_source() + "; then\n"
+            for comment in self.comment_list:
+                output += comment.to_source() + "\n"
+            for statement in self.inner_statement_list:
+                output += statement.to_source() + "\n"
+            for branch in self.elif_branch_list:
+                output += branch.to_source()
+            if self.else_branch:
+                output += self.else_branch.to_source()
             return output + "fi"
 
     class elif_branch:
         """'elif' if_condition 'then' inner_statement*"""
         def to_source(self):
-            output = "elif " + _render(self.part("if_condition")) + "; then\n"
-            return output + _lines(self.parts("comment", "inner_statement"))
+            output = "elif " + self.if_condition.to_source() + "; then\n"
+            for comment in self.comment_list:
+                output += comment.to_source() + "\n"
+            for statement in self.inner_statement_list:
+                output += statement.to_source() + "\n"
+            return output
 
     class else_branch:
         """'else' inner_statement*"""
         def to_source(self):
-            return "else\n" + _lines(self.parts("comment", "inner_statement"))
+            output = "else\n"
+            for statement in self.inner_statement_list:
+                output += statement.to_source() + "\n"
+            return output
+
     class __default__:
         """Fallback for every rule: how a node renders, lints and reports its names.
 
@@ -811,19 +891,12 @@ class ZshStyleGrammar(Grammar):
             """True when the node touches the text before it, as its first token did."""
             return bool(getattr(_first_leaf(self), "glued", False))
 
-        def parts(self, *names):
-            """The node's parts, looking through the anonymous combinator nodes.
+        def parts(self):
+            """The node's parts in source order, looking through the anonymous combinator nodes.
 
-            With names, only the parts of those rules, in source order.
+            A single part of a rule is self.<rule> (None when absent), all of them self.<rule>_list.
             """
-            found = list(_parts(self))
-            if names:
-                found = [p for p in found if type(p).__name__ in names]
-            return found
-
-        def part(self, name):
-            """The first part of the given rule, or None."""
-            return next(iter(self.parts(name)), None)
+            return list(parts(self))
 
         def lint(self):
             issues = self.check()
@@ -838,10 +911,10 @@ class ZshStyleGrammar(Grammar):
             A node that holds statements checks what $? holds when a statement tests it
             (ksh rules 23 to 25).
             """
-            if type(self).__name__ in _PART_WRAPPERS:
+            if type(self).__name__ in ("Sequence_Parser", "Several_Times", "As_Node"):
                 return []
             issues = []
-            statements = self.parts("statement", "inner_statement")
+            statements = self.statement_list + self.inner_statement_list
             for prev, cur in zip(statements, statements[1:]):
                 if not cur.tests_status():
                     continue
@@ -906,7 +979,7 @@ class ZshStyleGrammar(Grammar):
 
     class if_stmt:
         def tests_status(self):
-            return self.part("if_condition").tests_status()
+            return self.if_condition.tests_status()
 
     class if_condition:
         def check(self):
@@ -918,11 +991,11 @@ class ZshStyleGrammar(Grammar):
 
     class while_stmt:
         def tests_status(self):
-            return bool(self.part("and_or")) and self.part("and_or").tests_status()
+            return bool(self.and_or) and self.and_or.tests_status()
 
     class until_stmt:
         def tests_status(self):
-            return bool(self.part("and_or")) and self.part("and_or").tests_status()
+            return bool(self.and_or) and self.and_or.tests_status()
 
     class argument:
         """argument ::= assign_word | _basic_arg"""
@@ -985,7 +1058,7 @@ class ZshStyleGrammar(Grammar):
         def variables(self):
             found = ZshStyleGrammar.__default__.variables(self)
             # `export NAME` and `typeset -x NAME` also export the name.
-            if self.part("Literal_export") or any("x" in f.to_source()[1:] for f in self.parts("flag")):
+            if self.Literal_export or any("x" in f.to_source()[1:] for f in self.flag_list):
                 found += [("export", name, tok) for event, name, tok in found if event == "assign"]
             return found
 
@@ -996,7 +1069,7 @@ class ZshStyleGrammar(Grammar):
         of the sequence `declaration2 redir*`, so it is checked here.
         """
         def declares(self):
-            return any(self.part(w) for w in ("Literal_typeset", "Literal_declare", "Literal_export", "Literal_readonly"))
+            return bool(self.Literal_typeset or self.Literal_declare or self.Literal_export or self.Literal_readonly)
 
         def check(self):
             return declaration2.check(self) if self.declares() else []
@@ -1011,12 +1084,12 @@ class ZshStyleGrammar(Grammar):
         """command ::= prefix_assignment* command_head (redir | argument)*"""
         def name(self):
             """The command name when it is a plain word, else None."""
-            head = self.part("command_head")
-            word = head.part("identifier") if head is not None else None
+            head = self.command_head
+            word = head.identifier if head is not None else None
             return word.to_source() if word is not None else None
 
         def words(self):
-            return [a.to_source() for a in self.parts("argument")]
+            return [a.to_source() for a in self.argument_list]
 
         def check(self):
             """Rules on one simple command: its name, its arguments and its redirections."""
@@ -1024,10 +1097,10 @@ class ZshStyleGrammar(Grammar):
             if name is None:
                 return []
             issues = []
-            head = token_of(self.part("command_head"))
-            args = self.parts("argument")
+            head = token_of(self.command_head)
+            args = self.argument_list
             words = self.words()
-            redirs = self.parts("redir")
+            redirs = self.redir_list
 
             if name == "test":
                 # ksh rule 2. Fixed only where [[ ]] reads the words the same way.
@@ -1089,7 +1162,7 @@ class ZshStyleGrammar(Grammar):
 
         def to_source(self):
             if _fixing(self, "ZSH010"):
-                return "[[ " + _join_source(self.parts("argument")) + " ]]"
+                return "[[ " + _join_source(self.argument_list) + " ]]"
             return _join_source(children(self))
 
     class subshell:
@@ -1100,7 +1173,7 @@ class ZshStyleGrammar(Grammar):
     class pipeline:
         """pipeline ::= 'time'? pipeline_item (('|' | '|&') pipeline_item)*"""
         def check(self):
-            stages = self.parts("command")
+            stages = self.command_list
             issues = []
             for left, right in zip(stages, stages[1:]):
                 program = " ".join(right.words())
@@ -1111,9 +1184,9 @@ class ZshStyleGrammar(Grammar):
                     issues.append(_issue("ZSH046", "Use bmw -V VAR instead of bmw VAR | awk to read a value.",
                                          token_of(left)))
             for stage in stages[1:]:
-                if stage.name() == "tee" and any(r.descriptor() == "2" and r.operator() == ">&" for r in stage.parts("redir")):
+                if stage.name() == "tee" and any(r.descriptor() == "2" and r.operator() == ">&" for r in stage.redir_list):
                     issues.append(_issue("ZSH030", "Redirect stderr before tee (e.g. cmd 2>&1 | tee f), so the file holds it.",
-                                         token_of(stage.part("command_head"))))
+                                         token_of(stage.command_head)))
             return issues
 
         def tests_status(self):
@@ -1148,33 +1221,33 @@ class ZshStyleGrammar(Grammar):
 
     class function_def:
         def check(self):
-            if self.part("Literal_function"):
+            if self.Literal_function:
                 return []
             # ksh rule 33. Fixed by writing `function NAME {`; in zsh both forms behave the same.
             return [_issue("ZSH033", "Declare a function with the function keyword: function NAME.",
-                           token_of(self.part("func_name")), node=self)]
+                           token_of(self.func_name), node=self)]
 
         def exit_functions(self):
             names = ZshStyleGrammar.__default__.exit_functions(self)
             if self.calls_exit():
-                names.add(self.part("func_name").to_source())
+                names.add(self.func_name.to_source())
             return names
 
     class foreach_stmt:
         def variables(self):
             found = ZshStyleGrammar.__default__.variables(self)
-            return found + [("assign", n.to_source(), token_of(n)) for n in self.parts("identifier")]
+            return found + [("assign", n.to_source(), token_of(n)) for n in self.identifier_list]
 
     class select_stmt:
         def variables(self):
             found = ZshStyleGrammar.__default__.variables(self)
-            return found + [("assign", n.to_source(), token_of(n)) for n in self.parts("identifier")]
+            return found + [("assign", n.to_source(), token_of(n)) for n in self.identifier_list]
 
     class arith_body:
         def variables(self):
             # Arithmetic reads and assigns names without a $.
             found = ZshStyleGrammar.__default__.variables(self)
-            for tok in map(token_of, self.parts("shift")):
+            for tok in map(token_of, self.shift_list):
                 if _is_bare_name(tok):
                     found += [("use", tok.string, tok), ("assign", tok.string, tok)]
             return found
@@ -1195,7 +1268,7 @@ class ZshStyleGrammar(Grammar):
         """test_construct ::= lbracket (~rbracket shift)* rbracket"""
         def words(self):
             """The tokens between [ and ]."""
-            return [token_of(p) for p in self.parts("shift")]
+            return [token_of(p) for p in self.shift_list]
 
         def check(self):
             issues = [_issue(
@@ -1217,41 +1290,44 @@ class ZshStyleGrammar(Grammar):
     class redir:
         """redir ::= (named_fd | number)? ('<<<' | redir_op) argument"""
         def descriptor(self):
-            fd = self.part("number")
+            fd = self.number
             return fd.to_source() if fd is not None else None
 
         def operator(self):
-            return (self.part("redir_op") or self.part("here_string_op")).to_source()
+            return (self.redir_op or self.here_string_op).to_source()
 
         def target(self):
-            return self.part("argument").to_source()
+            return self.argument.to_source()
 
         def check(self):
-            if self.part("here_string_op"):
+            if self.here_string_op:
                 return [_issue("ZSH008", "Do not use the here-string '<<<'; use a pipe or a here-document.",
-                               token_of(self.part("here_string_op")))]
+                               token_of(self.here_string_op))]
             return []
 
     class dbl_test_construct:
         """dbl_test_construct ::= dlbracket (~drbracket shift)* drbracket"""
         # [[ ... ]] performs no word splitting, so ZSH002 does not apply.
         def check(self):
-            return _test_issues([token_of(p) for p in self.parts("shift")], single=False)
+            return _test_issues([token_of(p) for p in self.shift_list], single=False)
 
     class case_stmt:
         """case_stmt ::= 'case' argument 'in' STATEMENT_SEP* case_arm* case_final? STATEMENT_SEP* 'esac'"""
         def check(self):
             # A `*)` arm is the fallback; without one, unexpected input is silently ignored.
-            arms = self.parts("case_arm", "case_final")
-            if any(re.search(r"(^|[^\w.])\*\)$", arm.part("case_body").to_source().split("\n")[0]) for arm in arms):
+            arms = self.case_arm_list + self.case_final_list
+            if any(re.search(r"(^|[^\w.])\*\)$", arm.case_body.to_source().split("\n")[0]) for arm in arms):
                 return []
             return [_issue("ZSH007", "case without a `*)` fallback — unexpected input silently ignored.",
-                           token_of(self.part("argument")))]
+                           token_of(self.argument))]
 
     class script:
         """script ::= statement*"""
         def to_source(self):
-            return _lines(self.parts("statement"))
+            output = ""
+            for statement in self.statement_list:
+                output += statement.to_source() + "\n"
+            return output
 
 
 # ============================================================

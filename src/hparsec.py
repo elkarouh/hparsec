@@ -584,9 +584,14 @@ class Parser(metaclass=ParserMeta):
         nodes: List of all AST nodes produced by this parser.
     """
     _default_class = None
+    _rule_names = set()
 
     def __getattr__(self, name):
-        """Delegate missing attributes to the registered default class."""
+        """Delegate missing attributes to the registered default class.
+
+        A rule name gives the node's part of that rule, or None: `node.if_condition`.
+        The rule name with `_list` gives all of them: `node.elif_branch_list`.
+        """
         dc = Parser._default_class
         if dc is not None:
             attr = getattr(dc, name, None)
@@ -594,6 +599,10 @@ class Parser(metaclass=ParserMeta):
                 if callable(attr):
                     return attr.__get__(self, type(self))
                 return attr
+        rule = name[:-len("_list")] if name.endswith("_list") else name
+        if rule in Parser._rule_names:
+            found = [p for p in parts(self) if type(p).__name__ == rule]
+            return found if rule != name else next(iter(found), None)
         raise AttributeError(
             f"{type(self).__name__!r} object has no attribute {name!r}"
         )
@@ -735,6 +744,7 @@ class GrammarMeta(type):
             if isinstance(rule, type) and rname.isidentifier() and not rname.startswith("_"):
                 rule.__name__ = rname
                 rule.__qualname__ = rname
+                Parser._rule_names.add(rname)
 
         cls = super().__new__(metacls, name, bases, dict(namespace))
 
@@ -914,6 +924,25 @@ def children(node):
     return [child] if child is not None and child is not node else []
 
 
+_ANONYMOUS_NODES = ("Sequence_Parser", "Several_Times", "As_Node")
+
+
+def parts(node):
+    """Yield the parts of a node: its children, looking through anonymous combinator nodes.
+
+    as_node() marks a node boundary on purpose, so the node it wraps is a part even
+    when that node is an anonymous sequence.
+    """
+    for child in children(node):
+        kind = type(child).__name__ if isinstance(child, Parser) else None
+        if kind == "As_Node":
+            yield from children(child)
+        elif kind in _ANONYMOUS_NODES:
+            yield from parts(child)
+        else:
+            yield child
+
+
 def token_of(node):
     """Return the first leaf token wrapped by *node*, or ``None``.
 
@@ -929,7 +958,7 @@ def token_of(node):
         if isinstance(current, str):
             return current
 
-        if hasattr(current, "string") and not hasattr(current, "nodes"):
+        if not isinstance(current, Parser):
             return current
 
         kids = children(current)
@@ -1124,6 +1153,7 @@ def literal(mylit: str) -> type[Parser]:
         filt(lambda tok: getattr(tok, "string", tok) == mylit, shift, name=repr(mylit)),
     )
     parser.__name__ = f"Literal_{mylit}"
+    Parser._rule_names.add(parser.__name__)
     return parser
 
 
@@ -1369,6 +1399,7 @@ __all__ = [
     "G",
     "children",
     "token_of",
+    "parts",
     "walk",
     "Cut",
     "ParserMeta",
@@ -2008,5 +2039,20 @@ if __name__ == "__main__":
     assert m, "Grammar class parse failed"
     assert m[0].to_py() == "(1 + (2 * 3))"
     print("  Grammar class (zero forward declarations, inner-class AST methods): ok")
+
+    # 4. A rule name gives a node's part of that rule; the name with _list gives all of them.
+    ParserState.reset()
+
+    class NamedGrammar(Grammar):
+        named_sum = named_num + (PLUS + named_num)[:] + named_times[0:1]
+        named_num = NUMBER
+        named_times = MUL + NUMBER
+
+    m = named_sum.parse(Input("1 + 2 + 3"))
+    assert m, "named parts parse failed"
+    assert [n.to_py() for n in m[0].named_num_list] == ["1", "2", "3"]
+    assert m[0].named_num.to_py() == "1"
+    assert m[0].named_times is None and m[0].named_times_list == []
+    print("  named parts (node.rule, node.rule_list): ok")
 
     print("\nAll tests passed.")
