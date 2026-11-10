@@ -752,6 +752,7 @@ def _run_self_tests():
             ("double bracket as argument", "eval [[ -n $x ]]\n"),
             ("quoted alias name", "alias -g 'x'='y'\n"),
             ("comparison word in test argument", "test \"x$a\" != x\n"),
+            ("escaped dollar before parenthesis", "eval a=\\${b:-\\$(c \\${d})}\n"),
             ("assignment value then argument", "x=a b\n"),
             ("for-alt", "for f (*.txt) do\n  echo $f\ndone\n"),
             ("select", "select opt in a b c; do\n  echo $opt\ndone\n"),

@@ -328,6 +328,18 @@ def tokenize_zsh(source):
         # generic escape: \<char> (line continuations already handled above)
         if ch == "\\" and i + 1 < n:
             j = i + 2
+            # An escaped dollar before a parenthesis is literal text: `\$(cmd)` is one word.
+            if source[i + 1] == "$" and j < n and source[j] == "(":
+                depth = 0
+                while j < n:
+                    if source[j] == "(":
+                        depth += 1
+                    elif source[j] == ")":
+                        depth -= 1
+                        if depth == 0:
+                            j += 1
+                            break
+                    j += 1
             while j < n and (source[j].isalnum() or source[j] in _IDENT_CHARS):
                 j += 1
             push("IDENT", source[i:j], start)
