@@ -338,8 +338,8 @@ class ZshStyleGrammar(Grammar):
     #   if [[ -f x ]] && (( i++ )); then ... fi
     #   while cmd1 && ! cmd2; do ... done
     elif_branch = (
-        literal("elif") + and_or + STATEMENT_SEP[:]
-        + literal("then") + STATEMENT_SEP[:] + inner_statement[:]
+        literal("elif") + and_or + (STATEMENT_SEP | comment)[:]
+        + literal("then") + (STATEMENT_SEP | comment)[:] + inner_statement[:]
         + STATEMENT_SEP[:]
     )
     else_branch = (
@@ -348,8 +348,8 @@ class ZshStyleGrammar(Grammar):
     )
 
     if_stmt = (
-        literal("if") + and_or + STATEMENT_SEP[:]
-        + literal("then") + STATEMENT_SEP[:] + inner_statement[:]
+        literal("if") + and_or + (STATEMENT_SEP | comment)[:]
+        + literal("then") + (STATEMENT_SEP | comment)[:] + inner_statement[:]
         + STATEMENT_SEP[:]
         + elif_branch[:] + else_branch[0:1]
         + literal("fi")
@@ -714,6 +714,8 @@ def _run_self_tests():
             ("export array element", "export NAME[$i]=$INSTANCE\n"),
             ("heredoc after redirect", "cat >&2 <<EOF\nhi\nEOF\n"),
             ("redirect between arguments", "cmd 2>&1 arg\n"),
+            ("comment between if condition and then", "if a\n# c\nthen\n  :\nfi\n"),
+            ("comment after then", "if a; then # x\n  :\nfi\n"),
             ("for-alt", "for f (*.txt) do\n  echo $f\ndone\n"),
             ("select", "select opt in a b c; do\n  echo $opt\ndone\n"),
             ("heredoc", "cat <<EOF\nhello\nEOF\n"),
