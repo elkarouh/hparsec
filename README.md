@@ -173,7 +173,7 @@ so you can bring your own tokenizer (see `examples/expression_parser.py`):
 ```python
 number = expect_type(NUMBER_TOKEN_TYPE)   # whatever your tokenizer emits
 
-class Terminals(Terminals):
+class ExpressionTerminals(Terminals):
     LPAREN = "("                      # ignored in the AST
     RPAREN = ")"
     add_op = literal("+") | literal("-")   # kept in the AST

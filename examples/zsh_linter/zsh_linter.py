@@ -25,7 +25,7 @@ from zsh_tokenizer import tokenize_zsh, TOKEN_TYPES, _RESERVED
 # Terminals
 # ============================================================
 
-class Terminals(Terminals):
+class ZshTerminals(Terminals):
     ASSIGN = "="
     SEMICOL = ";"
     PIPE = "|"
@@ -185,7 +185,7 @@ class ZshStyleGrammar(Grammar):
     # An argument is a grammar-level AST construct, not a lexical terminal.
     # Its explicit node boundary gives it one consistent linting entry point
     # wherever the grammar accepts an argument.
-    argument = as_node(assign_word | Terminals._basic_arg)
+    argument = as_node(assign_word | ZshTerminals._basic_arg)
 
     prefix_assignment = as_node(assign_word)
 

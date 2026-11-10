@@ -97,7 +97,7 @@ identifier = filt(
     expect_type(TOKEN_TYPES["IDENT"]),
 )
 
-class Terminals(Terminals):
+class ExpressionTerminals(Terminals):
     # Ignored operators & delimiters (UPPERCASE = automatically ignored)
     EQ         = "="
     NE         = "/="
