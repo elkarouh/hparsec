@@ -690,6 +690,11 @@ class GrammarNamespace(dict):
                 if not attr_name.startswith("_") and inspect.isfunction(attr_val):
                     self.augmented_methods.append((prev, attr_name, attr_val))
             return
+        # Name a rule's sequence as soon as it is defined: `a + b` merges an anonymous
+        # sequence on its left into the new one, and a named rule must stay a node.
+        if (isinstance(value, type) and issubclass(value, Parser) and key.isidentifier()
+                and not key.startswith("_") and value.__name__ == "Sequence_Parser"):
+            value.__name__ = value.__qualname__ = key
         super().__setitem__(key, value)
 
 
@@ -2054,5 +2059,16 @@ if __name__ == "__main__":
     assert m[0].named_num.to_py() == "1"
     assert m[0].named_times is None and m[0].named_times_list == []
     print("  named parts (node.rule, node.rule_list): ok")
+
+    # 5. A named sequence on the left of + stays its own node.
+    ParserState.reset()
+
+    class HeadGrammar(Grammar):
+        head_sum = NUMBER + PLUS + NUMBER
+        head_line = head_sum + MUL + NUMBER
+
+    m = head_line.parse(Input("1 + 2 * 3"))
+    assert m and m[0].head_sum is not None, "a named sequence was merged into the next one"
+    print("  named sequence on the left of +: ok")
 
     print("\nAll tests passed.")
