@@ -8,14 +8,16 @@ import re
 
 
 class Token:
-    __slots__ = ("type", "string", "start", "end", "line")
+    __slots__ = ("type", "string", "start", "end", "line", "glued")
 
-    def __init__(self, type, string, start=(1, 0), end=(1, 0), line=""):
+    def __init__(self, type, string, start=(1, 0), end=(1, 0), line="", glued=False):
         self.type = type
         self.string = string
         self.start = start
         self.end = end
         self.line = line
+        # True when no whitespace separates this token from the previous one: `${a}${b}`.
+        self.glued = glued
 
     def __repr__(self):
         return f"Token({self.type!r}, {self.string!r}, {self.start!r})"
@@ -59,6 +61,35 @@ _RESERVED = {
 _IDENT_CHARS = "_-./*?~,%@"   # note: comma, percent, at-sign for paths/emails/format strings
 
 
+def _skip_paren_group(source, j):
+    """Return the index just past the parenthesized group that starts at source[j] == '('.
+
+    Quotes and backslash escapes inside the group are skipped, so `$(echo "a)")` closes
+    at the right parenthesis. An unclosed group runs to the end of the source.
+    """
+    n = len(source)
+    depth = 0
+    while j < n:
+        c = source[j]
+        if c == "\\":
+            j += 2
+            continue
+        if c in ("'", '"'):
+            j += 1
+            while j < n and source[j] != c:
+                j += 2 if (source[j] == "\\" and c == '"') else 1
+            j += 1
+            continue
+        if c == "(":
+            depth += 1
+        elif c == ")":
+            depth -= 1
+            if depth == 0:
+                return j + 1
+        j += 1
+    return n
+
+
 def tokenize_zsh(source):
     tokens = []
     i = 0
@@ -73,7 +104,8 @@ def tokenize_zsh(source):
     def push(kind, value, start_pos):
         nonlocal col, line
         end = (start_pos[0], start_pos[1] + len(value))
-        tokens.append(Token(TOKEN_TYPES[kind], value, start_pos, end, line_text(start_pos[0])))
+        glued = bool(tokens) and tokens[-1].end == start_pos
+        tokens.append(Token(TOKEN_TYPES[kind], value, start_pos, end, line_text(start_pos[0]), glued))
         nl_count = value.count("\n")
         if nl_count:
             line += nl_count
@@ -276,6 +308,10 @@ def tokenize_zsh(source):
             while j < n:
                 if source[j] == "\\" and q == '"' and j + 1 < n:
                     j += 2
+                    continue
+                # Inside "...", a $( ... ) may hold its own quotes: "a $(f "x") b".
+                if q == '"' and source[j:j + 2] == "$(":
+                    j = _skip_paren_group(source, j + 1)
                     continue
                 if source[j] == q:
                     j += 1

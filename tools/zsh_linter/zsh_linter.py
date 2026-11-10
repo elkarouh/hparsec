@@ -109,7 +109,7 @@ class ZshTerminals(Terminals):
                   | number | glob_qual | subscript | argument_identifier | expect_type_node(TOKEN_TYPES["ASSIGN_EMPTY"])
                   # Bare pattern characters are word parts in zsh: `fd -tx remove$ dir`,
                   # `grep -v ^N_`, `grep .+%U.+`. Ignored so they are not mistaken for expansions.
-                  | ignore(filt(lambda tok: tok.string in ("$", "^", "+"), expect_type_node(TOKEN_TYPES["OP"])))
+                  | ignore(filt(lambda tok: tok.string in ("$", "^", "+", "!", "."), expect_type_node(TOKEN_TYPES["OP"])))
                   # `test "x$a" != x`: comparison operators are plain words to test(1).
                   | ignore(filt(lambda tok: tok.string in ("!=", "=="), expect_type_node(TOKEN_TYPES["OP"]))))
     # assign_word matches `name=value` as a single argument (needed for
@@ -126,8 +126,13 @@ class ZshTerminals(Terminals):
     assign_value_colon = filt(lambda tok: tok.string == ":", expect_type_node(TOKEN_TYPES["OP"]))
     # A value may itself contain `=`: `PP=dumpfile=${DMP}` is one word with the value
     # `dumpfile=${DMP}`. Only `=` continues the value, so the next argument is not taken.
-    assign_value = (_basic_arg | assign_value_colon) + (assign_eq + _basic_arg)[0:]
-    assign_word = (assign_name + assign_eq + assign_value) | (assign_name + assign_eq_empty)
+    # A value may also be followed by glued word parts: `x=${a}${b}.txt`. Only tokens
+    # touching the previous one continue the value, so `x=a b` still ends at `a`.
+    glued_part = filt(lambda tok: tok.glued and (tok.type != TOKEN_TYPES["OP"]
+                                                 or tok.string in (".", "$", "^", "+", "-", "!", ",", "%", "*", "?", "/", "@", "~", ":"))
+                      and tok.type not in (TOKEN_TYPES["NEWLINE"], TOKEN_TYPES["COMMENT"]), shift)
+    assign_value = (_basic_arg | assign_value_colon) + ((assign_eq + _basic_arg) | glued_part)[0:]
+    assign_word = (assign_name + subscript[0:1] + assign_eq + assign_value) | (assign_name + assign_eq + assign_value) | (assign_name + assign_eq_empty)
 
 # HELPERS
 def _expansion_issues(node, backticks_only=False):
@@ -329,7 +334,7 @@ class ZshStyleGrammar(Grammar):
     
     # Operators may be followed by a line break: `a |\n  b` and `a &&\n  b`.
     # `time` is a reserved word that may prefix a pipeline: `time ./job.ksh args`.
-    pipeline = literal("time")[0:1] + as_node(pipeline_item) + ((PIPE | PIPE_AMP) + NEWLINE[:] + as_node(pipeline_item))[:]
+    pipeline = literal("time")[0:1] + as_node(pipeline_item) + ((PIPE | PIPE_AMP) + (NEWLINE | comment)[:] + as_node(pipeline_item))[:]
     
     # `! cmd` — command negation prefix
     # `! x=$(cmd) || ...` negates an assignment as well as a command.
@@ -350,7 +355,7 @@ class ZshStyleGrammar(Grammar):
     and_or_item = (
         test_construct | dbl_test_construct | arith_stmt
         # `x=$(cmd) | tr a b`: an assignment may be the left side of a pipe, tried first.
-        | not_command | (assignment + ((PIPE | PIPE_AMP) + NEWLINE[:] + as_node(pipeline_item))[1:])
+        | not_command | (assignment + ((PIPE | PIPE_AMP) + (NEWLINE | comment)[:] + as_node(pipeline_item))[1:])
         # An assignment that a command follows is a prefix assignment of that command:
         # `IFS=\, read -r x`. The lookahead lets the pipeline take it; a plain assignment
         # is tried first so `x+=(...)` is not cut short.
@@ -359,7 +364,7 @@ class ZshStyleGrammar(Grammar):
         # after them: `{ a; } | tee`. Listing them here first would stop the choice early.
         | declaration | declaration2
     )    
-    and_or = as_node(and_or_item) + ((AND_AND | OR_OR) + NEWLINE[:] + as_node(and_or_item))[:]
+    and_or = as_node(and_or_item) + ((AND_AND | OR_OR) + (NEWLINE | comment)[:] + as_node(and_or_item))[:]
 
     # All four control-flow conditions now accept and_or chains:
     #   if [[ -f x ]] && (( i++ )); then ... fi
