@@ -42,12 +42,12 @@ zsh:
 corpus:
 	$(PYTHON) -B $(ZSH)/corpus_test.py $(ZSH)/corpus
 
-# Parse-check every .sh and .zsh file under DIR (recursively); reports only syntax errors.
+# Parse-check every .sh, .zsh and .ksh file under DIR (recursively); reports only syntax errors.
 # Exit status is 0 when all files parse, 2 when any fails.
 # Example: make syntax DIR=~/dotfiles
 DIR ?= .
 syntax:
-	@find "$(DIR)" -type f \( -name '*.sh' -o -name '*.zsh' \) -not -path '*/.git/*' -print0 \
+	@find "$(DIR)" -type f \( -name '*.sh' -o -name '*.zsh' -o -name '*.ksh' \) -not -path '*/.git/*' -print0 \
 	  | xargs -0 -r $(PYTHON) -B $(ZSH)/zsh_linter.py --check-syntax
 
 verbose:
