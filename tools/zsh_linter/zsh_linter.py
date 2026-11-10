@@ -464,7 +464,7 @@ class ZshStyleGrammar(Grammar):
     case_stmt = (
         literal("case") + argument + STATEMENT_SEP[:] + literal("in") + STATEMENT_SEP[:]
         + case_arm[:] + case_final[0:1]
-        + STATEMENT_SEP[:] + literal("esac")
+        + (STATEMENT_SEP | comment)[:] + literal("esac")
     )
 
     # Function names may be dynamic: `_widget_${name}() { ... }`.
