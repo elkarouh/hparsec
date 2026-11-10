@@ -152,14 +152,14 @@ def tokenize_zsh(source):
             glued = False
         # `{ cmd; exit ${RC}}` closes an open group: a `}` right after a ${...} expansion is
         # a closer only while a `{` group is open; otherwise it is literal text (`echo ${A}}`).
-        if glued and value == "}" and tokens[-1].type == TOKEN_TYPES["VAR_EXP"] and brace_depth[0] > 0:
+        if glued and value == "}" and tokens[-1].type in (TOKEN_TYPES["VAR_EXP"], TOKEN_TYPES["IDENT"]) and brace_depth[0] > 0:
             glued = False
         if kind in ("IDENT", "OP") and not glued:
             if value == "{":
                 brace_depth[0] += 1
             elif value == "}":
                 brace_depth[0] = max(0, brace_depth[0] - 1)
-        elif kind in ("IDENT", "OP") and glued and value == "}" and tokens and tokens[-1].type == TOKEN_TYPES["VAR_EXP"] and brace_depth[0] > 0:
+        elif kind in ("IDENT", "OP") and glued and value == "}" and tokens and tokens[-1].type in (TOKEN_TYPES["VAR_EXP"], TOKEN_TYPES["IDENT"]) and brace_depth[0] > 0:
             brace_depth[0] -= 1
         tokens.append(Token(TOKEN_TYPES[kind], value, start_pos, end, line_text(start_pos[0]), glued))
         nl_count = value.count("\n")
