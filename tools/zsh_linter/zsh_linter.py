@@ -441,7 +441,8 @@ class ZshStyleGrammar(Grammar):
     # A group continues the pattern only when the next word is glued to it (`-?(no_)tacot`).
     # `(GZIP)  echo ...`, `("0 0 fg=red")` followed by a line break or `;&`, and any group
     # followed by a space are the whole arm head, so the group's `)` is the arm closer.
-    _pattern_break = filt(lambda tok: (not tok.glued)
+    # A `)` may follow a group after a space: `+([0-9]) )` closes the arm with that `)`.
+    _pattern_break = filt(lambda tok: (not tok.glued and tok.string != ")")
                           or tok.type in (TOKEN_TYPES["NEWLINE"], TOKEN_TYPES["COMMENT"])
                           or tok.string in (";", ";;", ";&", ";|"), shift)
     _pattern_group = LPAREN + ((~RPAREN) + shift)[:] + RPAREN + (~_pattern_break)
