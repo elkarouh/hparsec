@@ -416,7 +416,8 @@ class ZshStyleGrammar(Grammar):
     function_def = (
         (func_name + LPAREN + RPAREN)
         | (literal("function") + func_name + (LPAREN + RPAREN)[0:1])
-    ) + STATEMENT_SEP[:] + LBRACE + STATEMENT_SEP[:] + inner_statement[:] + STATEMENT_SEP[:] + RBRACE
+    # A comment may sit on the header line: `function f # $1 user`.
+    ) + (STATEMENT_SEP | comment)[:] + LBRACE + STATEMENT_SEP[:] + inner_statement[:] + STATEMENT_SEP[:] + RBRACE
 
     # Anonymous function: `() { body }` — zsh-specific, defined and called
     # immediately. Must appear BEFORE subshell in the choice lists because
@@ -722,6 +723,7 @@ def _run_self_tests():
             ("comment after then", "if a; then # x\n  :\nfi\n"),
             ("= inside assignment value", "PP=dumpfile=${DMP_FILE}\n"),
             ("time prefixes a pipeline", "time ./job.ksh args | tee\n"),
+            ("comment on function header line", "function f # $1 user\n{\n  echo\n}\n"),
             ("assignment value then argument", "x=a b\n"),
             ("for-alt", "for f (*.txt) do\n  echo $f\ndone\n"),
             ("select", "select opt in a b c; do\n  echo $opt\ndone\n"),
