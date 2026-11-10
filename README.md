@@ -14,8 +14,10 @@ can be given output methods via the `@method` decorator.
 ```
 hparsec/
 ├── src/                      # the library (standard library only)
-│   ├── hparsec.py         # core combinators and parse machinery
-│   ├── ady_tokenizer.py       # Python-tokenize based Tokenizer used by Input()
+│   └── hparsec.py            # core combinators and parse machinery
+├── ady_helpers/              # AdaScript support, kept apart from the library
+│   ├── ada_tokens.py         # Input() and the AdaScript token names, with their self-tests
+│   ├── ady_tokenizer.py      # Python-tokenize based Tokenizer used by Input()
 │   └── hek_helpers.py        # helpers shared by translator backends
 ├── examples/
 │   ├── expression_parser.py      # expression grammar written with repetition
@@ -40,8 +42,9 @@ hparsec/
 | Module | Purpose |
 |------|---------|
 | `hparsec` | Core combinators: `Parser`, `ParserState`, `SymbolTable`, `Grammar`, `Terminals`, `forward`/`fw`, `method`, `filt`, `fmap`, `ignore`, `expect`, `literal`, … |
-| `ady_tokenizer` | `Tokenizer` — wraps Python's `tokenize` module; handles tick-attributes, range operators, bash-isms, f-string interpolation, `RichNL` comment bundling |
-| `hek_helpers` | Shared helpers: indentation (`_ind`), `RichNL` extraction, block statement utilities |
+| `ada_tokens` (in `ady_helpers/`) | `Input()` and the AdaScript token names (`IDENTIFIER`, `NUMBER`, `SEMICOLON`, …); hparsec does not import this module |
+| `ady_tokenizer` (in `ady_helpers/`) | `Tokenizer` — wraps Python's `tokenize` module; handles tick-attributes, range operators, bash-isms, f-string interpolation, `RichNL` comment bundling |
+| `hek_helpers` (in `ady_helpers/`) | Shared helpers: indentation (`_ind`), `RichNL` extraction, block statement utilities |
 
 The modules keep their flat `hek_*` names, so existing code that does
 `from hparsec import ...` keeps working unchanged.
@@ -57,10 +60,10 @@ changes in `src/` are picked up immediately):
 pip install -e .
 ```
 
-or just put `src/` on the path:
+or just put `src/` and `ady_helpers/` on the path:
 
 ```sh
-export PYTHONPATH=/path/to/hparsec/src
+export PYTHONPATH=/path/to/hparsec/src:/path/to/hparsec/ady_helpers
 ```
 
 Python 3.10 or newer is required.
@@ -76,7 +79,7 @@ python -m unittest discover tests  # the same checks as a unittest suite
 
 Individual targets: `make selftest` (library modules), `make examples`,
 `make zsh`, `make corpus` (`make verbose` for per-file detail), plus
-`make bench` and `make profile`. The Makefile sets `PYTHONPATH=src` itself, so
+`make bench` and `make profile`. The Makefile sets `PYTHONPATH` to `src` and `ady_helpers` itself, so
 no install is needed to run them.
 
 ---
@@ -97,10 +100,8 @@ no install is needed to run them.
 ## Quick start
 
 ```python
-from hparsec import (
-    Input, ParserState, method, forward,
-    IDENTIFIER, EQUAL, NUMBER, SEMICOLON,
-)
+from hparsec import ParserState, method, forward
+from ada_tokens import Input, IDENTIFIER, EQUAL, NUMBER, SEMICOLON
 
 # Grammar
 keyvalue  = IDENTIFIER + EQUAL + NUMBER + SEMICOLON
@@ -288,7 +289,7 @@ the state an explicit object passed through every rule and output method
 would lift that, at the cost of touching every call site in the grammar
 and both backends.
 
-### `RichNL` (in `ady_tokenizer`)
+### `RichNL` (in `ady_helpers/ady_tokenizer`)
 A newline token enriched with any preceding inline comments. Allows comments
 to travel naturally with the parse tree so backends can reproduce them in
 generated output.

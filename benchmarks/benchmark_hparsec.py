@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Benchmark hparsec left recursion against an equivalent repetition grammar.
 
-By default the library is loaded from the repository's src/ directory; pass
---source-dir to point at another copy of hparsec.py and ady_tokenizer.py.
+By default the library is loaded from the repository's src/ directory (with ady_helpers/ on the path); pass
+--source-dir to point at another copy of hparsec.py.
 
 The benchmark excludes tokenization from the reported parse time and checks
 that every expression token was consumed.
@@ -21,7 +21,8 @@ DEFAULT_SOURCE_DIR = Path(__file__).resolve().parent.parent / "src"
 
 
 def build_grammars():
-    from hparsec import Input, NUMBER, PLUS, ParserState, fw
+    from ada_tokens import Input, NUMBER, PLUS
+    from hparsec import ParserState, fw
 
     # expr ::= expr '+' NUMBER | NUMBER
     lr_expr = fw("lr_expr")
@@ -81,6 +82,7 @@ def main():
                     help="also measure traced peak parse memory at this size; 0 disables")
     args = ap.parse_args()
     sys.path.insert(0, str(Path(args.source_dir).resolve()))
+    sys.path.insert(1, str(Path(__file__).resolve().parent.parent / "ady_helpers"))
 
     Input, ParserState, lr_expr, flat_expr = build_grammars()
     print("terms grammar         tokenize(s) parse median(s) memo entries peak parse memory")
