@@ -2,7 +2,7 @@
 
 Lints zsh scripts. It is built on [hparsec](../..), so install hparsec first.
 
-    pip install . ./tools/zsh_linter     # from the repository root
+    make install                         # from the repository root, puts zsh-lint in ~/.local/bin
     zsh-lint ~/.zshrc deploy.zsh
     cat script.zsh | zsh-lint -
 

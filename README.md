@@ -307,8 +307,8 @@ These are reversed by the backend's output methods on the relevant AST nodes.
   (`A = (A + op + B) | B`). Running either prints its parse and evaluation
   tests.
 - `tools/zsh_linter/` is `zsh-lint`, a full zsh grammar with lint rules
-  attached to AST nodes. Install it with `pip install . ./tools/zsh_linter`
-  from the repository root, then lint scripts directly:
+  attached to AST nodes. Run `make install` from the repository root, which
+  puts a `zsh-lint` command in `~/.local/bin`. Then lint scripts directly:
 
   ```sh
   zsh-lint ~/.zshrc deploy.zsh
