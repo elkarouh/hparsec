@@ -24,6 +24,7 @@ from hparsec import (
     walk,
 )
 from zsh_tokenizer import tokenize_zsh, TOKEN_TYPES, _RESERVED
+from style_rules import style_issues
 
 # Auto-fixes applied by `--fix` before formatting, in this order. Each entry is
 # (rule code, fix function name). A fix must not change what the script does, and
@@ -1509,7 +1510,7 @@ def lint_zsh_code(source):
         tok = stream.tokens[index]
         raise SyntaxError(f"Unexpected token {tok.string!r} at position {tok.start}")
 
-    return ast.lint() + _bare_variable_issues(tokens)
+    return ast.lint() + _bare_variable_issues(tokens) + style_issues(source)
 
 
 # ============================================================
@@ -1700,6 +1701,45 @@ def _run_self_tests():
             ("Multiple for vars positional", 'for x y; do echo $x $y; done\n'),
             ("Case parenthesized group", 'case "$OSTYPE" in\n  (darwin|freebsd)*)\n    echo b\n    ;;\n  *)\n    echo c\n    ;;\nesac\n'),
     ]
+
+        # Line-level style rules (style_rules.py): each one fires on its example and not on the fix.
+        from style_rules import style_issues as _style
+        _style_cases = [
+            ("ZSH010", "if test -f x; then\n  :\nfi\n", "if [[ -f x ]]; then\n  :\nfi\n"),
+            ("ZSH011", '[[ $a == "" ]]\n', "[[ -z $a ]]\n"),
+            ("ZSH013", "[[ ! $x -eq 1 ]]\n", "[[ $x -ne 1 ]]\n"),
+            ("ZSH016", "echo ${MY VAR}\n", "echo ${MY_VAR}\n"),
+            ("ZSH017", "[[ $x < 3 ]]\n", "[[ $x -lt 3 ]]\n"),
+            ("ZSH018", "typeset -i N=\n", "typeset -i N=0\n"),
+            ("ZSH019", "echo a >>& f\n", "echo a >& f\n"),
+            ("ZSH020", "wc | awk '{print $1}'\n", "wc -l f\n"),
+            ("ZSH021", "echo a  \n", "echo a\n"),
+            ("ZSH022", "echo ${1}\n", "echo $1\n"),
+            ("ZSH023", "echo $*\n", "echo $@\n"),
+            ("ZSH029", "echo ${NF}\n", "echo ${x}\n"),
+            ("ZSH030", "cmd | tee f 2>&1\n", "cmd 2>&1 | tee f\n"),
+            ("ZSH031", "${X}=1\n", "X=1\n"),
+            ("ZSH032", "[[ -n $a ]] && [[ -n $b ]]\n", "[[ -n $a && -n $b ]]\n"),
+            ("ZSH033", "f ()\n{\n:\n}\n", "function f\n{\n:\n}\n"),
+            ("ZSH034", "x=/a.$(cm_where)\n", "x=/a!$(cm_where)\n"),
+            ("ZSH035", "cmd 2>&1 >f\n", "cmd >f 2>&1\n"),
+            ("ZSH036", "Log msg >&2\n", "Log msg\n"),
+            ("ZSH037", 'Log "ERROR x"\n', 'Log -i "x"\n'),
+            ("ZSH038", "echo y/n\n", "confirm\n"),
+            ("ZSH040", 'Log "done "\n', 'Log "done"\n'),
+            ("ZSH041", "alias_get X Value\n", "alias_get -q X\n"),
+            ("ZSH042", "cd -\n", 'cd "${OLDPWD}"\n'),
+            ("ZSH043", "tr a-z A-Z\n", 'tr "a-z" "A-Z"\n'),
+            ("ZSH044", "echo\ta\n", "echo a\n"),
+            ("ZSH045", "cfmu_ftps_list SVC *.txt\n", 'cfmu_ftps_list SVC "*.txt"\n'),
+            ("ZSH046", "bmw VAR | awk '{print $2}'\n", "bmw -V VAR\n"),
+            ("ZSH047", "x=$VAR.LATEST\n", "x=$VAR.LATEST_GOOD\n"),
+            ("ZSH048", "echo $CFMU_OS\n", "echo $OSTYPE\n"),
+        ]
+        for _code, _bad, _good in _style_cases:
+            assert any(i["rule"] == _code for i in _style(_bad)), f"{_code} not reported"
+            assert not any(i["rule"] == _code for i in _style(_good)), f"{_code} reported on the fix"
+        print("Style rules OK")
 
         print("\n--- Path X tests ---")
         for name, code in test_scripts:
