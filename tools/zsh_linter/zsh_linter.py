@@ -250,11 +250,12 @@ class ZshStyleGrammar(Grammar):
 
     assign_target = assign_name | number   # `0=${...}` and other numeric names
 
+    # A declared name may be an array element: `export NAME[$i]=$x`.
     # FIX 1: The declared name may be dynamic: `typeset -ga ${cache_place}` or `"${var}"`.
     # Added `string` to allow quoted variable expansions as declaration targets.
-    declaration = literal("local") + flag[:] + ((assign_name | var_exp | string) + (ASSIGN_OP + (assign_rhs | nothing))[0:1])[1:]
+    declaration = literal("local") + flag[:] + (((assign_name + subscript[0:1]) | var_exp | string) + (ASSIGN_OP + (assign_rhs | nothing))[0:1])[1:]
     declaration2 = (literal("typeset") | literal("declare")
-                    | literal("export") | literal("readonly")) + flag[:] + ((assign_name | var_exp | string) + (ASSIGN_OP + (assign_rhs | nothing))[0:1])[1:]
+                    | literal("export") | literal("readonly")) + flag[:] + (((assign_name + subscript[0:1]) | var_exp | string) + (ASSIGN_OP + (assign_rhs | nothing))[0:1])[1:]
     
     # One or more `name=value` pairs on a line: `start=$a end=$b`.
     assignment = (
@@ -709,6 +710,7 @@ def _run_self_tests():
             ("group before pipe", "{ echo a; } | tee -a f\n"),
             ("subshell before pipe", "( echo a ) | tee\n"),
             ("caret word argument", "grep -v ^N_.*$ file\n"),
+            ("export array element", "export NAME[$i]=$INSTANCE\n"),
             ("for-alt", "for f (*.txt) do\n  echo $f\ndone\n"),
             ("select", "select opt in a b c; do\n  echo $opt\ndone\n"),
             ("heredoc", "cat <<EOF\nhello\nEOF\n"),
