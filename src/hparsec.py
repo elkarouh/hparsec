@@ -933,6 +933,28 @@ def token_of(node):
 
     return None
 
+def walk(node, visitor):
+    """Call *visitor* on *node* and on every AST node below it, depth first.
+
+    Each node is passed to *visitor* before its children, so a parent is seen
+    before the nodes it contains. If the visitor returns ``False`` for a node,
+    the children of that node are skipped. A node reached twice is visited once,
+    which also keeps a cyclic structure from looping.
+    """
+    seen = set()
+
+    def _walk(current):
+        if current is None or id(current) in seen:
+            return
+        seen.add(id(current))
+        if visitor(current) is False:
+            return
+        for child in children(current):
+            _walk(child)
+
+    _walk(node)
+
+
 def sequence(p1, p2):
     """Match parsers in order, collecting all results. Supports backtracking."""
 
@@ -1340,6 +1362,7 @@ __all__ = [
     "G",
     "children",
     "token_of",
+    "walk",
     "Cut",
     "ParserMeta",
     "Grammar",

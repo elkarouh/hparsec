@@ -19,7 +19,8 @@ from hparsec import (
     ignore,
     shift,
     children, 
-    token_of
+    token_of,
+    walk,
 )
 from zsh_tokenizer import tokenize_zsh, TOKEN_TYPES, _RESERVED
 
@@ -152,10 +153,7 @@ def _expansion_issues(node, backticks_only=False):
     issues = []
     seen = set()
 
-    def walk(current):
-        if current is None:
-            return
-
+    def visit(current):
         # A token is a leaf: it has a string attribute but no AST children.
         if hasattr(current, "string") and not hasattr(current, "nodes"):
             tok = current
@@ -206,10 +204,7 @@ def _expansion_issues(node, backticks_only=False):
 
             return
 
-        for child in children(current):
-            walk(child)
-
-    walk(node)
+    walk(node, visit)
     return issues
 # ============================================================
 # Grammar
@@ -590,13 +585,9 @@ class ZshStyleGrammar(Grammar):
         def lint(self):
             def has_wildcard_case(case_node): 
                 seq = []
-                def walk(node):
-                    if node is None:
-                        return
-                    kids = children(node)
-                    if kids:
-                        for c in kids:
-                            walk(c)
+                def collect(node):
+                    # Only leaves carry words; inner nodes are walked through.
+                    if children(node):
                         return
                     tok = token_of(node)
                     if tok is None:
@@ -604,7 +595,7 @@ class ZshStyleGrammar(Grammar):
                     s = tok if isinstance(tok, str) else getattr(tok, "string", None)
                     if s is not None:
                         seq.append(s)
-                walk(case_node)
+                walk(case_node, collect)
                 for i in range(len(seq) - 1):
                     if seq[i] == "*" and seq[i + 1] == ")":
                         return True
