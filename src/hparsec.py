@@ -965,29 +965,20 @@ def parts(node):
 
 
 def token_of(node):
-    """Return the first leaf token wrapped by *node*, or ``None``.
+    """Return the first leaf token under *node*, or ``None`` when it holds none.
 
-    An identity guard prevents malformed or cyclic node structures from
-    causing an infinite loop.
+    A leaf is anything that is not a parser node: a token, or the string a
+    literal keeps. Empty nodes are skipped, so an optional part that matched
+    nothing at the front of a rule does not hide the token after it.
     """
-    current = node
-    seen = set()
-
-    while current is not None and id(current) not in seen:
-        seen.add(id(current))
-
-        if isinstance(current, str):
-            return current
-
-        if not isinstance(current, Parser):
-            return current
-
-        kids = children(current)
-        if kids:
-            current = kids[0]
-        else:
-            return None
-
+    if node is None:
+        return None
+    if not isinstance(node, Parser):
+        return node
+    for child in children(node):
+        leaf = token_of(child)
+        if leaf is not None:
+            return leaf
     return None
 
 def walk(node, visitor):
@@ -1349,6 +1340,14 @@ if __name__ == "__main__":
     ast, _ = names.parse(_tokens("a, b, c"))
     assert len(ast.nodes) == 2 and ast.to_py() == ["a", "b", "c"]
     print("plain usage: self.nodes and self.node for sequences, choices, repetitions and lists OK")
+
+    # token_of(): the first leaf, skipping an empty optional part at the front.
+    optional_first = filt(lambda token: token == "absent", shift)[0:1] + shift
+    ast, _ = optional_first.parse(TokenStream(["only"]))
+    assert len(ast.nodes) == 2 and ast.nodes[0].nodes == [], "A[0:1]: an empty node when A is absent"
+    assert token_of(ast) == "only", "token_of: skips the empty node in front"
+    assert token_of(ast.nodes[0]) is None, "token_of: None for a node without tokens"
+    print("token_of(): first leaf, empty nodes skipped OK")
 
     # --- as_node() AST-boundary tests ---
     ParserState.reset()
