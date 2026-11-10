@@ -142,8 +142,10 @@ def tokenize_zsh(source):
             col += 1
             continue
 
-        if ch == "#" and tokens and tokens[-1].end == start:
+        if (ch == "#" and tokens and tokens[-1].end == start
+                and (tokens[-1].type != TOKEN_TYPES["OP"] or tokens[-1].string in ("}", "]", "]]"))):
             # A # inside a word is literal in zsh: `${NAME#*.}` after an unquoted part.
+            # After a metacharacter such as `;` it still starts a comment: `x=1;# note`.
             push("IDENT", "#", start)
             i += 1
             continue
@@ -175,8 +177,10 @@ def tokenize_zsh(source):
 
             # --- $(( ... )) arithmetic ---
             if source[i:i + 3] == "$((":
-                depth = 1
-                j = i + 2
+                # Both parens of "$((" are open: the scan starts after them with depth 2,
+                # and stops after the second ")" that closes them, never past it.
+                depth = 2
+                j = i + 3
                 while j < n:
                     c2 = source[j]
                     if c2 == "(":
@@ -185,8 +189,6 @@ def tokenize_zsh(source):
                         depth -= 1
                         if depth == 0:
                             j += 1
-                            if j < n and source[j] == ")":
-                                j += 1
                             break
                     j += 1
                 push("ARITH_EXP", source[i:j], start)
