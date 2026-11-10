@@ -89,7 +89,7 @@ class ZshTerminals(Terminals):
     # Enhance argument with glob qualifiers, subscripts, and inline assignments.
     # A glob qualifier has at least one token; `()` alone is not one (it is an empty
     # argument-less function header or anonymous function).
-    glob_qual = LPAREN + filt(lambda tok: tok.string not in ("(", ")"), shift)[1:] + RPAREN
+    glob_qual = lparen_vis + filt(lambda tok: tok.string not in ("(", ")"), shift)[1:] + rparen_vis
     subscript = lbracket + ((~rbracket) + shift)[:] + rbracket
 
     # FIX 5: Added ")" to glob_suffix. This ensures that in a pattern like `(a|b) )`,
@@ -885,14 +885,23 @@ class ZshStyleGrammar(Grammar):
         def to_source(self):
             word = []
             arms = []
+            seen_in = False
             for c in _flatten_anon(children(self)):
                 kw = _keyword_of(c)
-                if kw in ("case", "in", "esac"):
+                if kw == "in":
+                    seen_in = True
+                    continue
+                if kw in ("case", "esac"):
                     continue
                 if type(c).__name__ in ("case_arm", "case_final"):
                     arms.append(_render(c))
-                elif kw is None:
+                elif kw is None and not seen_in:
                     word.append(c)
+                elif kw is None:
+                    # A comment between the arms and esac stays with the arms.
+                    piece = _render(c).strip()
+                    if piece:
+                        arms.append(piece)
             header = "case " + _join_source(word) + " in"
             return header + "\n" + "\n".join(a for a in arms if a) + "\nesac"
 
