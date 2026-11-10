@@ -3,9 +3,13 @@ export PYTHONPATH := $(CURDIR)/src$(if $(PYTHONPATH),:$(PYTHONPATH))
 
 ZSH := tools/zsh_linter
 
-.PHONY: test selftest examples zsh corpus verbose bench profile
+.PHONY: test selftest examples zsh corpus verbose bench profile install
 
 test: selftest examples zsh corpus
+
+# Editable install of hparsec and the zsh-lint command (pip needs -e before each path)
+install:
+	$(PYTHON) -m pip install -e . -e ./tools/zsh_linter
 
 # Built-in self-tests of the library modules
 selftest:
