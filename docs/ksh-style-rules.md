@@ -863,10 +863,6 @@ The pattern is built at run time. I checked that the expansion is a single tab, 
 
 **Rationale.** It "is likely to be obsolete" since the HP-UX to Linux migration.
 
-### 53. Do not use `${VAR}` without the `$` in a test: see rule 34
-
-No separate pattern. Rule 34 covers the same case after `&&` or `||`.
-
 # Known problems in the third and fourth checkers
 
 - **Brace-depth typo** in the function-exit check (rule 25). `func_nested_level` and `function_nested_level` are different names.
@@ -874,6 +870,6 @@ No separate pattern. Rule 34 covers the same case after `&&` or `||`.
   is hidden by `$(...)`, so the check does nothing.
 - **Redundant substitutions** in the OPC check (rule 26). The second `sed` re-applies five substitutions that do nothing.
 - **Other variable names are not restored.** Rule 26 hides five names from the braces check without reporting them.
-- **Unclosed `if` before the `tee` check.** The awk check (rule 23) uses only the previous line.
-- **Two-line `if`** in the `[[ ]] && [[ ]]` check (rule 32). The pattern uses `grep -e` on the same line only.
+- **Previous-line lookback.** The `tee` and `typeset` checks (rules 23 and 24) use only the previous non-blank line.
+- **Single-line matching.** The `[[ ]] && [[ ]]` checks (rules 32 and 34) only see one line, so a test split across lines is missed.
 - **Comment-stripping** works as in the first checker: a `#` after a space starts a comment, even in a quoted string.
