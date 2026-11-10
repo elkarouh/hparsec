@@ -130,6 +130,34 @@ for node in result[0].nodes:
 
 ## Key concepts
 
+### Reading the tree
+Every node has `nodes`, its children, and `node`, the first of them (`nodes[0]`).
+An ignored token leaves no child, so `nodes` holds only what a method needs:
+
+| Rule | What the node holds |
+|------|---------------------|
+| `A + B` | `nodes == [a, b]` |
+| `IGNORED + A` | `nodes == [a]` |
+| `A \| B` | no node of its own: the result is the node of the alternative that matched, so a choice needs no method |
+| `A[1:]` | `nodes == [a, a, ...]` |
+| `A[:]` | the same, and no node at all when nothing matched |
+| `A + (SEP + A)[:]` | `nodes == [a]` or `[a, more]`; each item of `more.nodes` holds one `A` as `item.node` |
+
+A method is written with `self.nodes[i]`, `self.node` and `for x in self.nodes`:
+
+```python
+names = IDENT + (SEP + IDENT)[:]
+
+@method(names)
+def to_py(self):
+    return [self.node.to_py()] + [item.node.to_py() for more in self.nodes[1:] for item in more.nodes]
+```
+
+The self-tests at the end of `src/hparsec.py` show each case, and
+`tools/basic_interpreter` and `tools/lisp_interpreter` are written this way.
+`as_node()`, `parts()` and `node.<rule>` (below) are optional helpers for large
+grammars. A grammar does not need them.
+
 ### `method(parser_class)`
 Decorator that attaches an output method to a parser class after the grammar
 has been defined. Used to add `to_py()`, `to_nim()`, or any backend-specific

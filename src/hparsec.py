@@ -26,17 +26,32 @@ Quick example (the token names and Input() come from ady_helpers/ady_tokens.py):
     ast, rest = keyvalue.parse(Input("x=789;"))
     print(ast.to_py())  # x:789
 
-IMPORTANT — sequence flattening
--------------------------------
-`A + B` where A is already a Sequence_Parser produces a NEW Sequence_Parser
-whose `.parsers` is `A.parsers + [B]` — i.e. A's children are hoisted into
-the parent, and the intermediate `A` node does NOT appear in the resulting
-AST. Likewise `A | B` flattens when A is a Choice_Parser.
+Reading the tree
+----------------
+Every node has `nodes`, its children, and `node`, the first of them (`nodes[0]`).
+An ignored token leaves no child, so `nodes` holds only what a method needs:
 
-Consequence: if you need an intermediate rule to remain visible in the AST,
-wrap it with `as_node()` before composing it into a parent. The wrapper
-retains the complete result as one child and therefore prevents sequence or
-choice flattening from erasing that grammar boundary.
+    A + B              nodes == [a, b]
+    IGNORED + A        nodes == [a]
+    A | B              no node of its own: the result is the node of the
+                       alternative that matched, so a choice needs no method
+    A[1:]              nodes == [a, a, ...]
+    A[:]               the same, and no node at all when nothing matched
+    A + (SEP + A)[:]   nodes == [a] or [a, more]; each item of more.nodes
+                       holds one A as item.node
+
+A method is written with `self.nodes[i]`, `self.node` and `for x in self.nodes`;
+the self-tests at the end of this file show each case. `as_node()`, `parts()`
+and `node.<rule>` are optional helpers for large grammars. A grammar does not
+need them.
+
+Sequence flattening
+-------------------
+`A + B` where A is an unnamed sequence produces one sequence whose parsers are
+A's parsers followed by B: A's children are hoisted into the parent and A has
+no node of its own. Likewise `A | B` flattens when A is a choice. A rule keeps
+its node once it has a name: every rule of a `Grammar` class does, and so does
+a rule given a method with `@method`.
 
 todo: replace tokenizer with own lexer
 """
@@ -1277,6 +1292,64 @@ __all__ = [
 ########################################################################################################################
 ##########################################
 if __name__ == "__main__":
+    # --- Plain usage: a method reads self.nodes and self.node, nothing else ---
+    ParserState.reset()
+
+    def _tokens(text):
+        return TokenStream(re.findall(r"\d+\.\d+|\w+|\S", text))
+
+    IDENT = expect_re(r"[A-Za-z_]\w*$")
+    NUM = expect_re(r"\d+(\.\d+)?$")
+    EQ, SEMI, LP, RP, SEP = (ignore(literal(char)) for char in "=;(),")
+
+    keyvalue = IDENT + EQ + NUM + SEMI
+    keyvalues = keyvalue[1:]
+
+    @method(keyvalue)
+    def to_py(self):
+        return f"{self.nodes[0].to_py()}:{self.nodes[1].to_py()}"
+
+    @method(keyvalues)
+    def to_py(self):
+        return "{ " + ", ".join(ast.to_py() for ast in self.nodes) + " }"
+
+    ast, _ = keyvalue.parse(_tokens("x=789;"))
+    assert type(ast).__name__ == "keyvalue" and len(ast.nodes) == 2, "A + B: one child per kept part"
+    assert ast.node is ast.nodes[0], "node is nodes[0]"
+    assert ast.to_py() == "x:789"
+    ast, _ = keyvalues.parse(_tokens("x=2; y=3.4;"))
+    assert ast.to_py() == "{ x:2, y:3.4 }", "A[1:]: nodes are the repeated items"
+
+    # A choice has no node of its own, and an empty A[:] leaves no node.
+    atom = fw("atom")
+    s_expr = LP + atom[:] + RP
+    atom = IDENT | NUM | s_expr
+
+    @method(s_expr)
+    def to_py(self):
+        return "(" + " ".join(member.to_py() for res in self.nodes for member in res.nodes) + ")"
+
+    ast, _ = atom.parse(_tokens("x"))
+    assert type(ast) is IDENT, "A | B: the node is the alternative that matched"
+    ast, _ = s_expr.parse(_tokens("()"))
+    assert ast.nodes == [] and ast.to_py() == "()", "empty A[:]: no child"
+    ast, _ = s_expr.parse(_tokens("(a b (c 3) 7)"))
+    assert len(ast.nodes) == 1 and len(ast.node.nodes) == 4, "IGNORED + A[:] + IGNORED: one child, the repetition"
+    assert ast.to_py() == "(a b (c 3) 7)"
+
+    # A separated list: the first item, then a repetition whose items each hold one more.
+    names = IDENT + (SEP + IDENT)[:]
+
+    @method(names)
+    def to_py(self):
+        return [self.node.to_py()] + [item.node.to_py() for more in self.nodes[1:] for item in more.nodes]
+
+    ast, _ = names.parse(_tokens("a"))
+    assert len(ast.nodes) == 1 and ast.to_py() == ["a"]
+    ast, _ = names.parse(_tokens("a, b, c"))
+    assert len(ast.nodes) == 2 and ast.to_py() == ["a", "b", "c"]
+    print("plain usage: self.nodes and self.node for sequences, choices, repetitions and lists OK")
+
     # --- as_node() AST-boundary tests ---
     ParserState.reset()
 
