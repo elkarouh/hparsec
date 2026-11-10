@@ -430,10 +430,10 @@ class ZshStyleGrammar(Grammar):
                    + literal("do") + (STATEMENT_SEP | comment)[:] + inner_statement[:]
                    + STATEMENT_SEP[:] + literal("done"))
 
-    while_stmt = (literal("while") + and_or + (STATEMENT_SEP | comment)[:]
+    while_stmt = (literal("while") + and_or[0:1] + (STATEMENT_SEP | comment)[:]
                   + literal("do") + (STATEMENT_SEP | comment)[:] + inner_statement[:]
                   + STATEMENT_SEP[:] + literal("done"))
-    until_stmt = (literal("until") + and_or + (STATEMENT_SEP | comment)[:]
+    until_stmt = (literal("until") + and_or[0:1] + (STATEMENT_SEP | comment)[:]
                   + literal("do") + (STATEMENT_SEP | comment)[:] + inner_statement[:]
                   + STATEMENT_SEP[:] + literal("done"))
     repeat_stmt = (
