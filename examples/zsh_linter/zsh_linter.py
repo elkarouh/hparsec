@@ -5,6 +5,8 @@ Argument-level expansion rules live on the explicit `argument` AST node, so
 commands, assignments, declarations, and case subjects share one rule path.
 """
 
+import sys
+
 from hparsec import (
     Grammar,
     ParserState,
@@ -537,145 +539,193 @@ def lint_zsh_code(source):
 # Tests
 # ============================================================
 
-if __name__ == "__main__":
-    from zsh_tokenizer import tokenize_zsh as _tk
-    _arith = [(t.type, t.string) for t in _tk("count=$((count + 1))")]
-    assert any(k == 3 and s == "$((count + 1))" for k, s in _arith), "ARITH_EXP split"
-    _case = [(t.type, t.string) for t in _tk("case $1 in\n a) x;;\nesac\n")]
-    assert any(k == 4 and s == "$1" for k, s in _case), "$1 split"
-    _esc = [(t.type, t.string) for t in _tk("git log --format=%h\\ %s\n")]
-    assert not any(t == 10 and s == "\\" for t, s in _esc), "escape leaked"
-    _fmt = [(t.type, t.string) for t in _tk("git log --format=%h\n")]
-    assert any(s == "--format=%h" for _, s in _fmt), "--format not IDENT"
-    _glob = [(t.type, t.string) for t in _tk('x=("$v"(Nm-1))\n')]
-    assert any(s == "Nm-1" for _, s in _glob), "glob qual tokens missing"
-    _proc = [(t.type, t.string) for t in _tk("source <(dircolors -b)\n")]
-    assert any(k == 5 for k, s in _proc), "process subst not CMD_SUBST"
-    print("Tokenizer OK")
-    # AST helper and lint-boundary regression tests.
 
-    _sample = lint_zsh_code(
-        "GIT_OPTIONAL_LOCKS=$LOCK command git $ARGS\n"
-    )
-    assert any(
-        issue["rule"] == "ZSH002"
-        for issue in _sample
-    ), "prefix/head/argument expansion not linted"
+def _run_self_tests():
+        from zsh_tokenizer import tokenize_zsh as _tk
+        _arith = [(t.type, t.string) for t in _tk("count=$((count + 1))")]
+        assert any(k == 3 and s == "$((count + 1))" for k, s in _arith), "ARITH_EXP split"
+        _case = [(t.type, t.string) for t in _tk("case $1 in\n a) x;;\nesac\n")]
+        assert any(k == 4 and s == "$1" for k, s in _case), "$1 split"
+        _esc = [(t.type, t.string) for t in _tk("git log --format=%h\\ %s\n")]
+        assert not any(t == 10 and s == "\\" for t, s in _esc), "escape leaked"
+        _fmt = [(t.type, t.string) for t in _tk("git log --format=%h\n")]
+        assert any(s == "--format=%h" for _, s in _fmt), "--format not IDENT"
+        _glob = [(t.type, t.string) for t in _tk('x=("$v"(Nm-1))\n')]
+        assert any(s == "Nm-1" for _, s in _glob), "glob qual tokens missing"
+        _proc = [(t.type, t.string) for t in _tk("source <(dircolors -b)\n")]
+        assert any(k == 5 for k, s in _proc), "process subst not CMD_SUBST"
+        print("Tokenizer OK")
+        # AST helper and lint-boundary regression tests.
 
-
-    _cmd_subst = lint_zsh_code("echo $(date)\n")
-    assert any(
-        issue["rule"] == "ZSH002"
-        and "command substitution" in issue["message"]
-        for issue in _cmd_subst
-    ), "command substitution not linted"
+        _sample = lint_zsh_code(
+            "GIT_OPTIONAL_LOCKS=$LOCK command git $ARGS\n"
+        )
+        assert any(
+            issue["rule"] == "ZSH002"
+            for issue in _sample
+        ), "prefix/head/argument expansion not linted"
 
 
-    _backtick = lint_zsh_code("echo `date`\n")
-    assert any(
-        issue["rule"] == "ZSH003"
-        for issue in _backtick
-    ), "backtick not linted"
+        _cmd_subst = lint_zsh_code("echo $(date)\n")
+        assert any(
+            issue["rule"] == "ZSH002"
+            and "command substitution" in issue["message"]
+            for issue in _cmd_subst
+        ), "command substitution not linted"
 
 
-    _double_test = lint_zsh_code("[[ $value == $(cmd) ]]\n")
-    assert not any(
-        issue["rule"] == "ZSH002"
-        for issue in _double_test
-    ), "[[ ]] expansion exemption regressed"
+        _backtick = lint_zsh_code("echo `date`\n")
+        assert any(
+            issue["rule"] == "ZSH003"
+            for issue in _backtick
+        ), "backtick not linted"
 
-    # Here-strings: every one is a mild ZSH008; an unquoted word is also ZSH002.
-    _herestring_bare = lint_zsh_code("cat <<< $line\n")
-    assert any(
-        issue["rule"] == "ZSH008"
-        for issue in _herestring_bare
-    ), "here-string not counted by ZSH008"
-    assert any(
-        issue["rule"] == "ZSH002"
-        for issue in _herestring_bare
-    ), "unquoted here-string word not linted"
 
-    _herestring_quoted = lint_zsh_code('cat <<< "$line"\n')
-    assert not any(
-        issue["rule"] == "ZSH002"
-        for issue in _herestring_quoted
-    ), "quoted here-string word wrongly linted"
+        _double_test = lint_zsh_code("[[ $value == $(cmd) ]]\n")
+        assert not any(
+            issue["rule"] == "ZSH002"
+            for issue in _double_test
+        ), "[[ ]] expansion exemption regressed"
 
-    test_scripts = [
-        ("While loop", "while [ $count -lt 5 ]; do\n  echo $count\n  count=$((count + 1))\ndone\n"),
-        ("blank line in while", "while true; do\n  echo a\n\n  echo b\n\ndone\n"),
-        ("Function (paren)", "my_func() {\n  echo $USER_NAME\n}\n"),
-        ("blank line in function", "f() {\n  echo a\n\n  echo b\n\n}\n"),
-        ("Keyword function", "function cleanup {\n  echo done\n}\n"),
-        ("Nested control flow", "my_func() {\n  if [ $x ]; then\n    echo yes\n  fi\n}\n"),
-        ("If/elif/else", "if [ -f a ]; then\n  echo a\nelif [ -d b ]; then\n  echo b\nelse\n  echo none\nfi\n"),
-        ("blank line in if", "if true; then\n  echo a\n\nfi\n"),
-        ("if with &&", 'if cmd1 && cmd2; then\n  echo hi\nfi\n'),
-        ("if with complex &&", 'if [[ -f a ]] && (( i++ )) && [ -d b ]; then\n  echo hi\nfi\n'),
-        ("if with !", 'if ! cmd; then\n  echo hi\nfi\n'),
-        ("if with ! after &&", 'if cmd1 && ! cmd2; then\n  echo hi\nfi\n'),
-        ("elif with &&", 'if a; then\n  echo 1\nelif b && c; then\n  echo 2\nfi\n'),
-        ("while with &&", 'while cmd1 && cmd2; do\n  echo hi\ndone\n'),
-        ("until with ||", 'until a || b; do\n  echo hi\ndone\n'),
-        ("assign || cmd", 'x=1 || echo failed\n'),
-        ("assign && cmd", 'x=$(cmd) && echo ok\n'),
-        ("Backtick pipeline", "`pwd` | grep foo\n"),
-        ("Pipeline with var arg", "cat file.txt | grep $PATTERN\n"),
-        ("Arithmetic only", "count=$((count + 1))\n"),
-        ("Local declaration", "local name=$USER\n"),
-        ("and-or chain", "cd /tmp && rm -f foo || echo failed\n"),
-        ("and with grouping", "true && { echo a; echo b; }\n"),
-        ("and with subshell", "true && ( cd /tmp && ls )\n"),
-        ("cmd subst assignment", "x=$(date)\n"),
-        ("nested cmd subst", "y=$(echo $(date))\n"),
-        ("case simple", "case $1 in\n  start) echo starting;;\n  stop) echo stopping;;\n  *) echo unknown;;\nesac\n"),
-        ("case no wildcard", "case $1 in\n  a) echo a;;\n  b) echo b;;\nesac\n"),
-        ("dbl bracket", "if [[ -f $x ]]; then\n  echo yes\nfi\n"),
-        ("dbl bracket !=", '[[ "$DISABLE" != true ]] || return 0\n'),
-        ("dbl bracket =~", '[[ $x =~ ^foo ]]\n'),
-        ("redirection", "echo hello > /tmp/x\n"),
-        ("subshell", "( cd /tmp && ls )\n"),
-        ("grouping", "{ echo a; echo b; }\n"),
-        ("anon function", "() {\n  echo hi\n}\n"),
-        ("for-alt", "for f (*.txt) do\n  echo $f\ndone\n"),
-        ("select", "select opt in a b c; do\n  echo $opt\ndone\n"),
-        ("heredoc", "cat <<EOF\nhello\nEOF\n"),
-        ("line continuation", "echo a \\\n     b\n"),
-        ("append assignment", "arr+=foo\n"),
-        ("negative number", "x=-1\n"),
-        ("colon no-op", ":\n"),
-        ("colon with args", ": ${FOO:=bar}\n"),
-        ("escape space", "git log --format=%h\\ %s\n"),
-        ("typeset with flag", "typeset -g foo=bar\n"),
-        ("declare array", "declare -A map\n"),
-        ("comma in ident", "echo a,b\n"),
-        ("dot source", ". /etc/profile\n"),
-        ("glob qualifier", 'x=("$v"(Nm-1))\n'),
-        ("alias with = arg", "alias ls='gls --color=tty'\n"),
-        ("process subst", "source <(dircolors -b)\n"),
-        ("zero assign", "0=${(%):-%N}\n"),
-        ("prefix cmd", 'GIT_OPTIONAL_LOCKS=0 command git "$@"\n'),
-        ("case glob pattern", 'case "$OSTYPE" in\n  netbsd*)\n    echo a\n    ;;\n  (darwin|freebsd)*)\n    echo b\n    ;;\n  *)\n    echo c\n    ;;\nesac\n'),
-        ("Quoted declaration name", 'typeset -g "${var}"=value\n'),
-        ("&& with declaration", 'local x=1 && echo ok\n'),
-        ("|| with declaration", 'typeset y=2 || echo fail\n'),
-        ("Named fd redirection", '{myfd}</dev/null\n'),
-        ("Named fd numeric", '{1}>&-\n'),
-        ("Multiple for vars", 'for a b in 1 2; do echo $a $b; done\n'),
-        ("Multiple for vars positional", 'for x y; do echo $x $y; done\n'),
-        ("Case parenthesized group", 'case "$OSTYPE" in\n  (darwin|freebsd)*)\n    echo b\n    ;;\n  *)\n    echo c\n    ;;\nesac\n'),
-]
+        # Here-strings: every one is a mild ZSH008; an unquoted word is also ZSH002.
+        _herestring_bare = lint_zsh_code("cat <<< $line\n")
+        assert any(
+            issue["rule"] == "ZSH008"
+            for issue in _herestring_bare
+        ), "here-string not counted by ZSH008"
+        assert any(
+            issue["rule"] == "ZSH002"
+            for issue in _herestring_bare
+        ), "unquoted here-string word not linted"
 
-    print("\n--- Path X tests ---")
-    for name, code in test_scripts:
-        print(f"\n[{name}]")
+        _herestring_quoted = lint_zsh_code('cat <<< "$line"\n')
+        assert not any(
+            issue["rule"] == "ZSH002"
+            for issue in _herestring_quoted
+        ), "quoted here-string word wrongly linted"
+
+        test_scripts = [
+            ("While loop", "while [ $count -lt 5 ]; do\n  echo $count\n  count=$((count + 1))\ndone\n"),
+            ("blank line in while", "while true; do\n  echo a\n\n  echo b\n\ndone\n"),
+            ("Function (paren)", "my_func() {\n  echo $USER_NAME\n}\n"),
+            ("blank line in function", "f() {\n  echo a\n\n  echo b\n\n}\n"),
+            ("Keyword function", "function cleanup {\n  echo done\n}\n"),
+            ("Nested control flow", "my_func() {\n  if [ $x ]; then\n    echo yes\n  fi\n}\n"),
+            ("If/elif/else", "if [ -f a ]; then\n  echo a\nelif [ -d b ]; then\n  echo b\nelse\n  echo none\nfi\n"),
+            ("blank line in if", "if true; then\n  echo a\n\nfi\n"),
+            ("if with &&", 'if cmd1 && cmd2; then\n  echo hi\nfi\n'),
+            ("if with complex &&", 'if [[ -f a ]] && (( i++ )) && [ -d b ]; then\n  echo hi\nfi\n'),
+            ("if with !", 'if ! cmd; then\n  echo hi\nfi\n'),
+            ("if with ! after &&", 'if cmd1 && ! cmd2; then\n  echo hi\nfi\n'),
+            ("elif with &&", 'if a; then\n  echo 1\nelif b && c; then\n  echo 2\nfi\n'),
+            ("while with &&", 'while cmd1 && cmd2; do\n  echo hi\ndone\n'),
+            ("until with ||", 'until a || b; do\n  echo hi\ndone\n'),
+            ("assign || cmd", 'x=1 || echo failed\n'),
+            ("assign && cmd", 'x=$(cmd) && echo ok\n'),
+            ("Backtick pipeline", "`pwd` | grep foo\n"),
+            ("Pipeline with var arg", "cat file.txt | grep $PATTERN\n"),
+            ("Arithmetic only", "count=$((count + 1))\n"),
+            ("Local declaration", "local name=$USER\n"),
+            ("and-or chain", "cd /tmp && rm -f foo || echo failed\n"),
+            ("and with grouping", "true && { echo a; echo b; }\n"),
+            ("and with subshell", "true && ( cd /tmp && ls )\n"),
+            ("cmd subst assignment", "x=$(date)\n"),
+            ("nested cmd subst", "y=$(echo $(date))\n"),
+            ("case simple", "case $1 in\n  start) echo starting;;\n  stop) echo stopping;;\n  *) echo unknown;;\nesac\n"),
+            ("case no wildcard", "case $1 in\n  a) echo a;;\n  b) echo b;;\nesac\n"),
+            ("dbl bracket", "if [[ -f $x ]]; then\n  echo yes\nfi\n"),
+            ("dbl bracket !=", '[[ "$DISABLE" != true ]] || return 0\n'),
+            ("dbl bracket =~", '[[ $x =~ ^foo ]]\n'),
+            ("redirection", "echo hello > /tmp/x\n"),
+            ("subshell", "( cd /tmp && ls )\n"),
+            ("grouping", "{ echo a; echo b; }\n"),
+            ("anon function", "() {\n  echo hi\n}\n"),
+            ("for-alt", "for f (*.txt) do\n  echo $f\ndone\n"),
+            ("select", "select opt in a b c; do\n  echo $opt\ndone\n"),
+            ("heredoc", "cat <<EOF\nhello\nEOF\n"),
+            ("line continuation", "echo a \\\n     b\n"),
+            ("append assignment", "arr+=foo\n"),
+            ("negative number", "x=-1\n"),
+            ("colon no-op", ":\n"),
+            ("colon with args", ": ${FOO:=bar}\n"),
+            ("escape space", "git log --format=%h\\ %s\n"),
+            ("typeset with flag", "typeset -g foo=bar\n"),
+            ("declare array", "declare -A map\n"),
+            ("comma in ident", "echo a,b\n"),
+            ("dot source", ". /etc/profile\n"),
+            ("glob qualifier", 'x=("$v"(Nm-1))\n'),
+            ("alias with = arg", "alias ls='gls --color=tty'\n"),
+            ("process subst", "source <(dircolors -b)\n"),
+            ("zero assign", "0=${(%):-%N}\n"),
+            ("prefix cmd", 'GIT_OPTIONAL_LOCKS=0 command git "$@"\n'),
+            ("case glob pattern", 'case "$OSTYPE" in\n  netbsd*)\n    echo a\n    ;;\n  (darwin|freebsd)*)\n    echo b\n    ;;\n  *)\n    echo c\n    ;;\nesac\n'),
+            ("Quoted declaration name", 'typeset -g "${var}"=value\n'),
+            ("&& with declaration", 'local x=1 && echo ok\n'),
+            ("|| with declaration", 'typeset y=2 || echo fail\n'),
+            ("Named fd redirection", '{myfd}</dev/null\n'),
+            ("Named fd numeric", '{1}>&-\n'),
+            ("Multiple for vars", 'for a b in 1 2; do echo $a $b; done\n'),
+            ("Multiple for vars positional", 'for x y; do echo $x $y; done\n'),
+            ("Case parenthesized group", 'case "$OSTYPE" in\n  (darwin|freebsd)*)\n    echo b\n    ;;\n  *)\n    echo c\n    ;;\nesac\n'),
+    ]
+
+        print("\n--- Path X tests ---")
+        for name, code in test_scripts:
+            print(f"\n[{name}]")
+            try:
+                violations = lint_zsh_code(code)
+                if violations:
+                    for v in violations:
+                        pos = getattr(v['token'], 'start', '?')
+                        print(f"  [{v['rule']}] {pos}: {v['message']}")
+                else:
+                    print("  (no violations - parsed successfully)")
+            except Exception as e:
+                print(f"  Parse Error: {type(e).__name__}: {e}")
+
+
+def main(argv=None):
+    """Lint the given zsh scripts, or run the built-in self-tests.
+
+    Usage:
+        python zsh_linter.py script.zsh [more.zsh ...]   lint files
+        python zsh_linter.py -                           lint standard input
+        python zsh_linter.py                             run the self-tests
+    Exits 0 when clean, 1 when findings were reported, 2 on a parse error.
+    """
+    import argparse
+    ap = argparse.ArgumentParser(
+        description="Lint zsh scripts. With no paths, run the built-in self-tests.")
+    ap.add_argument("paths", nargs="*", help="script files to lint, or '-' for stdin")
+    ap.add_argument("--self-test", action="store_true", help="run the built-in self-tests")
+    args = ap.parse_args(argv)
+
+    if args.self_test or not args.paths:
+        _run_self_tests()
+        return 0
+
+    status = 0
+    for path in args.paths:
+        name = "<stdin>" if path == "-" else path
         try:
-            violations = lint_zsh_code(code)
-            if violations:
-                for v in violations:
-                    pos = getattr(v['token'], 'start', '?')
-                    print(f"  [{v['rule']}] {pos}: {v['message']}")
+            if path == "-":
+                source = sys.stdin.read()
             else:
-                print("  (no violations - parsed successfully)")
-        except Exception as e:
-            print(f"  Parse Error: {type(e).__name__}: {e}")
+                with open(path, encoding="utf-8", errors="replace") as fh:
+                    source = fh.read()
+            issues = lint_zsh_code(source)
+        except Exception as exc:
+            print(f"{name}: parse error: {type(exc).__name__}: {exc}", file=sys.stderr)
+            status = 2
+            continue
+        for issue in issues:
+            start = getattr(issue["token"], "start", None)
+            where = f"{name}:{start[0]}:{start[1]}" if start else name
+            print(f"{where}: {issue['rule']} {issue['message']}")
+        if issues and status == 0:
+            status = 1
+    return status
+
+
+if __name__ == "__main__":
+    sys.exit(main())
