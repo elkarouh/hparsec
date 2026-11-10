@@ -156,8 +156,12 @@ def tokenize_zsh(source):
         if kind in ("IDENT", "OP") and value == "{":
             brace_stack.append("word" if glued else "group")
         elif kind in ("IDENT", "OP") and value == "}":
+            # A group closer must end the word: `exit ${RET}}` then a newline closes the
+            # group, but `TMP}.log` is literal text even inside a function body.
+            next_char = line_text(end[0])[end[1]:end[1] + 1]
             if glued and tokens and tokens[-1].type in (TOKEN_TYPES["VAR_EXP"], TOKEN_TYPES["IDENT"]) \
-                    and brace_stack and brace_stack[-1] == "group":
+                    and brace_stack and brace_stack[-1] == "group" \
+                    and next_char in ("", " ", "\t", "\r", ";", "&", "|", ")", "<", ">"):
                 glued = False
             if brace_stack:
                 brace_stack.pop()
