@@ -213,8 +213,10 @@ class ZshStyleGrammar(Grammar):
     # as arith_stmt instead of being eaten as an array.
     # Elements may carry glob qualifiers, e.g. `x=("$v"(Nm-1))`, so a nested
     # `(...)` is consumed as one unit instead of closing the array early.
-    array_literal = LPAREN + (argument | NEWLINE)[:] + RPAREN
-    assign_rhs = array_literal | argument
+    # Assignment values and array elements are not word-split by zsh, so they are
+    # parsed as plain expansions (not `argument` nodes) and are not linted.
+    array_literal = LPAREN + (ZshTerminals._basic_arg | NEWLINE)[:] + RPAREN
+    assign_rhs = array_literal | ZshTerminals._basic_arg
 
     assign_target = assign_name | number   # `0=${...}` and other numeric names
 
@@ -389,7 +391,8 @@ class ZshStyleGrammar(Grammar):
     class prefix_assignment:
         """prefix_assignment ::= assign_word"""
         def lint(self):
-            return _expansion_issues(self)
+            # `VAR=$x cmd` assigns without word splitting: nothing to lint.
+            return []
 
 
     class command_head:
