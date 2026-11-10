@@ -3,7 +3,7 @@ export PYTHONPATH := $(CURDIR)/src$(if $(PYTHONPATH),:$(PYTHONPATH))
 
 ZSH := tools/zsh_linter
 
-.PHONY: test selftest examples zsh corpus verbose bench profile install install-pip
+.PHONY: test selftest examples zsh corpus verbose syntax bench profile install install-pip
 
 test: selftest examples zsh corpus
 
@@ -41,6 +41,14 @@ zsh:
 
 corpus:
 	$(PYTHON) -B $(ZSH)/corpus_test.py $(ZSH)/corpus
+
+# Parse-check every .sh and .zsh file under DIR (recursively); reports only syntax errors.
+# Exit status is 0 when all files parse, 2 when any fails.
+# Example: make syntax DIR=~/dotfiles
+DIR ?= .
+syntax:
+	@find "$(DIR)" -type f \( -name '*.sh' -o -name '*.zsh' \) -not -path '*/.git/*' -print0 \
+	  | xargs -0 -r $(PYTHON) -B $(ZSH)/zsh_linter.py --check-syntax
 
 verbose:
 	$(PYTHON) -B $(ZSH)/corpus_test.py $(ZSH)/corpus -v

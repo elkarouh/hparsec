@@ -6,5 +6,9 @@ Lints zsh scripts. It is built on [hparsec](../..), so install hparsec first.
     zsh-lint ~/.zshrc deploy.zsh
     cat script.zsh | zsh-lint -
 
+To check a whole directory tree for syntax errors only, from the repository root:
+
+    make syntax DIR=~/dotfiles
+
 Findings print as `file:line:col: RULE message`. The exit status is 0 when
 clean, 1 when there are findings, and 2 on a parse error.

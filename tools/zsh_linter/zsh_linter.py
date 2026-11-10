@@ -760,6 +760,8 @@ def main(argv=None):
         description="Lint zsh scripts. With no paths, run the built-in self-tests.")
     ap.add_argument("paths", nargs="*", help="script files to lint, or '-' for stdin")
     ap.add_argument("--self-test", action="store_true", help="run the built-in self-tests")
+    ap.add_argument("--check-syntax", action="store_true",
+                    help="only report parse errors; lint findings are not printed")
     args = ap.parse_args(argv)
 
     if args.self_test or not args.paths:
@@ -767,8 +769,10 @@ def main(argv=None):
         return 0
 
     status = 0
+    checked = failed = 0
     for path in args.paths:
         name = "<stdin>" if path == "-" else path
+        checked += 1
         try:
             if path == "-":
                 source = sys.stdin.read()
@@ -779,6 +783,9 @@ def main(argv=None):
         except Exception as exc:
             print(f"{name}: parse error: {type(exc).__name__}: {exc}", file=sys.stderr)
             status = 2
+            failed += 1
+            continue
+        if args.check_syntax:
             continue
         for issue in issues:
             start = getattr(issue["token"], "start", None)
@@ -786,6 +793,9 @@ def main(argv=None):
             print(f"{where}: {issue['rule']} {issue['message']}")
         if issues and status == 0:
             status = 1
+    if args.check_syntax:
+        print(f"checked {checked} file(s): {failed} with syntax errors")
+        return 2 if failed else 0
     return status
 
 
