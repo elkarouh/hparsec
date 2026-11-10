@@ -15,7 +15,6 @@ from hparsec import (
     expect_type_node,
     as_node,
     filt,
-    literal,
     nothing,
     ignore,
     shift,
@@ -63,6 +62,34 @@ class ZshTerminals(Terminals):
     amp = "&"
     amp_pipe = "&|"
     amp_bang = "&!"
+
+    # Reserved words, kept in the tree as kw_<word> nodes.
+    kw_always = "always"
+    kw_case = "case"
+    kw_declare = "declare"
+    kw_do = "do"
+    kw_done = "done"
+    kw_elif = "elif"
+    kw_else = "else"
+    kw_end = "end"
+    kw_esac = "esac"
+    kw_export = "export"
+    kw_fi = "fi"
+    kw_for = "for"
+    kw_foreach = "foreach"
+    kw_function = "function"
+    kw_if = "if"
+    kw_in = "in"
+    kw_local = "local"
+    kw_readonly = "readonly"
+    kw_repeat = "repeat"
+    kw_select = "select"
+    kw_then = "then"
+    kw_time = "time"
+    kw_typeset = "typeset"
+    kw_until = "until"
+    kw_while = "while"
+    BANG = "!"
     assign_op = assign | plusequal | minequal
     
     # Visible punctuation (appear in the AST)
@@ -376,9 +403,9 @@ class ZshStyleGrammar(Grammar):
     # A declared name may be an array element: `export NAME[$i]=$x`.
     # FIX 1: The declared name may be dynamic: `typeset -ga ${cache_place}` or `"${var}"`.
     # Added `string` to allow quoted variable expansions as declaration targets.
-    declaration = literal("local") + flag[:] + (((assign_name + subscript[0:1]) | var_exp | string) + (assign_op + (assign_rhs | nothing))[0:1])[1:]
-    declaration2 = (literal("typeset") | literal("declare")
-                    | literal("export") | literal("readonly")) + flag[:] + (((assign_name + subscript[0:1]) | var_exp | string) + (assign_op + (assign_rhs | nothing))[0:1])[0:]
+    declaration = kw_local + flag[:] + (((assign_name + subscript[0:1]) | var_exp | string) + (assign_op + (assign_rhs | nothing))[0:1])[1:]
+    declaration2 = (kw_typeset | kw_declare
+                    | kw_export | kw_readonly) + flag[:] + (((assign_name + subscript[0:1]) | var_exp | string) + (assign_op + (assign_rhs | nothing))[0:1])[0:]
     
     # One or more `name=value` pairs on a line: `start=$a end=$b`.
     assignment = (
@@ -426,9 +453,9 @@ class ZshStyleGrammar(Grammar):
 
     # C-style loop: `for ((i=0; i<3; i++)); do ... done`
     # zsh also takes a brace body: `for ((i=0; i<n; i++)) { ... }`.
-    for_arith = (literal("for") + LPAREN + LPAREN + arith_body + RPAREN + RPAREN + (STATEMENT_SEP | comment)[:]
-                 + ((literal("do") + (STATEMENT_SEP | comment)[:] + inner_statement[:]
-                     + STATEMENT_SEP[:] + literal("done"))
+    for_arith = (kw_for + LPAREN + LPAREN + arith_body + RPAREN + RPAREN + (STATEMENT_SEP | comment)[:]
+                 + ((kw_do + (STATEMENT_SEP | comment)[:] + inner_statement[:]
+                     + STATEMENT_SEP[:] + kw_done)
                     | (LBRACE + (STATEMENT_SEP | comment)[:] + inner_statement[:]
                        + STATEMENT_SEP[:] + RBRACE)))
     
@@ -443,12 +470,12 @@ class ZshStyleGrammar(Grammar):
     
     # Operators may be followed by a line break: `a |\n  b` and `a &&\n  b`.
     # `time` is a reserved word that may prefix a pipeline: `time ./job.ksh args`.
-    pipeline = literal("time")[0:1] + as_node(pipeline_item) + ((pipe | pipe_amp) + (NEWLINE | comment)[:] + as_node(pipeline_item))[:]
+    pipeline = kw_time[0:1] + as_node(pipeline_item) + ((pipe | pipe_amp) + (NEWLINE | comment)[:] + as_node(pipeline_item))[:]
     
     # `! cmd` — command negation prefix
     # `! x=$(cmd) || ...` negates an assignment as well as a command.
     # `if ! [[ ... ]]` negates a test construct as well.
-    not_command = ignore(literal("!")) + (pipeline | assignment | dbl_test_construct | test_construct)
+    not_command = BANG + (pipeline | assignment | dbl_test_construct | test_construct)
 
     inner_statement = (
         try_always | function_def | anon_function
@@ -484,60 +511,60 @@ class ZshStyleGrammar(Grammar):
     #   if [[ -f x ]] && (( i++ )); then ... fi
     #   while cmd1 && ! cmd2; do ... done
     # The condition may be a sequence that ends before `then`: `if diff a b; [[ $? != 0 ]]`.
-    if_condition = and_or + ((STATEMENT_SEP | comment)[1:] + ~literal("then") + and_or)[:]
+    if_condition = and_or + ((STATEMENT_SEP | comment)[1:] + ~kw_then + and_or)[:]
     elif_branch = (
-        literal("elif") + if_condition + (STATEMENT_SEP | comment)[:]
-        + literal("then") + (STATEMENT_SEP | comment)[:] + inner_statement[:]
+        kw_elif + if_condition + (STATEMENT_SEP | comment)[:]
+        + kw_then + (STATEMENT_SEP | comment)[:] + inner_statement[:]
         + STATEMENT_SEP[:]
     )
     else_branch = (
-        literal("else") + STATEMENT_SEP[:] + inner_statement[:]
+        kw_else + STATEMENT_SEP[:] + inner_statement[:]
         + STATEMENT_SEP[:]
     )
 
     if_stmt = (
-        literal("if") + if_condition + (STATEMENT_SEP | comment)[:]
-        + literal("then") + (STATEMENT_SEP | comment)[:] + inner_statement[:]
+        kw_if + if_condition + (STATEMENT_SEP | comment)[:]
+        + kw_then + (STATEMENT_SEP | comment)[:] + inner_statement[:]
         + STATEMENT_SEP[:]
         + elif_branch[:] + else_branch[0:1]
-        + literal("fi")
+        + kw_fi
     )
 
     # FIX 4: Support multiple loop variables: `for a b in ...` and `for a b; do ...`
     # Loop variables are plain names, so reserved words are allowed: `for repeat in ...`.
     # The first name may be any word; later names must not be the keywords `in` or `do`.
     loop_names = assign_name + filt(lambda tok: tok.string not in ("in", "do"), assign_name)[:]
-    for_alt = (literal("for") + loop_names + LPAREN + argument[:] + RPAREN + (STATEMENT_SEP | comment)[:]
-               + literal("do") + (STATEMENT_SEP | comment)[:] + inner_statement[:]
-               + STATEMENT_SEP[:] + literal("done"))
-    for_stmt = (literal("for") + loop_names + literal("in") + argument[:] + (STATEMENT_SEP | comment)[:]
-                + literal("do") + (STATEMENT_SEP | comment)[:] + inner_statement[:]
-                + STATEMENT_SEP[:] + literal("done"))
+    for_alt = (kw_for + loop_names + LPAREN + argument[:] + RPAREN + (STATEMENT_SEP | comment)[:]
+               + kw_do + (STATEMENT_SEP | comment)[:] + inner_statement[:]
+               + STATEMENT_SEP[:] + kw_done)
+    for_stmt = (kw_for + loop_names + kw_in + argument[:] + (STATEMENT_SEP | comment)[:]
+                + kw_do + (STATEMENT_SEP | comment)[:] + inner_statement[:]
+                + STATEMENT_SEP[:] + kw_done)
     # `for x y; do ...` iterates over the positional parameters (no `in` list).
-    for_positional = (literal("for") + loop_names + (STATEMENT_SEP | comment)[:]
-                + literal("do") + (STATEMENT_SEP | comment)[:] + inner_statement[:]
-                + STATEMENT_SEP[:] + literal("done"))
+    for_positional = (kw_for + loop_names + (STATEMENT_SEP | comment)[:]
+                + kw_do + (STATEMENT_SEP | comment)[:] + inner_statement[:]
+                + STATEMENT_SEP[:] + kw_done)
     # zsh accepts both `foreach x (...) ... end` and the `do ... done` form.
-    foreach_stmt = (literal("foreach") + identifier[1:] + LPAREN + argument[:] + RPAREN + (STATEMENT_SEP | comment)[:]
-                    + ((inner_statement[:] + STATEMENT_SEP[:] + literal("end"))
-                       | (literal("do") + (STATEMENT_SEP | comment)[:] + inner_statement[:]
-                          + STATEMENT_SEP[:] + literal("done"))))
-    select_stmt = (literal("select") + identifier + literal("in") + argument[:] + (STATEMENT_SEP | comment)[:]
-                   + literal("do") + (STATEMENT_SEP | comment)[:] + inner_statement[:]
-                   + STATEMENT_SEP[:] + literal("done"))
+    foreach_stmt = (kw_foreach + identifier[1:] + LPAREN + argument[:] + RPAREN + (STATEMENT_SEP | comment)[:]
+                    + ((inner_statement[:] + STATEMENT_SEP[:] + kw_end)
+                       | (kw_do + (STATEMENT_SEP | comment)[:] + inner_statement[:]
+                          + STATEMENT_SEP[:] + kw_done)))
+    select_stmt = (kw_select + identifier + kw_in + argument[:] + (STATEMENT_SEP | comment)[:]
+                   + kw_do + (STATEMENT_SEP | comment)[:] + inner_statement[:]
+                   + STATEMENT_SEP[:] + kw_done)
 
-    while_stmt = (literal("while") + and_or[0:1] + (STATEMENT_SEP | comment)[:]
-                  + literal("do") + (STATEMENT_SEP | comment)[:] + inner_statement[:]
-                  + STATEMENT_SEP[:] + literal("done"))
-    until_stmt = (literal("until") + and_or[0:1] + (STATEMENT_SEP | comment)[:]
-                  + literal("do") + (STATEMENT_SEP | comment)[:] + inner_statement[:]
-                  + STATEMENT_SEP[:] + literal("done"))
+    while_stmt = (kw_while + and_or[0:1] + (STATEMENT_SEP | comment)[:]
+                  + kw_do + (STATEMENT_SEP | comment)[:] + inner_statement[:]
+                  + STATEMENT_SEP[:] + kw_done)
+    until_stmt = (kw_until + and_or[0:1] + (STATEMENT_SEP | comment)[:]
+                  + kw_do + (STATEMENT_SEP | comment)[:] + inner_statement[:]
+                  + STATEMENT_SEP[:] + kw_done)
     repeat_stmt = (
-        (literal("repeat") + argument + (STATEMENT_SEP | comment)[:]
-         + literal("do") + (STATEMENT_SEP | comment)[:] + inner_statement[:]
-         + STATEMENT_SEP[:] + literal("done"))
+        (kw_repeat + argument + (STATEMENT_SEP | comment)[:]
+         + kw_do + (STATEMENT_SEP | comment)[:] + inner_statement[:]
+         + STATEMENT_SEP[:] + kw_done)
         # one-line form: `repeat 3 echo hi`
-        | (literal("repeat") + argument + command)
+        | (kw_repeat + argument + command)
     )
 
     # Case pattern: a `( ... )` group inside the pattern is one unit, so `-?(no_)tacot`
@@ -559,15 +586,15 @@ class ZshStyleGrammar(Grammar):
     # (`*) cmd` directly before `esac`). The optional arm must not start at
     # `esac`: a case pattern would otherwise scan through `esac` up to the next
     # `)` in the file. The guard therefore sits after the leading separators.
-    # NOTE: The guard (~literal("esac")) must be on BOTH case_arm and case_final
+    # NOTE: The guard (~kw_esac) must be on BOTH case_arm and case_final
     # to prevent case_arm from greedily consuming `esac` and subsequent code.
     # A comment may follow the terminator: `;; # Invalid option`.
-    case_arm = (STATEMENT_SEP | comment)[:] + (~literal("esac")) + case_body + (dsemi | semi_amp | semi_bar) + comment[0:1]
-    case_final = (STATEMENT_SEP | comment)[:] + (~literal("esac")) + case_body
+    case_arm = (STATEMENT_SEP | comment)[:] + (~kw_esac) + case_body + (dsemi | semi_amp | semi_bar) + comment[0:1]
+    case_final = (STATEMENT_SEP | comment)[:] + (~kw_esac) + case_body
     case_stmt = (
-        literal("case") + argument + ZshTerminals.glued_part[0:] + STATEMENT_SEP[:] + literal("in") + STATEMENT_SEP[:]
+        kw_case + argument + ZshTerminals.glued_part[0:] + STATEMENT_SEP[:] + kw_in + STATEMENT_SEP[:]
         + case_arm[:] + case_final[0:1]
-        + (STATEMENT_SEP | comment)[:] + literal("esac")
+        + (STATEMENT_SEP | comment)[:] + kw_esac
     )
 
     # Function names may be dynamic: `_widget_${name}() { ... }`.
@@ -575,7 +602,7 @@ class ZshStyleGrammar(Grammar):
     func_name = (identifier | var_exp | ZshTerminals.assign_eq_empty)[1:]
     function_def = (
         (func_name + lparen_vis + rparen_vis)
-        | (literal("function") + func_name + (lparen_vis + rparen_vis)[0:1])
+        | (kw_function + func_name + (lparen_vis + rparen_vis)[0:1])
     # A comment may sit on the header line: `function f # $1 user`.
     ) + (STATEMENT_SEP | comment)[:] + LBRACE + STATEMENT_SEP[:] + inner_statement[:] + STATEMENT_SEP[:] + RBRACE
 
@@ -593,13 +620,14 @@ class ZshStyleGrammar(Grammar):
     # two groups must share one line with `always`.
     try_always = (
         (lbrace_vis + STATEMENT_SEP[:] + inner_statement[:] + STATEMENT_SEP[:] + rbrace_vis)
-        + literal("always")
+        + kw_always
         + (lbrace_vis + STATEMENT_SEP[:] + inner_statement[:] + STATEMENT_SEP[:] + rbrace_vis)
     )
 
-    # ---------- Rendering (to_source) ----------
-    # A node without its own to_source renders through __default__: its children
-    # joined as the source joined them. The handlers below follow their grammar rule.
+    # ---------- Node methods ----------
+    # One class per rule: to_source() renders the node from its rule, check() reports
+    # its own findings, variables() the names it assigns or uses. A method a rule does
+    # not define comes from __default__.
 
     class anon_function:
         """lparen_vis rparen_vis '{' inner_statement* '}'"""
@@ -613,7 +641,7 @@ class ZshStyleGrammar(Grammar):
         """(func_name '(' ')' | 'function' func_name ('(' ')')?) comment* '{' inner_statement* '}'"""
         def to_source(self):
             fixed = _fixing(self, "ZSH033")
-            output = "function " if self.Literal_function or fixed else ""
+            output = "function " if self.kw_function or fixed else ""
             output += self.func_name.to_source()
             if self.lparen_vis and not fixed:
                 output += " ()"
@@ -624,11 +652,24 @@ class ZshStyleGrammar(Grammar):
                 output += statement.to_source() + "\n"
             return output + "}"
 
+        def check(self):
+            if self.kw_function:
+                return []
+            # ksh rule 33. Fixed by writing `function NAME {`; in zsh both forms behave the same.
+            return [_issue("ZSH033", "Declare a function with the function keyword: function NAME.",
+                           token_of(self.func_name), node=self)]
+
+        def exit_functions(self):
+            names = ZshStyleGrammar.__default__.exit_functions(self)
+            if self.calls_exit():
+                names.add(self.func_name.to_source())
+            return names
+
     class try_always:
         """'{' inner_statement* '}' 'always' '{' inner_statement* '}'"""
         def to_source(self):
             body = self.parts()
-            always = body.index(self.Literal_always)
+            always = body.index(self.kw_always)
             output = "{\n"
             for statement in body[1:always - 1]:
                 output += statement.to_source() + "\n"
@@ -641,6 +682,12 @@ class ZshStyleGrammar(Grammar):
         """'{' word* '}': the tokens are contiguous, so they are joined without spaces."""
         def to_source(self):
             return "".join(part.to_source() for part in self.parts())
+
+        def check(self):
+            # ksh rule 6: {NAME} with no comma or range is a variable that lost its $.
+            if re.match(r"^\{[A-Za-z_][A-Za-z0-9_]*\}$", self.to_source()):
+                return [_issue("ZSH015", "Put $ before the variable name in braces.", token_of(self))]
+            return []
 
     class grouping:
         """'{' inner_statement* '}'"""
@@ -658,6 +705,10 @@ class ZshStyleGrammar(Grammar):
                 output += statement.to_source() + "\n"
             return output + ")"
 
+        def calls_exit(self):
+            # exit in ( ... ) ends only the subshell.
+            return False
+
     class case_stmt:
         """'case' argument glued_part* 'in' case_arm* case_final? comment* 'esac'"""
         def to_source(self):
@@ -672,6 +723,14 @@ class ZshStyleGrammar(Grammar):
             for comment in self.comment_list:
                 output += comment.to_source() + "\n"
             return output + "esac"
+
+        def check(self):
+            # A `*)` arm is the fallback; without one, unexpected input is silently ignored.
+            arms = self.case_arm_list + self.case_final_list
+            if any(re.search(r"(^|[^\w.])\*\)$", arm.case_body.to_source().split("\n")[0]) for arm in arms):
+                return []
+            return [_issue("ZSH007", "case without a `*)` fallback — unexpected input silently ignored.",
+                           token_of(self.argument))]
 
     class case_body:
         """case_pattern inner_statement*. The case_pattern sequence is flattened into this node."""
@@ -733,6 +792,14 @@ class ZshStyleGrammar(Grammar):
         def to_source(self):
             return " ".join(part.to_source() for part in self.parts())
 
+        def variables(self):
+            # Arithmetic reads and assigns names without a $.
+            found = ZshStyleGrammar.__default__.variables(self)
+            for tok in map(token_of, self.shift_list):
+                if _is_bare_name(tok):
+                    found += [("use", tok.string, tok), ("assign", tok.string, tok)]
+            return found
+
     class arith_nested:
         """'(' token* ')' inside an arithmetic expression."""
         def to_source(self):
@@ -787,12 +854,16 @@ class ZshStyleGrammar(Grammar):
         def to_source(self):
             output = "foreach " + " ".join(name.to_source() for name in self.identifier_list)
             output += " (" + _join_source(self.argument_list) + ")"
-            output += "; do\n" if self.Literal_do else "\n"
+            output += "; do\n" if self.kw_do else "\n"
             for comment in self.comment_list:
                 output += comment.to_source() + "\n"
             for statement in self.inner_statement_list:
                 output += statement.to_source() + "\n"
-            return output + ("done" if self.Literal_do else "end")
+            return output + ("done" if self.kw_do else "end")
+
+        def variables(self):
+            found = ZshStyleGrammar.__default__.variables(self)
+            return found + [("assign", n.to_source(), token_of(n)) for n in self.identifier_list]
 
     class select_stmt:
         """'select' identifier 'in' argument* 'do' inner_statement* 'done'"""
@@ -806,6 +877,10 @@ class ZshStyleGrammar(Grammar):
             for statement in self.inner_statement_list:
                 output += statement.to_source() + "\n"
             return output + "done"
+
+        def variables(self):
+            found = ZshStyleGrammar.__default__.variables(self)
+            return found + [("assign", n.to_source(), token_of(n)) for n in self.identifier_list]
 
     class repeat_stmt:
         """'repeat' argument ('do' inner_statement* 'done' | command)"""
@@ -833,6 +908,9 @@ class ZshStyleGrammar(Grammar):
                 output += statement.to_source() + "\n"
             return output + "done"
 
+        def tests_status(self):
+            return bool(self.and_or) and self.and_or.tests_status()
+
     class until_stmt:
         """'until' and_or? 'do' inner_statement* 'done'"""
         def to_source(self):
@@ -845,6 +923,9 @@ class ZshStyleGrammar(Grammar):
             for statement in self.inner_statement_list:
                 output += statement.to_source() + "\n"
             return output + "done"
+
+        def tests_status(self):
+            return bool(self.and_or) and self.and_or.tests_status()
 
     class if_stmt:
         """'if' if_condition 'then' inner_statement* elif_branch* else_branch? 'fi'"""
@@ -859,6 +940,9 @@ class ZshStyleGrammar(Grammar):
             if self.else_branch:
                 output += self.else_branch.to_source()
             return output + "fi"
+
+        def tests_status(self):
+            return self.if_condition.tests_status()
 
     class elif_branch:
         """'elif' if_condition 'then' inner_statement*"""
@@ -977,10 +1061,6 @@ class ZshStyleGrammar(Grammar):
         def last_status(self):
             return children(self)[0].last_status()
 
-    class if_stmt:
-        def tests_status(self):
-            return self.if_condition.tests_status()
-
     class if_condition:
         def check(self):
             # The condition holds its and_or chain directly.
@@ -988,14 +1068,6 @@ class ZshStyleGrammar(Grammar):
 
         def tests_status(self):
             return self.parts()[0].tests_status()
-
-    class while_stmt:
-        def tests_status(self):
-            return bool(self.and_or) and self.and_or.tests_status()
-
-    class until_stmt:
-        def tests_status(self):
-            return bool(self.and_or) and self.and_or.tests_status()
 
     class argument:
         """argument ::= assign_word | _basic_arg"""
@@ -1058,7 +1130,7 @@ class ZshStyleGrammar(Grammar):
         def variables(self):
             found = ZshStyleGrammar.__default__.variables(self)
             # `export NAME` and `typeset -x NAME` also export the name.
-            if self.Literal_export or any("x" in f.to_source()[1:] for f in self.flag_list):
+            if self.kw_export or any("x" in f.to_source()[1:] for f in self.flag_list):
                 found += [("export", name, tok) for event, name, tok in found if event == "assign"]
             return found
 
@@ -1069,7 +1141,7 @@ class ZshStyleGrammar(Grammar):
         of the sequence `declaration2 redir*`, so it is checked here.
         """
         def declares(self):
-            return bool(self.Literal_typeset or self.Literal_declare or self.Literal_export or self.Literal_readonly)
+            return bool(self.kw_typeset or self.kw_declare or self.kw_export or self.kw_readonly)
 
         def check(self):
             return declaration2.check(self) if self.declares() else []
@@ -1165,11 +1237,6 @@ class ZshStyleGrammar(Grammar):
                 return "[[ " + _join_source(self.argument_list) + " ]]"
             return _join_source(children(self))
 
-    class subshell:
-        def calls_exit(self):
-            # exit in ( ... ) ends only the subshell.
-            return False
-
     class pipeline:
         """pipeline ::= 'time'? pipeline_item (('|' | '|&') pipeline_item)*"""
         def check(self):
@@ -1190,11 +1257,11 @@ class ZshStyleGrammar(Grammar):
             return issues
 
         def tests_status(self):
-            stages = [p for p in self.parts() if type(p).__name__ != "Literal_time"]
+            stages = [p for p in self.parts() if p is not self.kw_time]
             return stages[0].tests_status()
 
         def last_status(self):
-            stages = [p for p in self.parts() if type(p).__name__ not in ("pipe", "pipe_amp", "Literal_time")]
+            stages = [p for p in self.parts() if p not in [self.kw_time] + self.pipe_list + self.pipe_amp_list]
             if len(stages) > 1 and type(stages[-1]).__name__ == "command" and stages[-1].name() == "tee":
                 return ("tee",)
             return stages[-1].last_status()
@@ -1218,46 +1285,6 @@ class ZshStyleGrammar(Grammar):
         def last_status(self):
             items = [p for p in self.parts() if type(p).__name__ not in ("and_and", "or_or")]
             return items[-1].last_status()
-
-    class function_def:
-        def check(self):
-            if self.Literal_function:
-                return []
-            # ksh rule 33. Fixed by writing `function NAME {`; in zsh both forms behave the same.
-            return [_issue("ZSH033", "Declare a function with the function keyword: function NAME.",
-                           token_of(self.func_name), node=self)]
-
-        def exit_functions(self):
-            names = ZshStyleGrammar.__default__.exit_functions(self)
-            if self.calls_exit():
-                names.add(self.func_name.to_source())
-            return names
-
-    class foreach_stmt:
-        def variables(self):
-            found = ZshStyleGrammar.__default__.variables(self)
-            return found + [("assign", n.to_source(), token_of(n)) for n in self.identifier_list]
-
-    class select_stmt:
-        def variables(self):
-            found = ZshStyleGrammar.__default__.variables(self)
-            return found + [("assign", n.to_source(), token_of(n)) for n in self.identifier_list]
-
-    class arith_body:
-        def variables(self):
-            # Arithmetic reads and assigns names without a $.
-            found = ZshStyleGrammar.__default__.variables(self)
-            for tok in map(token_of, self.shift_list):
-                if _is_bare_name(tok):
-                    found += [("use", tok.string, tok), ("assign", tok.string, tok)]
-            return found
-
-    class brace_word:
-        def check(self):
-            # ksh rule 6: {NAME} with no comma or range is a variable that lost its $.
-            if re.match(r"^\{[A-Za-z_][A-Za-z0-9_]*\}$", self.to_source()):
-                return [_issue("ZSH015", "Put $ before the variable name in braces.", token_of(self))]
-            return []
 
     class command_head:
         """command_head ::= identifier | colon | backtick | cmd_subst | arith_exp | var_exp | string | number"""
@@ -1310,16 +1337,6 @@ class ZshStyleGrammar(Grammar):
         # [[ ... ]] performs no word splitting, so ZSH002 does not apply.
         def check(self):
             return _test_issues([token_of(p) for p in self.shift_list], single=False)
-
-    class case_stmt:
-        """case_stmt ::= 'case' argument 'in' STATEMENT_SEP* case_arm* case_final? STATEMENT_SEP* 'esac'"""
-        def check(self):
-            # A `*)` arm is the fallback; without one, unexpected input is silently ignored.
-            arms = self.case_arm_list + self.case_final_list
-            if any(re.search(r"(^|[^\w.])\*\)$", arm.case_body.to_source().split("\n")[0]) for arm in arms):
-                return []
-            return [_issue("ZSH007", "case without a `*)` fallback — unexpected input silently ignored.",
-                           token_of(self.argument))]
 
     class script:
         """script ::= statement*"""
