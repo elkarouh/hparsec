@@ -220,8 +220,10 @@ class ZshStyleGrammar(Grammar):
     # wherever the grammar accepts an argument.
     # A word such as `alias rg.="..."` or `foo-x=1`: the name is not a plain identifier,
     # so it can only be an argument, never an assignment.
+    # A quoted name may also be the left side: `alias -g '${1+"$@"}'='"$@"'`.
     loose_word = (
-        filt(lambda tok: not tok.string.isidentifier(), expect_type_node(TOKEN_TYPES["IDENT"]))
+        (filt(lambda tok: not tok.string.isidentifier(), expect_type_node(TOKEN_TYPES["IDENT"]))
+         | ZshTerminals.string)
         + ZshTerminals.assign_eq + ZshTerminals._basic_arg
     )
     argument = as_node(assign_word | loose_word | ZshTerminals._basic_arg)
@@ -746,6 +748,7 @@ def _run_self_tests():
             ("positional for loop", "for i do echo $i; done\n"),
             ("comment before do in while", "while [[ $c -lt 3 ]]  # limit\ndo\n  echo\ndone\n"),
             ("double bracket as argument", "eval [[ -n $x ]]\n"),
+            ("quoted alias name", "alias -g 'x'='y'\n"),
             ("assignment value then argument", "x=a b\n"),
             ("for-alt", "for f (*.txt) do\n  echo $f\ndone\n"),
             ("select", "select opt in a b c; do\n  echo $opt\ndone\n"),
