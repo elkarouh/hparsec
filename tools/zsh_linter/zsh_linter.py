@@ -24,15 +24,18 @@ from hparsec import (
     walk,
 )
 from zsh_tokenizer import tokenize_zsh, TOKEN_TYPES, _RESERVED
-from style_rules import style_issues
-from flow_rules import flow_issues
 
-# Auto-fixes applied by `--fix` before formatting, in this order. Each entry is
-# (rule code, fix function name). A fix must not change what the script does, and
-# lint findings that have no entry here are only reported.
+# Rules that `--format --fix` fixes while rendering the tree. Each entry is (rule code,
+# what the fix does). A fix must not change what the script does, and findings of
+# rules without an entry here are only reported.
 AUTO_FIXES = (
-    ("ZSH002", "quote_assignment_expansion"),
-    ("ZSH009", "braces_for_variables"),
+    ("ZSH002", "quote an expansion used as an assignment value"),
+    ("ZSH004", "[ ... ] becomes [[ ... ]] where [[ ]] reads the words the same way"),
+    ("ZSH009", "$name becomes ${name}"),
+    ("ZSH010", "test ... becomes [[ ... ]] where [[ ]] reads the words the same way"),
+    ("ZSH018", "typeset -i N= becomes typeset -i N=0"),
+    ("ZSH022", "${1} becomes $1"),
+    ("ZSH033", "NAME () { becomes function NAME {"),
 )
 
 # ============================================================
@@ -234,6 +237,9 @@ def _render(node):
     if isinstance(node, str):
         return node
     if _is_leaf(node):
+        # With --fix, a token may have a new text (see format_zsh_code).
+        if id(node) in _FIX_TOKENS:
+            return _FIX_TOKENS[id(node)]
         # A comment runs to the end of its line, so it must end the line.
         if getattr(node, "type", None) == TOKEN_TYPES["COMMENT"]:
             return node.string + "\n"
@@ -250,11 +256,18 @@ _PART_WRAPPERS = ("Sequence_Parser", "Several_Times", "As_Node")
 
 
 def _parts(node):
-    """Yield the parts of a node: its children, looking through anonymous combinator nodes."""
+    """Yield the parts of a node: its children, looking through anonymous combinator nodes.
+
+    as_node() marks a node boundary on purpose, so the node it wraps is a part even
+    when that node is an anonymous sequence (`declaration2 redir*` in a pipeline).
+    """
     for c in children(node):
         if c is None:
             continue
-        if not isinstance(c, str) and not _is_leaf(c) and type(c).__name__ in _PART_WRAPPERS:
+        kind = None if isinstance(c, str) or _is_leaf(c) else type(c).__name__
+        if kind == "As_Node":
+            yield from children(c)
+        elif kind in _PART_WRAPPERS:
             yield from _parts(c)
         else:
             yield c
@@ -610,9 +623,10 @@ class ZshStyleGrammar(Grammar):
     class function_def:
         """(func_name '(' ')' | 'function' func_name ('(' ')')?) '{' inner_statement* '}'"""
         def to_source(self):
-            output = "function " if self.part("Literal_function") else ""
+            fixed = _fixing(self, "ZSH033")
+            output = "function " if self.part("Literal_function") or fixed else ""
             output += _render(self.part("func_name"))
-            if self.part("lparen_vis"):
+            if self.part("lparen_vis") and not fixed:
                 output += " ()"
             return output + " {\n" + _lines(self.parts("comment", "inner_statement")) + "}"
 
@@ -785,7 +799,11 @@ class ZshStyleGrammar(Grammar):
         def to_source(self):
             return "else\n" + _lines(self.parts("comment", "inner_statement"))
     class __default__:
-        """Fallback for any rule without its own lint or to_source."""
+        """Fallback for every rule: how a node renders, lints and reports its names.
+
+        The recursion over the tree lives here. A rule adds only what is its own:
+        check() for its findings, variables() for the names it assigns or uses.
+        """
         def to_source(self):
             return _join_source(children(self))
 
@@ -808,130 +826,775 @@ class ZshStyleGrammar(Grammar):
             return next(iter(self.parts(name)), None)
 
         def lint(self):
-            # this node doesnt have a lint method, but its children may have.
-            issues = []
+            issues = self.check()
             for c in children(self):
-                if hasattr(c,"lint"): 
+                if hasattr(c, "lint"):
                     issues.extend(c.lint())
             return issues
-            
+
+        def check(self):
+            """This node's own findings.
+
+            A node that holds statements checks what $? holds when a statement tests it
+            (ksh rules 23 to 25).
+            """
+            if type(self).__name__ in _PART_WRAPPERS:
+                return []
+            issues = []
+            statements = self.parts("statement", "inner_statement")
+            for prev, cur in zip(statements, statements[1:]):
+                if not cur.tests_status():
+                    continue
+                status = prev.last_status()
+                where = token_of(cur)
+                if status == ("tee",):
+                    issues.append(_issue("ZSH055", "This $? is the status of tee, not of the command piped into it.",
+                                         where))
+                elif status == ("declaration",):
+                    issues.append(_issue("ZSH056", "This $? is the status of the declaration, not of the command "
+                                                   "substitution; assign first, then declare.", where))
+                elif status and status[0] == "command" and status[1] in _EXIT_FUNCTIONS:
+                    issues.append(_issue("ZSH057", f"'{status[1]}' calls exit, which ends the script; use return "
+                                                   "in functions, or do not test $? after it.", where))
+            return issues
+
+        def tests_status(self):
+            """True when what this node runs first reads $?."""
+            return bool(re.search(r"\$\{?\?", self.to_source()))
+
+        def last_status(self):
+            """What sets $? after this node runs: ("tee",), ("declaration",), ("command", name) or None."""
+            return None
+
+        def variables(self):
+            """(event, name, token) for each name this node assigns, uses or exports."""
+            found = []
+            for c in children(self):
+                if isinstance(c, str):
+                    continue
+                if _is_leaf(c):
+                    found.extend(("use", name, c) for name in _uses_in(c))
+                else:
+                    found.extend(c.variables())
+            return found
+
+        def calls_exit(self):
+            """True when running this node runs exit in the current shell."""
+            return any(c.calls_exit() for c in children(self) if not isinstance(c, str) and not _is_leaf(c))
+
+        def exit_functions(self):
+            """Names of the functions defined under this node that call exit."""
+            names = set()
+            for c in children(self):
+                if not isinstance(c, str) and not _is_leaf(c):
+                    names |= c.exit_functions()
+            return names
+
+    class statement:
+        def tests_status(self):
+            return children(self)[0].tests_status()
+
+        def last_status(self):
+            return children(self)[0].last_status()
+
+    class inner_statement:
+        def tests_status(self):
+            return children(self)[0].tests_status()
+
+        def last_status(self):
+            return children(self)[0].last_status()
+
+    class if_stmt:
+        def tests_status(self):
+            return self.part("if_condition").tests_status()
+
+    class if_condition:
+        def check(self):
+            # The condition holds its and_or chain directly.
+            return and_or.check(self)
+
+        def tests_status(self):
+            return self.parts()[0].tests_status()
+
+    class while_stmt:
+        def tests_status(self):
+            return bool(self.part("and_or")) and self.part("and_or").tests_status()
+
+    class until_stmt:
+        def tests_status(self):
+            return bool(self.part("and_or")) and self.part("and_or").tests_status()
+
     class argument:
         """argument ::= assign_word | _basic_arg"""
-        def lint(self):
+        def check(self):
             return _expansion_issues(self)
 
+        def variables(self):
+            # NAME=value as an argument (alias, env, make) assigns no shell variable.
+            return [v for v in ZshStyleGrammar.__default__.variables(self) if v[0] == "use"]
 
     class prefix_assignment:
         """prefix_assignment ::= assign_word"""
-        def lint(self):
+        def check(self):
             # `VAR=$x cmd` assigns without word splitting: only backticks apply.
             return _expansion_issues(self, backticks_only=True)
 
+        def variables(self):
+            # VAR=x cmd sets the variable in the command's environment.
+            found = ZshStyleGrammar.__default__.variables(self)
+            return found + [("export", name, tok) for event, name, tok in found if event == "assign"]
+
     class assignment:
         """assignment ::= assign_target subscript? assign_op (assign_rhs | nothing) assign_word*"""
-        def lint(self):
+        def check(self):
             return _expansion_issues(self, backticks_only=True)
+
+    class assign_name:
+        def variables(self):
+            return [("assign", self.to_source(), token_of(self))]
 
     class declaration:
         """declaration ::= 'local' flag* ((assign_name | var_exp | string) (assign_op (assign_rhs | nothing))?)+"""
-        def lint(self):
-            return _expansion_issues(self, backticks_only=True)
+        def check(self):
+            return declaration2.check(self)
+
+        def variables(self):
+            return declaration2.variables(self)
+
+        def last_status(self):
+            return declaration2.last_status(self)
 
     class declaration2:
         """declaration2 ::= ('typeset' | 'declare' | 'export' | 'readonly') flag* ((assign_name | var_exp | string) (assign_op (assign_rhs | nothing))?)+"""
-        def lint(self):
-            return _expansion_issues(self, backticks_only=True)
+        def check(self):
+            issues = _expansion_issues(self, backticks_only=True)
+            parts = self.parts()
+            if any(type(p).__name__ == "flag" and "i" in p.to_source()[1:] for p in parts):
+                # ksh rule 11: `typeset -i N=` gets an explicit value. The fix writes N=0,
+                # which is what N= means.
+                for name, eq in zip(parts, parts[1:]):
+                    if (type(name).__name__ == "assign_name" and type(eq).__name__ == "assign"
+                            and token_of(eq).type == TOKEN_TYPES["ASSIGN_EMPTY"]):
+                        issues.append(_issue("ZSH018", "Give typeset -i an explicit value, e.g. typeset -i N=0.",
+                                             token_of(eq), replace="=0"))
+            return issues
 
+        def last_status(self):
+            return ("declaration",) if re.search(r"\$\(|`", self.to_source()) else None
+
+        def variables(self):
+            found = ZshStyleGrammar.__default__.variables(self)
+            # `export NAME` and `typeset -x NAME` also export the name.
+            if self.part("Literal_export") or any("x" in f.to_source()[1:] for f in self.parts("flag")):
+                found += [("export", name, tok) for event, name, tok in found if event == "assign"]
+            return found
+
+    class pipeline_item:
+        """pipeline_item ::= command | declaration2 redir* | compound redir*
+
+        These methods go to the two sequence forms. In a pipeline a declaration is part
+        of the sequence `declaration2 redir*`, so it is checked here.
+        """
+        def declares(self):
+            return any(self.part(w) for w in ("Literal_typeset", "Literal_declare", "Literal_export", "Literal_readonly"))
+
+        def check(self):
+            return declaration2.check(self) if self.declares() else []
+
+        def variables(self):
+            return declaration2.variables(self)
+
+        def last_status(self):
+            return declaration2.last_status(self) if self.declares() else None
+
+    class command:
+        """command ::= prefix_assignment* command_head (redir | argument)*"""
+        def name(self):
+            """The command name when it is a plain word, else None."""
+            head = self.part("command_head")
+            word = head.part("identifier") if head is not None else None
+            return word.to_source() if word is not None else None
+
+        def words(self):
+            return [a.to_source() for a in self.parts("argument")]
+
+        def check(self):
+            """Rules on one simple command: its name, its arguments and its redirections."""
+            name = self.name()
+            if name is None:
+                return []
+            issues = []
+            head = token_of(self.part("command_head"))
+            args = self.parts("argument")
+            words = self.words()
+            redirs = self.parts("redir")
+
+            if name == "test":
+                # ksh rule 2. Fixed only where [[ ]] reads the words the same way.
+                safe = not redirs and _same_in_double_brackets(words)
+                issues.append(_issue("ZSH010", "Use [[ ... ]] instead of test.", head, node=self if safe else None))
+
+            if name == "Log":
+                if not any(re.match(r"-[iwsf]$", w) for w in words[:3]) and any(_LOG_LEVEL.search(w) for w in words):
+                    issues.append(_issue("ZSH037", "Pass a level to Log with -i, -w, -s or -f.", head))
+                if args and _is_quoted(args[-1]) and re.search(r"\s[\"']$", words[-1]):
+                    issues.append(_issue("ZSH040", "Remove the trailing blank(s) from the Log message.",
+                                         token_of(args[-1])))
+                for r in redirs:
+                    if r.operator() == ">&" and r.descriptor() in (None, "1") and r.target() == "2":
+                        issues.append(_issue("ZSH036", "Log already writes to stderr; remove >&2.", token_of(r)))
+
+            if name == "cd" and words[:1] == ["-"]:
+                issues.append(_issue("ZSH042", "Use cd \"${OLDPWD}\" instead of cd -; cd - prints the directory.", head))
+
+            operands = [a for a, w in zip(args, words) if not w.startswith("-")]
+            if name == "tr" and operands and not _is_quoted(operands[0]):
+                issues.append(_issue("ZSH043", "Quote the arguments of tr so the shell does not expand them.",
+                                     token_of(operands[0])))
+
+            if name in ("cfmu_ftps_list", "cfmu_ftps_get") and not any(
+                    w in ("-sequence", "-period", "-free_text", "-source_key") for w in words):
+                position = 1 if name == "cfmu_ftps_list" else 3
+                if len(operands) > position and not _is_quoted(operands[position]):
+                    issues.append(_issue("ZSH045", f"Quote the file mask of {name}, or the shell resolves it locally.",
+                                         token_of(operands[position])))
+
+            if name == "alias_get" and "Value" in words:
+                issues.append(_issue("ZSH041", "Use alias_get -q.", head))
+
+            # ksh rule 38: `2>&1 >file` sends stderr to the old stdout. Moving it changes what
+            # the command does, so this is reported, not fixed.
+            dup = None
+            for r in redirs:
+                if r.descriptor() == "2" and r.operator() == ">&" and r.target() == "1":
+                    dup = r
+                elif dup is not None and r.operator() in (">", ">>", ">|") and r.descriptor() in (None, "1"):
+                    issues.append(_issue("ZSH035", "Redirect 2>&1 after > file, not before it.", token_of(dup)))
+                    break
+            return issues
+
+        def variables(self):
+            found = ZshStyleGrammar.__default__.variables(self)
+            words = self.words()
+            if self.name() == "export":
+                found += [("export", w.split("=")[0], token_of(self)) for w in words]
+            found += [("assign", name, token_of(self)) for name in _assigned_by(self.name(), words)]
+            return found
+
+        def calls_exit(self):
+            return self.name() == "exit"
+
+        def last_status(self):
+            return ("command", self.name())
+
+        def to_source(self):
+            if _fixing(self, "ZSH010"):
+                return "[[ " + _join_source(self.parts("argument")) + " ]]"
+            return _join_source(children(self))
+
+    class subshell:
+        def calls_exit(self):
+            # exit in ( ... ) ends only the subshell.
+            return False
+
+    class pipeline:
+        """pipeline ::= 'time'? pipeline_item (('|' | '|&') pipeline_item)*"""
+        def check(self):
+            stages = self.parts("command")
+            issues = []
+            for left, right in zip(stages, stages[1:]):
+                program = " ".join(right.words())
+                if left.name() == "wc" and right.name() == "awk" and not any(re.match(r"-[lwcm]+$", w) for w in left.words()):
+                    issues.append(_issue("ZSH020", "Use wc -l, wc -w or wc -c instead of wc | awk.",
+                                         token_of(left)))
+                if left.name() == "bmw" and right.name() == "awk" and re.search(r"print \$(2|NF)\b", program):
+                    issues.append(_issue("ZSH046", "Use bmw -V VAR instead of bmw VAR | awk to read a value.",
+                                         token_of(left)))
+            for stage in stages[1:]:
+                if stage.name() == "tee" and any(r.descriptor() == "2" and r.operator() == ">&" for r in stage.parts("redir")):
+                    issues.append(_issue("ZSH030", "Redirect stderr before tee (e.g. cmd 2>&1 | tee f), so the file holds it.",
+                                         token_of(stage.part("command_head"))))
+            return issues
+
+        def tests_status(self):
+            stages = [p for p in self.parts() if type(p).__name__ != "Literal_time"]
+            return stages[0].tests_status()
+
+        def last_status(self):
+            stages = [p for p in self.parts() if type(p).__name__ not in ("pipe", "pipe_amp", "Literal_time")]
+            if len(stages) > 1 and type(stages[-1]).__name__ == "command" and stages[-1].name() == "tee":
+                return ("tee",)
+            return stages[-1].last_status()
+
+    class and_or:
+        """and_or ::= and_or_item (('&&' | '||') and_or_item)*"""
+        def check(self):
+            issues = []
+            items = self.parts()
+            for left, op, right in zip(items, items[1:], items[2:]):
+                if (type(op).__name__ in ("and_and", "or_or")
+                        and type(left).__name__ == type(right).__name__ == "dbl_test_construct"):
+                    # ksh rule 32.
+                    issues.append(_issue("ZSH032", "Combine the tests into one [[ ... ]] with && or ||.",
+                                         token_of(right)))
+            return issues
+
+        def tests_status(self):
+            return self.parts()[0].tests_status()
+
+        def last_status(self):
+            items = [p for p in self.parts() if type(p).__name__ not in ("and_and", "or_or")]
+            return items[-1].last_status()
+
+    class function_def:
+        def check(self):
+            if self.part("Literal_function"):
+                return []
+            # ksh rule 33. Fixed by writing `function NAME {`; in zsh both forms behave the same.
+            return [_issue("ZSH033", "Declare a function with the function keyword: function NAME.",
+                           token_of(self.part("func_name")), node=self)]
+
+        def exit_functions(self):
+            names = ZshStyleGrammar.__default__.exit_functions(self)
+            if self.calls_exit():
+                names.add(self.part("func_name").to_source())
+            return names
+
+    class foreach_stmt:
+        def variables(self):
+            found = ZshStyleGrammar.__default__.variables(self)
+            return found + [("assign", n.to_source(), token_of(n)) for n in self.parts("identifier")]
+
+    class select_stmt:
+        def variables(self):
+            found = ZshStyleGrammar.__default__.variables(self)
+            return found + [("assign", n.to_source(), token_of(n)) for n in self.parts("identifier")]
+
+    class arith_body:
+        def variables(self):
+            # Arithmetic reads and assigns names without a $.
+            found = ZshStyleGrammar.__default__.variables(self)
+            for tok in map(token_of, self.parts("shift")):
+                if _is_bare_name(tok):
+                    found += [("use", tok.string, tok), ("assign", tok.string, tok)]
+            return found
+
+    class brace_word:
+        def check(self):
+            # ksh rule 6: {NAME} with no comma or range is a variable that lost its $.
+            if re.match(r"^\{[A-Za-z_][A-Za-z0-9_]*\}$", self.to_source()):
+                return [_issue("ZSH015", "Put $ before the variable name in braces.", token_of(self))]
+            return []
 
     class command_head:
         """command_head ::= identifier | colon | backtick | cmd_subst | arith_exp | var_exp | string | number"""
-        def lint(self):
+        def check(self):
             return _expansion_issues(self)
 
-        
     class test_construct:
         """test_construct ::= lbracket (~rbracket shift)* rbracket"""
-        def lint(self):
-            issues = [{
-                "rule": "ZSH004",
-                "message": (
-                    "Use [[ ... ]] instead of [ ... ] in a test; "
-                    "[[ ]] is the enhanced test construct."
-                ),
-                "token": token_of(self.nodes[0]),
-            }]
+        def words(self):
+            """The tokens between [ and ]."""
+            return [token_of(p) for p in self.parts("shift")]
 
+        def check(self):
+            issues = [_issue(
+                "ZSH004",
+                "Use [[ ... ]] instead of [ ... ] in a test; [[ ]] is the enhanced test construct.",
+                token_of(self.nodes[0]),
+                # Fixed only where [[ ]] reads the words the same way.
+                node=self if _same_in_double_brackets([t.string for t in self.words()]) else None,
+            )]
             issues.extend(_expansion_issues(self))
-            return issues
-
-    class redir:
-        """redir ::= (named_fd | number)? ('<<<' | redir_op) argument"""
-        def lint(self):
-            issues = []
-            for c in children(self):
-                tok = token_of(c)
-                if getattr(tok, "string", None) == "<<<":
-                    issues.append({
-                        "rule": "ZSH008",
-                        "message": "Do not use the here-string '<<<'; use a pipe or a here-document.",
-                        "token": tok,
-                    })
-                elif hasattr(c, "lint"):
-                    issues.extend(c.lint())
-            return issues
-
-    class dbl_test_construct:
-        """dbl_test_construct ::= dlbracket (~drbracket shift)* drbracket"""
-        # [[ ... ]] performs no word splitting — suppress ZSH002 for its args.
-        # Also suppresses ZSH004 (this is the recommended form).
-        def lint(self):
-            return []   # [[ ]] does no word splitting; recommended form
-
-    class case_stmt:
-        """case_stmt ::= 'case' argument 'in' STATEMENT_SEP* case_arm* case_final? STATEMENT_SEP* 'esac'"""
-        # The case word (nodes[1]) is subject to splitting — check it.
-        # Then recurse into bodies.
-        def lint(self):
-            def has_wildcard_case(case_node): 
-                seq = []
-                def collect(node):
-                    # Only leaves carry words; inner nodes are walked through.
-                    if children(node):
-                        return
-                    tok = token_of(node)
-                    if tok is None:
-                        return
-                    s = tok if isinstance(tok, str) else getattr(tok, "string", None)
-                    if s is not None:
-                        seq.append(s)
-                walk(case_node, collect)
-                for i in range(len(seq) - 1):
-                    if seq[i] == "*" and seq[i + 1] == ")":
-                        return True
-                return False            
-            issues = []
-            # check for wildcard fallback
-            if not has_wildcard_case(self):
-                issues.append({
-                    "rule": "ZSH007",
-                    "message": "case without a `*)` fallback — unexpected input silently ignored.",
-                    "token": token_of(self.nodes[1]) if len(self.nodes) > 1 else token_of(self.nodes[0]),
-                })
-            for c in children(self):
-                issues.extend(c.lint())
-            return issues
-
-
-    class script:
-        """script ::= statement*"""
-        def lint(self):
-            issues = []
-            for c in children(self):
-                issues.extend(c.lint())                       
+            issues.extend(_test_issues(self.words(), single=True))
             return issues
 
         def to_source(self):
+            if _fixing(self, "ZSH004"):
+                return "[[ " + _join_tokens(self.words()) + " ]]"
+            return _join_source(children(self))
+
+    class redir:
+        """redir ::= (named_fd | number)? ('<<<' | redir_op) argument"""
+        def descriptor(self):
+            fd = self.part("number")
+            return fd.to_source() if fd is not None else None
+
+        def operator(self):
+            return (self.part("redir_op") or self.part("here_string_op")).to_source()
+
+        def target(self):
+            return self.part("argument").to_source()
+
+        def check(self):
+            if self.part("here_string_op"):
+                return [_issue("ZSH008", "Do not use the here-string '<<<'; use a pipe or a here-document.",
+                               token_of(self.part("here_string_op")))]
+            return []
+
+    class dbl_test_construct:
+        """dbl_test_construct ::= dlbracket (~drbracket shift)* drbracket"""
+        # [[ ... ]] performs no word splitting, so ZSH002 does not apply.
+        def check(self):
+            return _test_issues([token_of(p) for p in self.parts("shift")], single=False)
+
+    class case_stmt:
+        """case_stmt ::= 'case' argument 'in' STATEMENT_SEP* case_arm* case_final? STATEMENT_SEP* 'esac'"""
+        def check(self):
+            # A `*)` arm is the fallback; without one, unexpected input is silently ignored.
+            arms = self.parts("case_arm", "case_final")
+            if any(re.search(r"(^|[^\w.])\*\)$", arm.part("case_body").to_source().split("\n")[0]) for arm in arms):
+                return []
+            return [_issue("ZSH007", "case without a `*)` fallback — unexpected input silently ignored.",
+                           token_of(self.part("argument")))]
+
+    class script:
+        """script ::= statement*"""
+        def to_source(self):
             return _lines(self.parts("statement"))
+
+
+# ============================================================
+# Style rules from the ksh checkers (docs/ksh-style-rules.md)
+# ============================================================
+# The grammar's lint methods above call these helpers with their own node. A finding
+# that names a node in "node" can be fixed: with --fix, that node's to_source asks
+# _fixing() and writes the fixed form. A finding with "replace" fixes its one token.
+
+_T = TOKEN_TYPES
+_EXPANSIONS = (_T["VAR_EXP"], _T["CMD_SUBST"], _T["BACKTICK"], _T["ARITH_EXP"])
+_NAME = r"[A-Za-z_][A-Za-z0-9_]*"
+_NAME_RE = re.compile(r"^" + _NAME + r"$")
+
+# Set by format_zsh_code(fix=True): (id(node), rule) pairs to fix, and new token texts.
+_FIX_NODES = set()
+_FIX_TOKENS = {}
+
+
+def _issue(rule, message, token, node=None, replace=None):
+    issue = {"rule": rule, "message": message, "token": token}
+    if node is not None:
+        issue["node"] = node
+    if replace is not None:
+        issue["replace"] = replace
+    return issue
+
+
+def _fixing(node, rule):
+    """True when --fix is on and this node's own finding for rule is to be fixed."""
+    return (id(node), rule) in _FIX_NODES
+
+
+def _join_tokens(toks):
+    """Token texts joined as the source joined them: glued tokens touch."""
+    out = ""
+    for tok in toks:
+        out += ("" if not out or tok.glued else " ") + tok.string
+    return out
+
+
+def _is_quoted(node):
+    text = node.to_source()
+    return len(text) >= 2 and text[0] in "\"'" and text[-1] == text[0]
+
+
+# ---------- [ ], test and [[ ]] ----------
+
+_FILE_TESTS = {"-a", "-b", "-c", "-d", "-e", "-f", "-g", "-h", "-k", "-p", "-r", "-s", "-t", "-u", "-w",
+               "-x", "-L", "-O", "-G", "-N", "-S", "-o", "-v", "-nt", "-ot", "-ef"}
+_COMPARE = {"=", "==", "!="}
+_OPPOSITE = {"-eq": "-ne", "-ne": "-eq", "-lt": "-ge", "-ge": "-lt", "-gt": "-le", "-le": "-gt",
+             "=": "!=", "==": "!=", "!=": "=="}
+
+
+def _same_in_double_brackets(words):
+    """True when [[ ]] reads these [ ] or test words the same way.
+
+    [[ ]] does not split or glob its words, has no -a or -o, compares strings with < and >
+    and reads the right side of =, == and != as a pattern, so a word with an expansion, a
+    glob character or one of those operators would change the result.
+    """
+    for w in words:
+        if w in ("-a", "-o", "(", ")", "\\(", "\\)", "<", ">", "\\<", "\\>"):
+            return False
+        if "$" in w or "`" in w:
+            return False
+        if w[:1] not in ("'", '"') and re.search(r"[*?\[]", w):
+            return False
+    return bool(words)
+
+
+def _is_bare_name(tok):
+    return tok.type == _T["IDENT"] and bool(_NAME_RE.match(tok.string))
+
+
+def _is_number(tok):
+    return tok.type == _T["NUMBER"] or bool(re.match(r"^[0-9]+$", tok.string))
+
+
+def _test_issues(words, single):
+    """Rules on the clauses of one test; single is True for [ ], False for [[ ]]."""
+    issues = []
+    has_expansion = any(t.type in _EXPANSIONS or (t.type == _T["STRING"] and "$" in t.string) for t in words)
+    no_dollar = bool(words) and not has_expansion and not any(t.string in _FILE_TESTS for t in words)
+    if no_dollar and not single:
+        # ksh rule 7.
+        issues.append(_issue("ZSH050", "Put $ before the variable name in this [[ ]] test.", words[0]))
+    separators = {"&&", "||"} | ({"-a", "-o"} if single else set())
+    clauses, clause = [], []
+    for t in words:
+        if t.string in separators and clause:
+            clauses.append(clause)
+            clause = []
+        elif t.string not in ("(", ")", "\\(", "\\)"):
+            clause.append(t)
+    if clause:
+        clauses.append(clause)
+    for index, clause in enumerate(clauses):
+        negated = clause[0].string == "!"
+        body = clause[1:] if negated else clause
+        if not body:
+            continue
+        if negated and body[0].string in ("-n", "-z"):
+            other = "-z" if body[0].string == "-n" else "-n"
+            issues.append(_issue("ZSH012", f"Use {other} instead of ! {body[0].string}.", clause[0]))
+        if negated and len(body) == 3 and body[1].string in _OPPOSITE:
+            issues.append(_issue("ZSH013", f"Use {_OPPOSITE[body[1].string]} instead of negating "
+                                           f"{body[1].string}.", clause[0]))
+        if len(body) == 2 and body[0].string in ("-n", "-z") and _is_bare_name(body[1]):
+            issues.append(_issue("ZSH014", "Put $ before the variable name in this -n or -z test.", body[1]))
+        if len(body) == 3 and body[1].string in _COMPARE and {body[0].string, body[2].string} & {'""', "''"}:
+            issues.append(_issue("ZSH011", "Use -z or -n instead of comparing with an empty string.", body[1]))
+        if (len(body) == 3 and body[1].string in _COMPARE | {"<", ">"}
+                and (_is_number(body[0]) or _is_number(body[2]))):
+            issues.append(_issue("ZSH017", "Use -lt, -le, -gt, -ge, -eq or -ne to compare numbers.", body[1]))
+        if index > 0 and not no_dollar and not single and _is_bare_name(body[0]):
+            # ksh rule 34.
+            issues.append(_issue("ZSH051", "Put $ before the variable name after && or || in this test.",
+                                 body[0]))
+    return issues
+
+
+# ---------- commands, pipelines and declarations ----------
+
+_LOG_LEVEL = re.compile(r"\b(INFO|WARNING|SEVERE|ERROR|FATAL)\b")
+
+
+# ---------- single tokens and source lines ----------
+
+_SPECIAL_BRACED = re.compile(r"^\$\{([0-9]|[?@#*$!-])\}$")
+# The same inside a double-quoted string, where no name character follows.
+_SPECIAL_BRACED_IN_STRING = re.compile(r"(?<!\\)\$\{([0-9]|[?@#*$!-])\}(?![A-Za-z0-9_])")
+
+
+def _special_brace_tokens(toks):
+    """ksh rule 27: ${1}, ${?} and the like, where no name character follows."""
+    found = []
+    for i, tok in enumerate(toks):
+        if tok.type == _T["STRING"] and tok.string.startswith('"') and _SPECIAL_BRACED_IN_STRING.search(tok.string):
+            found.append(tok)
+        elif tok.type == _T["VAR_EXP"] and _SPECIAL_BRACED.match(tok.string):
+            nxt = toks[i + 1] if i + 1 < len(toks) else None
+            if not (nxt is not None and nxt.glued and re.match(r"^[A-Za-z0-9_]", nxt.string)):
+                found.append(tok)
+    return found
+
+
+def _word_issues(toks):
+    """Rules on single words: expansions, double-quoted strings and plain words."""
+    issues = []
+    for tok in _special_brace_tokens(toks):
+        issues.append(_issue("ZSH022", "Write $0, $1, $?, $@, $* and the like without braces.", tok))
+    for i, tok in enumerate(toks):
+        s = tok.string
+        if tok.type == _T["COMMENT"]:
+            continue
+        # Text the shell expands. Single-quoted strings, such as awk programs, are not.
+        shell = s if tok.type in (_T["VAR_EXP"], _T["CMD_SUBST"]) or (
+            tok.type == _T["STRING"] and s.startswith('"')) else ""
+        if shell:
+            if re.search(r"(?<!\\)\$\*|\$\{\*\}", shell):
+                issues.append(_issue("ZSH023", "Use $@ instead of $*, unless this is documented.", tok))
+            if re.search(r"(?<!\\)\$(\{NF\}|NF\b)", shell):
+                issues.append(_issue("ZSH029", "NF is an awk field; do not expand it in the shell.", tok))
+            if re.search(r"\$\{OPC_(SERVICE_NAME|USER)(?![A-Za-z0-9_])", shell):
+                issues.append(_issue("ZSH049", "Write $OPC_USER and $OPC_SERVICE_NAME without braces; "
+                                               "OML/OBM reads them literally.", tok))
+            if re.search(r"\$\{[A-Za-z0-9_]*\s+[^\s}]*\}", shell):
+                issues.append(_issue("ZSH016", "No whitespace is allowed in a variable name in ${...}.", tok))
+        if tok.type == _T["CMD_SUBST"] and s.startswith("$(cm_where") and tok.glued and i:
+            if toks[i - 1].string.endswith(".") and "/" in _join_tokens(toks[max(0, i - 4):i]):
+                issues.append(_issue("ZSH034", "Use ! instead of . to separate SUBSYSTEM and VERSION in a path.",
+                                     toks[i - 1]))
+        if tok.type in (_T["IDENT"], _T["STRING"], _T["VAR_EXP"]):
+            if re.search(r"\by/n\b", s, re.IGNORECASE):
+                issues.append(_issue("ZSH038", "Use the confirm script instead of asking y/n.", tok))
+            if re.search(r"\.LATEST(?!_)", s):
+                issues.append(_issue("ZSH047", "Use .LATEST_GOOD instead of .LATEST.", tok))
+            if "CFMU_OS" in s:
+                issues.append(_issue("ZSH048", "CFMU_OS is probably obsolete.", tok))
+    return issues
+
+
+class _Pos:
+    """A location for a finding that comes from the source text rather than a token."""
+    __slots__ = ("start",)
+
+    def __init__(self, line, col):
+        self.start = (line, col)
+
+
+def _whitespace_issues(source, toks):
+    """Trailing blanks and tabs. The tree drops whitespace, so these read the source lines.
+
+    Here-document bodies are data and are skipped.
+    """
+    skip = set()
+    for tok in toks:
+        if tok.type == _T["HEREDOC"]:
+            skip.update(range(tok.start[0], tok.start[0] + tok.string.count("\n") + 1))
+    issues = []
+    for n, line in enumerate(source.split("\n"), 1):
+        if n in skip:
+            continue
+        if line != line.rstrip(" \t"):
+            issues.append(_issue("ZSH021", "Remove the trailing blank(s).", _Pos(n, len(line.rstrip(" \t")))))
+        if "\t" in line:
+            issues.append(_issue("ZSH044", "Use spaces, not a tab character.", _Pos(n, line.index("\t"))))
+    return issues
+
+
+def _token_fixes(toks):
+    """New texts, by id(token), for the fixes made on single tokens: ZSH009, ZSH002 and ZSH022."""
+    fixes = {}
+    spans = {}
+    for tok, start, end, name in _bare_spans(toks):
+        spans.setdefault(id(tok), (tok, []))[1].append((start, end, name))
+    for tok, found in spans.values():
+        s = tok.string
+        for start, end, name in sorted(found, reverse=True):
+            s = s[:start] + "${" + name + "}" + s[end:]
+        fixes[id(tok)] = s
+    # ZSH002: an unquoted $name or $(cmd) as an assignment value is quoted. zsh does not
+    # split assignment values, so this only changes the style.
+    for prev, tok in zip(toks, toks[1:]):
+        flagged = (tok.string.startswith("$") and len(tok.string) > 1
+                   and not tok.string.startswith(("${", "$((")))
+        if flagged and prev.type == _T["OP"] and prev.string == "=" and prev.end == tok.start:
+            fixes[id(tok)] = '"' + fixes.get(id(tok), tok.string) + '"'
+    for tok in _special_brace_tokens(toks):
+        fixes[id(tok)] = _SPECIAL_BRACED_IN_STRING.sub(r"$\1", fixes.get(id(tok), tok.string))
+    return fixes
+
+
+# ---------- variables and return codes ----------
+
+# Names the environment, the shell or the site sets before the script runs (ksh rule 21).
+EXEMPT = frozenset({
+    "APPLICATION_INSTANCE_KEY", "CFMU_TEMP_DIR", "CLEARCASE_ROOT", "CMA_WORKSPACE",
+    "CMA_WORKSPACE_DATA_DIRECTORY", "CMA_WORKSPACE_NM_REPOSITORY_DIRECTORY", "CMA_WORKSPACE_ROOT",
+    "CM_ROOT", "CM_SYSTEM", "DATA_FILES", "DISPLAY", "ENABLE_UPDATE_STATISTICS", "GCOV_PREFIX", "IFS",
+    "NF", "OPTARG", "OPTIND", "PATCHES_DIR", "PATH", "PS1", "PS2", "PS3", "PWD", "REPLY", "SCRIPT",
+    "SECONDS", "SHARED_AREA", "SVLOGS", "TMP_ROOT", "TZ", "WORK_DIR", "WORK_ROOT",
+})
+# zsh adaptation, not in the ksh checker: variables a login shell or a terminal provides.
+LOGIN_ENV = frozenset({
+    "BASH_VERSION", "COLUMNS", "DISPLAY", "EDITOR", "HISTFILE", "HISTSIZE", "HOME", "HOST", "HOSTNAME",
+    "LANG", "LC_ALL", "LC_CTYPE", "LESS", "LINES", "LOGNAME", "MACHTYPE", "OLDPWD", "OSTYPE", "PAGER",
+    "PWD", "SAVEHIST", "SHELL", "SSH_CONNECTION", "SSH_TTY", "TERM", "TMPDIR", "TMUX", "TTY", "USER",
+    "USERNAME", "VISUAL", "WAYLAND_DISPLAY", "ZDOTDIR", "ZSH_VERSION",
+})
+_ENV_PREFIXES = ("XDG_", "LC_", "ZSH", "ZPLUG", "ANTIGEN")
+# Set by define_configuration; they may be assigned only in a file whose name has that word.
+DEFINE_CONFIGURATION = frozenset({
+    "APPLICATION", "CONFIGURATION_SYSTEM", "CONFIGURATION_TYPE", "DB_FUNCTION", "ENTERPRISE_ID",
+    "ENV_UPDATE_USER", "ENV_UPDATE_USER_PASSWD", "EXER_TITLE", "HOSTS_ALL", "LOCAL_STATIONS",
+    "OTHER_INSTANCE", "PACKAGE_NAME", "PHYSICAL_HOSTS_ALL", "PHYSICAL_SERVERS", "REFERENCE_INSTANCE",
+    "SYSTEM_LOCATION", "SYSTEM_PAIR", "SYSTEM_TEMPLATE",
+})
+# ksh read-only variables, and the ones a sudo login sets (ksh rule 20).
+KSH_READ_ONLY = frozenset({
+    "EGID", "ENV", "EUID", "GID", "HISTCMD", "LINENO", "PPID", "RANDOM", "SUDO_COMMAND", "SUDO_GID",
+    "SUDO_UID", "SUDO_USER", "TTYIDLE", "UID", "USERNAME",
+})
+
+# $NAME, ${NAME...}, ${#NAME}, ${+NAME}, ${(flags)NAME}.
+_USE = re.compile(r"(?<!\\)\$(?:\{[#+^=~]*(?:\([^)]*\))?)?(" + _NAME + r")")
+# A bare name in arithmetic; $+name and name[...] are lookups in an associative array.
+_ARITH_NAME = re.compile(r"(?<![\w$+])(" + _NAME + r")(?![\w\[(])")
+
+
+def _is_env(name):
+    return name in EXEMPT or name in LOGIN_ENV or name.startswith(_ENV_PREFIXES)
+
+
+def _uses_in(tok):
+    s = tok.string
+    if tok.type == _T["COMMENT"] or (tok.type == _T["STRING"] and not s.startswith('"')):
+        return []
+    names = [m.group(1) for m in _USE.finditer(s)]
+    if tok.type == _T["ARITH_EXP"] or (tok.type == _T["CMD_SUBST"] and s.startswith("$((")):
+        names += _ARITH_NAME.findall(re.sub(r"\[[^\]]*\]", "", s[3:-2]))
+    return names
+
+
+def _assigned_by(name, words):
+    """Names a command assigns through its arguments: read, getopts, set -A and print -v."""
+    if name == "read":
+        targets, skip = [], False
+        for i, w in enumerate(words):
+            if skip:
+                skip = False
+            elif w.startswith("-"):
+                if "A" in w[1:] and i + 1 < len(words):
+                    targets.append(words[i + 1])
+                    skip = True
+                elif w in ("-d", "-k", "-t", "-u"):
+                    skip = True
+            else:
+                targets.append(w.split("?", 1)[0])
+        return targets
+    if name == "getopts":
+        return words[1:2] + ["OPTARG"]
+    if name == "set" and words[:1] in (["-A"], ["-a"]):
+        return words[1:2]
+    if name in ("print", "printf") and words[:1] == ["-v"]:
+        return words[1:2]
+    return []
+
+
+# Functions of the script being linted that call exit; set by lint_zsh_code.
+_EXIT_FUNCTIONS = set()
+
+
+def _variable_issues(ast, filename=""):
+    """ksh rules 16, 17 and 20: names used and not assigned, assigned and not used, read-only."""
+    assigned, used, exported = {}, {}, set()
+    for event, name, tok in ast.variables():
+        if not _NAME_RE.match(name):
+            continue
+        if event == "export":
+            exported.add(name)
+            continue
+        table = assigned if event == "assign" else used
+        if name not in table or tok.start < table[name].start:
+            table[name] = tok
+    issues = []
+    for name, tok in sorted(used.items(), key=lambda kv: kv[1].start):
+        if name in assigned or _is_env(name) or name in KSH_READ_ONLY or name in DEFINE_CONFIGURATION:
+            continue
+        issues.append(_issue("ZSH052", f"'{name}' is used but not assigned in this file; it may be set elsewhere.",
+                             tok))
+    for name, tok in sorted(assigned.items(), key=lambda kv: kv[1].start):
+        if name not in used and name not in exported and not _is_env(name):
+            issues.append(_issue("ZSH053", f"'{name}' is assigned but never used; remove it or check it is exported.",
+                                 tok))
+        if name in KSH_READ_ONLY:
+            issues.append(_issue("ZSH054", f"'{name}' is a read-only shell variable; assigning it is likely a bug.",
+                                 tok))
+        elif name in DEFINE_CONFIGURATION and "define_configuration" not in filename:
+            issues.append(_issue("ZSH054", f"'{name}' is set by define_configuration; do not assign it here.", tok))
+    return issues
 
 
 # ============================================================
@@ -975,39 +1638,6 @@ def _unclosed_construct(tokens):
         top = stack[-1]
         return f"unclosed {top.string!r} opened at {top.start}, expected {openers[top.string]!r}"
     return None
-
-
-def _offset_of(source, pos):
-    """Character offset of a (line, column) token position."""
-    line, col = pos
-    lines = source.splitlines(keepends=True)
-    return sum(len(l) for l in lines[:line - 1]) + col
-
-
-def quote_assignment_expansion(source):
-    """Quote an unquoted expansion used as an assignment value: x=$a becomes x="$a".
-
-    Zsh does not word-split assignment values, so the quotes only change the style.
-    """
-    tokens = tokenize_zsh(source)
-    spans = []
-    for prev, tok in zip(tokens, tokens[1:]):
-        # Same tokens that ZSH002 reports: $name and $(cmd), not ${...} or $((...)).
-        flagged = (tok.string.startswith("$") and len(tok.string) > 1
-                   and not tok.string.startswith(("${", "$((")))
-        if (flagged and prev.type == TOKEN_TYPES["OP"] and prev.string == "="
-                and prev.end == tok.start):
-            spans.append((_offset_of(source, tok.start), _offset_of(source, tok.end)))
-    for start, end in reversed(spans):
-        source = source[:start] + '"' + source[start:end] + '"' + source[end:]
-    return source
-
-
-def apply_auto_fixes(source):
-    """Apply the AUTO_FIXES entries in order and return the fixed source."""
-    for _rule, fix_name in AUTO_FIXES:
-        source = globals()[fix_name](source)
-    return source
 
 
 _PLAIN_NAME = re.compile(r"^\$[A-Za-z_][A-Za-z0-9_]*$")
@@ -1058,45 +1688,16 @@ def _bare_variable_issues(tokens):
     ]
 
 
-def braces_for_variables(source):
-    """Rewrite $name as ${name} for each bare name that ZSH009 reports."""
-    tokens = tokenize_zsh(source)
-    edits = []
-    for tok, rel_start, rel_end, name in _bare_spans(tokens):
-        base = _offset_of(source, tok.start)
-        edits.append((base + rel_start, base + rel_end, "${" + name + "}"))
-    for a, b, text in sorted(edits, reverse=True):
-        source = source[:a] + text + source[b:]
-    return source
-
-
-def format_zsh_code(source):
-    """Return the script rendered from its parse tree (see each rule's to_source)."""
+def _parse(source):
+    """Parse a script; return (ast, tokens) or raise SyntaxError."""
     ParserState.reset()
     tokens = tokenize_zsh(source)
-    result = script.parse(tokens)
-    if not result:
-        raise SyntaxError("Invalid zsh script")
-    ast, stream = result
-    while stream.pos < len(stream.tokens) and stream.tokens[stream.pos].type == TOKEN_TYPES["NEWLINE"]:
-        stream.pos += 1
-    if stream.pos < len(stream.tokens):
-        raise SyntaxError(f"could not parse the script from token {stream.pos}")
-    return ast.to_source()
-
-
-def lint_zsh_code(source):
-    ParserState.reset()
-    tokens = tokenize_zsh(source)
-
     result = script.parse(tokens)
     if not result:
         raise SyntaxError(f"Invalid zsh script: {source}")
-
     ast, stream = result
     while stream.pos < len(stream.tokens) and stream.tokens[stream.pos].type == TOKEN_TYPES["NEWLINE"]:
         stream.pos += 1
-
     if stream.pos < len(stream.tokens):
         # An unclosed or mismatched construct is the real problem; report it first.
         construct = _unclosed_construct(stream.tokens)
@@ -1109,8 +1710,44 @@ def lint_zsh_code(source):
         index = min(index, len(stream.tokens) - 1)
         tok = stream.tokens[index]
         raise SyntaxError(f"Unexpected token {tok.string!r} at position {tok.start}")
+    return ast, tokens
 
-    return ast.lint() + _bare_variable_issues(tokens) + style_issues(source) + flow_issues(source)
+
+def format_zsh_code(source, fix=False):
+    """Return the script rendered from its parse tree (see each rule's to_source).
+
+    With fix, the findings of the AUTO_FIXES rules are fixed as the tree is rendered.
+    """
+    ast, tokens = _parse(source)
+    if not fix:
+        return ast.to_source()
+    fixed = {rule for rule, _how in AUTO_FIXES}
+    _FIX_TOKENS.update(_token_fixes(tokens))
+    for issue in ast.lint():
+        if issue["rule"] not in fixed:
+            continue
+        if "node" in issue:
+            _FIX_NODES.add((id(issue["node"]), issue["rule"]))
+        if "replace" in issue:
+            _FIX_TOKENS[id(issue["token"])] = issue["replace"]
+    try:
+        return ast.to_source()
+    finally:
+        _FIX_NODES.clear()
+        _FIX_TOKENS.clear()
+
+
+def lint_zsh_code(source, filename=""):
+    ast, tokens = _parse(source)
+    global _EXIT_FUNCTIONS
+    _EXIT_FUNCTIONS = ast.exit_functions()
+    issues = (ast.lint() + _bare_variable_issues(tokens) + _word_issues(tokens)
+              + _whitespace_issues(source, tokens) + _variable_issues(ast, filename))
+    # A finding without a fix carries node=None; drop the keys main() does not print.
+    for issue in issues:
+        issue.pop("node", None)
+        issue.pop("replace", None)
+    return issues
 
 
 # ============================================================
@@ -1302,8 +1939,9 @@ def _run_self_tests():
             ("Case parenthesized group", 'case "$OSTYPE" in\n  (darwin|freebsd)*)\n    echo b\n    ;;\n  *)\n    echo c\n    ;;\nesac\n'),
     ]
 
-        # Line-level style rules (style_rules.py): each one fires on its example and not on the fix.
-        from style_rules import style_issues as _style
+        # Rules from the ksh checkers: each one fires on its example and not on the corrected form.
+        def _style(code):
+            return lint_zsh_code(code)
         _style_cases = [
             ("ZSH010", "if test -f x; then\n  :\nfi\n", "if [[ -f x ]]; then\n  :\nfi\n"),
             ("ZSH011", '[[ $a == "" ]]\n', "[[ -z $a ]]\n"),
@@ -1311,14 +1949,12 @@ def _run_self_tests():
             ("ZSH016", "echo ${MY VAR}\n", "echo ${MY_VAR}\n"),
             ("ZSH017", "[[ $x < 3 ]]\n", "[[ $x -lt 3 ]]\n"),
             ("ZSH018", "typeset -i N=\n", "typeset -i N=0\n"),
-            ("ZSH019", "echo a >>& f\n", "echo a >& f\n"),
             ("ZSH020", "wc | awk '{print $1}'\n", "wc -l f\n"),
             ("ZSH021", "echo a  \n", "echo a\n"),
             ("ZSH022", "echo ${1}\n", "echo $1\n"),
             ("ZSH023", "echo $*\n", "echo $@\n"),
             ("ZSH029", "echo ${NF}\n", "echo ${x}\n"),
             ("ZSH030", "cmd | tee f 2>&1\n", "cmd 2>&1 | tee f\n"),
-            ("ZSH031", "${X}=1\n", "X=1\n"),
             ("ZSH032", "[[ -n $a ]] && [[ -n $b ]]\n", "[[ -n $a && -n $b ]]\n"),
             ("ZSH033", "f ()\n{\n:\n}\n", "function f\n{\n:\n}\n"),
             ("ZSH034", "x=/a.$(cm_where)\n", "x=/a!$(cm_where)\n"),
@@ -1343,8 +1979,8 @@ def _run_self_tests():
             assert any(i["rule"] == _code for i in _style(_bad)), f"{_code} not reported"
             assert not any(i["rule"] == _code for i in _style(_good)), f"{_code} reported on the fix"
         assert not any(i["rule"] == "ZSH009" for i in lint_zsh_code("echo $OPC_USER\n")), "OPC_USER still braced"
-        # Variable and return-code checks (flow_rules.py).
-        from flow_rules import flow_issues as _flow
+        # Variable and return-code checks.
+        _flow = _style
         _flow_cases = [
             ("ZSH052", "echo $NOT_SET_ANYWHERE_X\n", "NOT_SET_ANYWHERE_X=1\necho $NOT_SET_ANYWHERE_X\n"),
             ("ZSH053", "unused_var_q=1\n", "unused_var_q=1\necho $unused_var_q\n"),
@@ -1357,6 +1993,26 @@ def _run_self_tests():
             assert any(i["rule"] == _code for i in _flow(_bad)), f"{_code} not reported"
             assert not any(i["rule"] == _code for i in _flow(_good)), f"{_code} reported on the fix"
         print("Flow rules OK")
+        # --format --fix: the fixed script parses, and lint no longer reports the fixed findings.
+        _fix_cases = [
+            ("ZSH002", "env x=$a\n"),
+            ("ZSH004", "if [ -f x ]; then\n  :\nfi\n"),
+            ("ZSH009", "echo \"$HOME\"\n"),
+            ("ZSH010", "if test -f x; then\n  :\nfi\n"),
+            ("ZSH018", "typeset -i N=\necho \"${N}\"\n"),
+            ("ZSH022", "x=${1}\n"),
+            ("ZSH033", "f () {\n  :\n}\n"),
+        ]
+        _fixed_rules = {rule for rule, _how in AUTO_FIXES}
+        for _code, _bad in _fix_cases:
+            assert any(i["rule"] == _code for i in lint_zsh_code(_bad)), f"{_code} not reported before the fix"
+            _out = format_zsh_code(_bad, fix=True)
+            _left = [i["rule"] for i in lint_zsh_code(_out) if i["rule"] in _fixed_rules]
+            assert not _left, f"{_code}: {_left} still reported after --fix: {_out!r}"
+        # Unsafe forms are reported but left as they are.
+        for _code, _bad in (("ZSH004", "[ $x = a ]\n"), ("ZSH004", "[ -f a -a -f b ]\n"), ("ZSH010", "test a* = b\n")):
+            assert _code in [i["rule"] for i in lint_zsh_code(format_zsh_code(_bad, fix=True))], f"{_code} fixed unsafely"
+        print("Fixes OK")
         print("Style rules OK")
 
         print("\n--- Path X tests ---")
@@ -1394,7 +2050,7 @@ def main(argv=None):
     ap.add_argument("--format", action="store_true",
                     help="print each script reformatted to stdout instead of linting it")
     ap.add_argument("--fix", action="store_true",
-                    help="apply the AUTO_FIXES before formatting (use with --format)")
+                    help="fix the AUTO_FIXES findings while formatting (use with --format)")
     args = ap.parse_args(argv)
 
     if args.self_test or not args.paths:
@@ -1413,11 +2069,9 @@ def main(argv=None):
                 with open(path, encoding="utf-8", errors="replace") as fh:
                     source = fh.read()
             if args.format:
-                if args.fix:
-                    source = apply_auto_fixes(source)
-                sys.stdout.write(format_zsh_code(source))
+                sys.stdout.write(format_zsh_code(source, fix=args.fix))
                 continue
-            issues = lint_zsh_code(source)
+            issues = lint_zsh_code(source, filename=name)
         except Exception as exc:
             print(f"{name}: parse error: {type(exc).__name__}: {exc}", file=sys.stderr)
             status = 2
