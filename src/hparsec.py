@@ -331,6 +331,7 @@ class TokenStream:
         else:
             self.tokens = [tokens]
         self.pos = 0
+        self.farthest = 0  # highest token index any parser has examined
         self.memos = {}
         self.heads = {}
         self.lrstack = None
@@ -346,6 +347,8 @@ class TokenStream:
         return self.tokens[idx]
 
     def get_new_token(self):
+        if self.pos > self.farthest:
+            self.farthest = self.pos
         if self.pos >= len(self.tokens):
             return None
         tok = self.tokens[self.pos]

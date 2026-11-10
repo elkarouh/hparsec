@@ -577,7 +577,12 @@ def lint_zsh_code(source):
         stream.pos += 1
 
     if stream.pos < len(stream.tokens):
-        tok = stream.tokens[stream.pos]
+        # The statement parser stops at the first statement it cannot finish, so
+        # stream.pos is that statement's first token. The farthest token any rule
+        # examined is usually where the real problem is.
+        index = max(stream.pos, getattr(stream, "farthest", stream.pos))
+        index = min(index, len(stream.tokens) - 1)
+        tok = stream.tokens[index]
         raise SyntaxError(f"Unexpected token {tok.string!r} at position {tok.start}")
 
     return ast.lint()
