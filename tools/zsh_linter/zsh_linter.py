@@ -1746,6 +1746,8 @@ def _run_self_tests():
             ("ZSH047", "x=$VAR.LATEST\n", "x=$VAR.LATEST_GOOD\n"),
             ("ZSH048", "echo $CFMU_OS\n", "echo $OSTYPE\n"),
         ]
+        _style_cases.append(("ZSH050", "[[ a = b ]]\n", "[[ $a = b ]]\n"))
+        _style_cases.append(("ZSH051", "if [[ -n $a && x ]]; then :; fi\n", "if [[ -n $a && -n $x ]]; then :; fi\n"))
         _style_cases.append(("ZSH049", "echo ${OPC_USER}\n", "echo $OPC_USER\n"))
         for _code, _bad, _good in _style_cases:
             assert any(i["rule"] == _code for i in _style(_bad)), f"{_code} not reported"

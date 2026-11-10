@@ -56,6 +56,8 @@ script with comments blanked out, and report with the same `file:line:col: RULE 
 | ZSH047 | `.LATEST` alias; use `.LATEST_GOOD` |
 | ZSH048 | `CFMU_OS` |
 | ZSH049 | `${OPC_USER}` or `${OPC_SERVICE_NAME}`; write them without braces |
+| ZSH050 | `[[ ]]` test with no `$` on the line (file tests and backticks are skipped) |
+| ZSH051 | a bare word after `&&` or `||` inside `[[ ]]` in an `if` or `while` |
 
 These rules are line-based, so they can report a pattern inside a string or a multi-line construct. ZSH017
 also reports `==` and `!=` against a number, which is a string test in zsh. `OPC_USER` and `OPC_SERVICE_NAME` are exempt from ZSH009 and its `--fix`, because OML/OBM reads them

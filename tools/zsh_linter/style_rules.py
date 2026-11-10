@@ -59,6 +59,32 @@ def _trailing_blank(lines, source):
             for n, t in enumerate(source.split("\n"), 1) if t != t.rstrip(" \t")]
 
 
+_FILE_TEST = re.compile(r"-[dfxsrahtebwLpSNGOkgu]\b")
+
+
+def _test_missing_dollar(lines, source):
+    """ksh rule 7: a [[ ]] test with no $ on the line, and no file test or backtick."""
+    found = []
+    for n, t in enumerate(lines, 1):
+        m = re.search(r"\[\[\s[^$]*$", t)
+        if m and not _FILE_TEST.search(t) and "`" not in t:
+            found.append(("ZSH050", "Put $ before the variable name in this [[ ]] test.", n, m.start()))
+    return found
+
+
+def _and_or_missing_dollar(lines, source):
+    """ksh rule 34: a word after && or || inside [[ ]] without $, in an if or while."""
+    found = []
+    for n, t in enumerate(lines, 1):
+        if not re.search(r"\b(if|while)\b", t):
+            continue
+        m = re.search(r"\[\[[^\]]*(&&|\|\|)\s+([A-Za-z_]\w*).*\]\]", t)
+        if m:
+            found.append(("ZSH051", "Put $ before the variable name after && or || in this test.",
+                          n, m.start()))
+    return found
+
+
 def _opc_braces(lines, source):
     return [("ZSH049", "Write $OPC_USER and $OPC_SERVICE_NAME without braces; OML/OBM reads them literally.",
              n, m.start())
@@ -181,6 +207,8 @@ RULES = (
     _regex_rule("ZSH041", r"alias_get.*Value", "Use alias_get -q."),
     _regex_rule("ZSH047", r"\.LATEST(?!_)", "Use .LATEST_GOOD instead of .LATEST."),
     _tab_char,
+    _test_missing_dollar,
+    _and_or_missing_dollar,
     _opc_braces,
     _regex_rule("ZSH048", r"CFMU_OS", "CFMU_OS is probably obsolete."),
 )
