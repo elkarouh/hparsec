@@ -40,6 +40,9 @@ class ScriptTests(unittest.TestCase):
     def test_ady_tokenizer_selftest(self):
         self.check(ADY / "ady_tokenizer.py", expect="OK")
 
+    def test_ada_tokens_selftest(self):
+        self.check(ADY / "ada_tokens.py", expect="All tests passed.")
+
     def test_expression_parser(self):
         self.check(ROOT / "examples" / "expression_parser.py")
 

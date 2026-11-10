@@ -34,7 +34,8 @@ def main() -> None:
 
     sys.path.insert(0, str(Path(args.source_dir).resolve()))
     sys.path.insert(1, str(Path(__file__).resolve().parent.parent / "ady_helpers"))
-    from hparsec import Input, NUMBER, PLUS, ParserState, fw
+    from ada_tokens import Input, NUMBER, PLUS
+    from hparsec import ParserState, fw
 
     # expr ::= expr '+' NUMBER | NUMBER
     expr = fw("expr")
