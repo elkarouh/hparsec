@@ -224,34 +224,8 @@ def _expansion_issues(node, backticks_only=False):
 # and statement separators are rebuilt from the tree, so the output is formatted
 # rather than byte-identical. Anonymous combinator nodes are flattened.
 
-_ANON_NODES = ("Sequence_Parser", "Several_Times")
-_KEYWORDS = ("if", "then", "else", "elif", "fi", "while", "until", "for", "in", "do", "done")
-
-
 def _is_leaf(node):
     return hasattr(node, "string") and not hasattr(node, "nodes")
-
-
-def _flatten_anon(nodes):
-    """Yield the nodes, looking through anonymous combinator nodes."""
-    for n in nodes:
-        if n is None:
-            continue
-        if not isinstance(n, str) and type(n).__name__ in _ANON_NODES:
-            yield from _flatten_anon(children(n))
-        else:
-            yield n
-
-
-def _keyword_of(node):
-    """Return the shell keyword a literal node stands for, or None."""
-    name = type(node).__name__
-    if not name.startswith("Literal_"):
-        return None
-    kids = children(node)
-    if kids and isinstance(kids[0], str):
-        return kids[0]
-    return name[len("Literal_"):]
 
 
 def _render(node):
@@ -270,6 +244,30 @@ def _render(node):
         return node.string
     fn = getattr(node, "to_source", None)
     return fn() if fn else _join_source(children(node))
+
+
+_PART_WRAPPERS = ("Sequence_Parser", "Several_Times", "As_Node")
+
+
+def _parts(node):
+    """Yield the parts of a node: its children, looking through anonymous combinator nodes."""
+    for c in children(node):
+        if c is None:
+            continue
+        if not isinstance(c, str) and not _is_leaf(c) and type(c).__name__ in _PART_WRAPPERS:
+            yield from _parts(c)
+        else:
+            yield c
+
+
+def _lines(nodes):
+    """Render each node on its own line."""
+    out = ""
+    for node in nodes:
+        piece = _render(node)
+        if piece:
+            out += piece if piece.endswith("\n") else piece + "\n"
+    return out
 
 
 def _first_leaf(node):
@@ -292,8 +290,10 @@ def _join_source(nodes):
         piece = _render(c)
         if not piece:
             continue
-        first = _first_leaf(c)
-        glued = bool(getattr(first, "glued", False))
+        if _is_leaf(c) or isinstance(c, str):
+            glued = bool(getattr(c, "glued", False))
+        else:
+            glued = c.is_glued()
         if out and not glued:
             out += " "
         out += piece
@@ -598,162 +598,214 @@ class ZshStyleGrammar(Grammar):
         + (lbrace_vis + STATEMENT_SEP[:] + inner_statement[:] + STATEMENT_SEP[:] + rbrace_vis)
     )
 
-    # ---------- Lint methods ----------
-    class statement:
-        """statement: rendered from its children in order."""
-        def to_source(self):
-            return _join_source(children(self))
-
-    class loose_word:
-        """loose_word: rendered from its children in order."""
-        def to_source(self):
-            return _join_source(children(self))
-
-    class command:
-        """command: rendered from its children in order."""
-        def to_source(self):
-            return _join_source(children(self))
-
-    class array_literal:
-        """array_literal: rendered from its children in order."""
-        def to_source(self):
-            return _join_source(children(self))
-
-    class assign_rhs:
-        """assign_rhs: rendered from its children in order."""
-        def to_source(self):
-            return _join_source(children(self))
-
-    class assign_target:
-        """assign_target: rendered from its children in order."""
-        def to_source(self):
-            return _join_source(children(self))
-
-    class test_rbracket:
-        """test_rbracket: rendered from its children in order."""
-        def to_source(self):
-            return _join_source(children(self))
-
-    class redir_op:
-        """redir_op: rendered from its children in order."""
-        def to_source(self):
-            return _join_source(children(self))
-
-    class here_string_op:
-        """here_string_op: rendered from its children in order."""
-        def to_source(self):
-            return _join_source(children(self))
-
-    class redir_command:
-        """redir_command: rendered from its children in order."""
-        def to_source(self):
-            return _join_source(children(self))
-
-    class _two_rparen:
-        """_two_rparen: rendered from its children in order."""
-        def to_source(self):
-            return _join_source(children(self))
-
-    class arith_nested:
-        """arith_nested: rendered from its children in order."""
-        def to_source(self):
-            return _join_source(children(self))
-
-    class pipeline_item:
-        """pipeline_item: rendered from its children in order."""
-        def to_source(self):
-            return _join_source(children(self))
-
-    class pipeline:
-        """pipeline: rendered from its children in order."""
-        def to_source(self):
-            return _join_source(children(self))
-
-    class not_command:
-        """not_command: rendered from its children in order."""
-        def to_source(self):
-            return _join_source(children(self))
-
-    class inner_statement:
-        """inner_statement: rendered from its children in order."""
-        def to_source(self):
-            return _join_source(children(self))
-
-    class and_or_item:
-        """and_or_item: rendered from its children in order."""
-        def to_source(self):
-            return _join_source(children(self))
-
-    class and_or_closer:
-        """and_or_closer: rendered from its children in order."""
-        def to_source(self):
-            return _join_source(children(self))
-
-    class and_or:
-        """and_or: rendered from its children in order."""
-        def to_source(self):
-            return _join_source(children(self))
-
-    class if_condition:
-        """if_condition: rendered from its children in order."""
-        def to_source(self):
-            return _join_source(children(self))
-
-    class loop_names:
-        """loop_names: rendered from its children in order."""
-        def to_source(self):
-            return _join_source(children(self))
-
-    class foreach_stmt:
-        """foreach_stmt: rendered from its children in order."""
-        def to_source(self):
-            return _join_source(children(self))
-
-    class select_stmt:
-        """select_stmt: rendered from its children in order."""
-        def to_source(self):
-            return _join_source(children(self))
-
-    class repeat_stmt:
-        """repeat_stmt: rendered from its children in order."""
-        def to_source(self):
-            return _join_source(children(self))
-
-    class _pattern_break:
-        """_pattern_break: rendered from its children in order."""
-        def to_source(self):
-            return _join_source(children(self))
-
-    class _pattern_tok:
-        """_pattern_tok: rendered from its children in order."""
-        def to_source(self):
-            return _join_source(children(self))
-
-    class _pattern_group:
-        """_pattern_group: rendered from its children in order."""
-        def to_source(self):
-            return _join_source(children(self))
-
-    class case_pattern:
-        """case_pattern: rendered from its children in order."""
-        def to_source(self):
-            return _join_source(children(self))
-
-    class func_name:
-        """func_name: rendered from its children in order."""
-        def to_source(self):
-            return _join_source(children(self))
+    # ---------- Rendering (to_source) ----------
+    # A node without its own to_source renders through __default__: its children
+    # joined as the source joined them. The handlers below follow their grammar rule.
 
     class anon_function:
-        """anon_function: () { statements }"""
+        """lparen_vis rparen_vis '{' inner_statement* '}'"""
         def to_source(self):
-            body = [c for c in _flatten_anon(children(self)) if _render(c).strip() not in ("(", ")")]
-            return "() {\n" + "\n".join(p for p in (_render(c) for c in body) if p) + "\n}"
+            return "() {\n" + _lines(self.parts("comment", "inner_statement")) + "}"
 
+    class function_def:
+        """(func_name '(' ')' | 'function' func_name ('(' ')')?) '{' inner_statement* '}'"""
+        def to_source(self):
+            output = "function " if self.part("Literal_function") else ""
+            output += _render(self.part("func_name"))
+            if self.part("lparen_vis"):
+                output += " ()"
+            return output + " {\n" + _lines(self.parts("comment", "inner_statement")) + "}"
+
+    class try_always:
+        """'{' inner_statement* '}' 'always' '{' inner_statement* '}'"""
+        def to_source(self):
+            items = self.parts("comment", "inner_statement", "Literal_always")
+            i = items.index(self.part("Literal_always"))
+            return "{\n" + _lines(items[:i]) + "} always {\n" + _lines(items[i + 1:]) + "}"
+
+    class brace_word:
+        """'{' word* '}': the tokens are contiguous, so they are joined without spaces."""
+        def to_source(self):
+            return "".join(_render(c) for c in self.parts())
+
+    class grouping:
+        """'{' inner_statement* '}'"""
+        def to_source(self):
+            return "{\n" + _lines(self.parts("comment", "inner_statement")) + "}"
+
+    class subshell:
+        """'(' inner_statement* ')'"""
+        def to_source(self):
+            return "(\n" + _lines(self.parts("comment", "inner_statement")) + ")"
+
+    class case_stmt:
+        """'case' argument glued_part* 'in' case_arm* case_final? 'esac'"""
+        def to_source(self):
+            word = _join_source(self.parts("argument", "glued_part"))
+            return "case " + word + " in\n" + _lines(self.parts("case_arm", "case_final", "comment")) + "esac"
+
+    class case_body:
+        """case_pattern inner_statement*"""
+        def to_source(self):
+            statements = self.parts("comment", "inner_statement")
+            pattern = [p for p in self.parts() if p not in statements]
+            return _join_source(pattern) + "\n" + _lines(statements)
+
+    class case_arm:
+        """comment* case_body (';;' | ';&' | ';|') comment?"""
+        def to_source(self):
+            items = self.parts("comment", "case_body", "dsemi", "semi_amp", "semi_bar")
+            i = items.index(self.part("case_body"))
+            leading, (terminator, *trailing) = items[:i + 1], items[i + 1:]
+            return (_lines(leading) + _render(terminator)
+                    + "".join(" " + _render(c).rstrip("\n") for c in trailing))
+
+    class case_final:
+        """comment* case_body: the last arm, which may have no terminator."""
+        def to_source(self):
+            return _lines(self.parts("comment", "case_body"))
+
+    class named_fd:
+        """'{' identifier '}' before a redirection."""
+        def to_source(self):
+            return "{" + _render(self.part("identifier")) + "}"
+
+    class not_command:
+        """'!' (pipeline | assignment | test). The '!' is not kept in the tree."""
+        def to_source(self):
+            return "! " + _join_source(self.parts())
+
+    class array_literal:
+        """'(' word* ')'. The parentheses are not kept in the tree."""
+        def to_source(self):
+            return "(" + _join_source(self.parts()) + ")"
+
+        def is_glued(self):
+            # The ( that is not kept always follows = or += directly.
+            return True
+
+    class arith_stmt:
+        """'((' arith_body '))'"""
+        def to_source(self):
+            return "(( " + _render(self.part("arith_body")) + " ))"
+
+    class arith_body:
+        """The expression inside (( )), tokens separated by spaces."""
+        def to_source(self):
+            return " ".join(p for p in (_render(c) for c in self.parts()) if p)
+
+    class arith_nested:
+        """'(' token* ')' inside an arithmetic expression."""
+        def to_source(self):
+            return "(" + " ".join(p for p in (_render(c) for c in self.parts()) if p) + ")"
+
+    class for_arith:
+        """'for' '((' arith_body '))' ('do' inner_statement* 'done' | '{' inner_statement* '}')"""
+        def to_source(self):
+            return ("for ((" + _render(self.part("arith_body")) + ")); do\n"
+                    + _lines(self.parts("comment", "inner_statement")) + "done")
+
+    class for_alt:
+        """'for' loop_names '(' argument* ')' 'do' inner_statement* 'done'"""
+        def to_source(self):
+            return ("for " + _render(self.part("loop_names")) + " (" + _join_source(self.parts("argument"))
+                    + "); do\n" + _lines(self.parts("comment", "inner_statement")) + "done")
+
+    class for_positional:
+        """'for' loop_names 'do' inner_statement* 'done'"""
+        def to_source(self):
+            return ("for " + _render(self.part("loop_names")) + "; do\n"
+                    + _lines(self.parts("comment", "inner_statement")) + "done")
+
+    class for_stmt:
+        """'for' loop_names 'in' argument* 'do' inner_statement* 'done'"""
+        def to_source(self):
+            output = "for " + _render(self.part("loop_names")) + " in"
+            for word in self.parts("argument"):
+                output += " " + _render(word)
+            return output + "; do\n" + _lines(self.parts("comment", "inner_statement")) + "done"
+
+    class foreach_stmt:
+        """'foreach' identifier+ '(' argument* ')' (inner_statement* 'end' | 'do' inner_statement* 'done')"""
+        def to_source(self):
+            output = ("foreach " + _join_source(self.parts("identifier"))
+                      + " (" + _join_source(self.parts("argument")) + ")")
+            body = _lines(self.parts("comment", "inner_statement"))
+            if self.part("Literal_do"):
+                return output + "; do\n" + body + "done"
+            return output + "\n" + body + "end"
+
+    class select_stmt:
+        """'select' identifier 'in' argument* 'do' inner_statement* 'done'"""
+        def to_source(self):
+            output = "select " + _render(self.part("identifier")) + " in"
+            for word in self.parts("argument"):
+                output += " " + _render(word)
+            return output + "; do\n" + _lines(self.parts("comment", "inner_statement")) + "done"
+
+    class repeat_stmt:
+        """'repeat' argument ('do' inner_statement* 'done' | command)"""
+        def to_source(self):
+            output = "repeat " + _render(self.part("argument"))
+            if self.part("Literal_do"):
+                return output + "; do\n" + _lines(self.parts("comment", "inner_statement")) + "done"
+            return output + " " + _render(self.part("command"))
+
+    class while_stmt:
+        """'while' and_or? 'do' inner_statement* 'done'"""
+        def to_source(self):
+            return ("while " + _render(self.part("and_or")) + "; do\n"
+                    + _lines(self.parts("comment", "inner_statement")) + "done")
+
+    class until_stmt:
+        """'until' and_or? 'do' inner_statement* 'done'"""
+        def to_source(self):
+            return ("until " + _render(self.part("and_or")) + "; do\n"
+                    + _lines(self.parts("comment", "inner_statement")) + "done")
+
+    class if_stmt:
+        """'if' if_condition 'then' inner_statement* elif_branch* else_branch? 'fi'"""
+        def to_source(self):
+            output = "if " + _render(self.part("if_condition")) + "; then\n"
+            output += _lines(self.parts("comment", "inner_statement"))
+            for branch in self.parts("elif_branch"):
+                output += _render(branch)
+            if else_branch := self.part("else_branch"):
+                output += _render(else_branch)
+            return output + "fi"
+
+    class elif_branch:
+        """'elif' if_condition 'then' inner_statement*"""
+        def to_source(self):
+            output = "elif " + _render(self.part("if_condition")) + "; then\n"
+            return output + _lines(self.parts("comment", "inner_statement"))
+
+    class else_branch:
+        """'else' inner_statement*"""
+        def to_source(self):
+            return "else\n" + _lines(self.parts("comment", "inner_statement"))
     class __default__:
-        """Fallback for any rule without its own lint: lints the children."""
+        """Fallback for any rule without its own lint or to_source."""
         def to_source(self):
             return _join_source(children(self))
+
+        def is_glued(self):
+            """True when the node touches the text before it, as its first token did."""
+            return bool(getattr(_first_leaf(self), "glued", False))
+
+        def parts(self, *names):
+            """The node's parts, looking through the anonymous combinator nodes.
+
+            With names, only the parts of those rules, in source order.
+            """
+            found = list(_parts(self))
+            if names:
+                found = [p for p in found if type(p).__name__ in names]
+            return found
+
+        def part(self, name):
+            """The first part of the given rule, or None."""
+            return next(iter(self.parts(name)), None)
 
         def lint(self):
             # this node doesnt have a lint method, but its children may have.
@@ -869,469 +921,6 @@ class ZshStyleGrammar(Grammar):
                 issues.extend(c.lint())
             return issues
 
-    class function_def:
-        """function_def: header, then the body in braces, one statement per line."""
-        def to_source(self):
-            nodes = list(_flatten_anon(children(self)))
-            prefix = ""
-            name = None
-            body = []
-            # `function f {` has no parentheses; write them only when the source had them.
-            has_parens = any(_render(c).strip() == "(" for c in nodes)
-            for c in nodes:
-                kw = _keyword_of(c)
-                if kw == "function" and name is None and not prefix:
-                    prefix = "function "
-                    continue
-                if name is None and (isinstance(c, str) or _is_leaf(c) or type(c).__name__ == "func_name"):
-                    name = _render(c)
-                    continue
-                if _render(c).strip() in ("(", ")"):
-                    continue
-                body.append(c)
-            return prefix + name + (" ()" if has_parens else "") + " {\n" + "\n".join(p for p in (_render(c) for c in _flatten_anon(body)) if p) + "\n}"
-
-    class try_always:
-        """try_always: { body } always { cleanup }, on one line at the join."""
-        def to_source(self):
-            items = list(_flatten_anon(children(self)))
-            i = next(k for k, c in enumerate(items) if _keyword_of(c) == "always")
-            body = "\n".join(p for p in (_render(c) for c in items[:i]) if p)
-            cleanup = "\n".join(p for p in (_render(c) for c in items[i + 1:]) if p)
-            return body + " always " + cleanup
-
-    class brace_word:
-        """brace_word: {a,b}. Its tokens are contiguous, so they are joined without spaces."""
-        def to_source(self):
-            return "".join(_render(c) for c in _flatten_anon(children(self)))
-
-    class grouping:
-        """grouping: { statements; }"""
-        def to_source(self):
-            return "{\n" + "\n".join(p for p in (_render(c) for c in _flatten_anon(children(self))) if p) + "\n}"
-
-    class subshell:
-        """subshell: ( statements )"""
-        def to_source(self):
-            # The kept ( and ) are children, so they are rendered in place.
-            return "\n".join(p for p in (_render(c) for c in _flatten_anon(children(self))) if p)
-
-    class case_stmt:
-        """case_stmt: header, one arm per line, then esac."""
-        def to_source(self):
-            word = []
-            arms = []
-            seen_in = False
-            for c in _flatten_anon(children(self)):
-                kw = _keyword_of(c)
-                if kw == "in":
-                    seen_in = True
-                    continue
-                if kw in ("case", "esac"):
-                    continue
-                if type(c).__name__ in ("case_arm", "case_final"):
-                    arms.append(_render(c))
-                elif kw is None and not seen_in:
-                    word.append(c)
-                elif kw is None:
-                    # A comment between the arms and esac stays with the arms.
-                    piece = _render(c).strip()
-                    if piece:
-                        arms.append(piece)
-            header = "case " + _join_source(word) + " in"
-            return header + "\n" + "\n".join(a for a in arms if a) + "\nesac"
-
-    class case_body:
-        """case_body: pattern followed by its statements."""
-        def to_source(self):
-            # The pattern is the leading words (tokens or a case_pattern node);
-            # everything after it is the arm's statements.
-            # Only a direct rparen_vis child closes the pattern. A ) inside a
-            # (a|b) group sits deeper, so the group stays whole.
-            direct = children(self)
-            n = next((i + 1 for i, c in enumerate(direct) if type(c).__name__ == "rparen_vis"), 0)
-            pattern = _join_source(list(_flatten_anon(direct[:n]))).rstrip()
-            stmts = direct[n:]
-            if not pattern.endswith(")"):
-                pattern += ")"
-            return pattern + "\n" + "\n".join(p for p in (_render(c) for c in _flatten_anon(stmts)) if p)
-
-    class case_arm:
-        """case_arm: body and its terminator (;;, ;&, ;|)."""
-        def to_source(self):
-            parts = []
-            term = ";;"
-            seen_term = False
-            trailer = ""
-            for c in _flatten_anon(children(self)):
-                piece = _render(c).strip()
-                if piece in (";;", ";&", ";|"):
-                    term = piece
-                    seen_term = True
-                elif piece and seen_term:
-                    # A comment after the terminator stays on the terminator's line.
-                    trailer = piece
-                elif piece:
-                    parts.append(piece)
-            return "\n".join(parts) + "\n" + term + (" " + trailer if trailer else "")
-
-    class case_final:
-        """case_final: last arm, which may have no terminator."""
-        def to_source(self):
-            parts = []
-            for c in _flatten_anon(children(self)):
-                piece = _render(c)
-                if piece:
-                    parts.append(piece)
-            return "\n".join(parts)
-
-    class named_fd:
-        """named_fd: {name} before a redirection."""
-        def to_source(self):
-            inner = "".join(_render(c) for c in _flatten_anon(children(self)))
-            return "{" + inner.strip("{} ") + "}"
-
-    class arith_stmt:
-        """arith_stmt: (( expression ))"""
-        def to_source(self):
-            return "(( " + _join_source(children(self)) + " ))"
-
-    class arith_body:
-        """arith_body: the expression inside (( )), tokens separated by spaces."""
-        def to_source(self):
-            return " ".join(p for p in (_render(c) for c in _flatten_anon(children(self))) if p)
-
-    class for_arith:
-        """for ((init; test; step)) do ... done, or the brace form."""
-        def to_source(self):
-            items = list(_flatten_anon(children(self)))
-            head = "for (("
-            body_start = len(items)
-            for i, c in enumerate(items):
-                if type(c).__name__ == "arith_body":
-                    head += _render(c) + "))"
-                    body_start = i + 1
-                    break
-            rest = items[body_start:]
-            if any(_keyword_of(c) == "do" for c in rest):
-                nodes = rest
-                out = ""
-                body = False
-                for c in _flatten_anon(nodes):
-                    kw = _keyword_of(c)
-                    if kw is None:
-                        piece = _render(c)
-                        if not piece:
-                            continue
-                        if body:
-                            out += piece + "\n"
-                        else:
-                            out += (" " if out and not out.endswith(" ") else "") + piece
-                    elif kw in ("then", "do"):
-                        out = out.rstrip(" ") + "; " + kw + "\n"
-                        body = True
-                    elif kw == "else":
-                        out = out if out.endswith("\n") else out + "\n"
-                        out += "else\n"
-                        body = True
-                    elif kw == "elif":
-                        out = out if out.endswith("\n") else out + "\n"
-                        out += "elif "
-                        body = False
-                    elif kw in ("fi", "done"):
-                        out = out if out.endswith("\n") else out + "\n"
-                        out += kw
-                        body = False
-                    else:
-                        out += (" " if out and not out.endswith(" ") else "") + kw + " "
-                return head + out.rstrip()
-            # zsh brace body: normalise to do/done
-            return head + "; do\n" + "\n".join(p for p in (_render(c) for c in _flatten_anon(rest)) if p) + "\ndone"
-
-    class for_alt:
-        """for name (list); do ... done (zsh form)"""
-        def to_source(self):
-            items = list(_flatten_anon(children(self)))
-            k = next((i for i, c in enumerate(items) if _keyword_of(c) == "do"), len(items))
-            head = [c for c in items[:k] if _keyword_of(c) is None]
-            name = _render(head[0]) if head else ""
-            words = _join_source(head[1:])
-            nodes = items[k:]
-            out = ""
-            body = False
-            for c in _flatten_anon(nodes):
-                kw = _keyword_of(c)
-                if kw is None:
-                    piece = _render(c)
-                    if not piece:
-                        continue
-                    if body:
-                        out += piece + "\n"
-                    else:
-                        out += (" " if out and not out.endswith(" ") else "") + piece
-                elif kw in ("then", "do"):
-                    out = out.rstrip(" ") + "; " + kw + "\n"
-                    body = True
-                elif kw == "else":
-                    out = out if out.endswith("\n") else out + "\n"
-                    out += "else\n"
-                    body = True
-                elif kw == "elif":
-                    out = out if out.endswith("\n") else out + "\n"
-                    out += "elif "
-                    body = False
-                elif kw in ("fi", "done"):
-                    out = out if out.endswith("\n") else out + "\n"
-                    out += kw
-                    body = False
-                else:
-                    out += (" " if out and not out.endswith(" ") else "") + kw + " "
-            return "for " + name + " (" + words + ")" + out.rstrip()
-
-    class for_positional:
-        """for name; do ... done (positional form)"""
-        def to_source(self):
-            nodes = children(self)
-            out = ""
-            body = False
-            for c in _flatten_anon(nodes):
-                kw = _keyword_of(c)
-                if kw is None:
-                    piece = _render(c)
-                    if not piece:
-                        continue
-                    if body:
-                        out += piece + "\n"
-                    else:
-                        out += (" " if out and not out.endswith(" ") else "") + piece
-                elif kw in ("then", "do"):
-                    out = out.rstrip(" ") + "; " + kw + "\n"
-                    body = True
-                elif kw == "else":
-                    out = out if out.endswith("\n") else out + "\n"
-                    out += "else\n"
-                    body = True
-                elif kw == "elif":
-                    out = out if out.endswith("\n") else out + "\n"
-                    out += "elif "
-                    body = False
-                elif kw in ("fi", "done"):
-                    out = out if out.endswith("\n") else out + "\n"
-                    out += kw
-                    body = False
-                else:
-                    out += (" " if out and not out.endswith(" ") else "") + kw + " "
-            return out.rstrip()
-
-    class elif_branch:
-        """elif_branch: elif condition; then body"""
-        def to_source(self):
-            nodes = children(self)
-            out = ""
-            body = False
-            for c in _flatten_anon(nodes):
-                kw = _keyword_of(c)
-                if kw is None:
-                    piece = _render(c)
-                    if not piece:
-                        continue
-                    if body:
-                        out += piece + "\n"
-                    else:
-                        out += (" " if out and not out.endswith(" ") else "") + piece
-                elif kw in ("then", "do"):
-                    out = out.rstrip(" ") + "; " + kw + "\n"
-                    body = True
-                elif kw == "else":
-                    out = out if out.endswith("\n") else out + "\n"
-                    out += "else\n"
-                    body = True
-                elif kw == "elif":
-                    out = out if out.endswith("\n") else out + "\n"
-                    out += "elif "
-                    body = False
-                elif kw in ("fi", "done"):
-                    out = out if out.endswith("\n") else out + "\n"
-                    out += kw
-                    body = False
-                else:
-                    out += (" " if out and not out.endswith(" ") else "") + kw + " "
-            return out.rstrip()
-
-    class else_branch:
-        """else_branch: else body"""
-        def to_source(self):
-            nodes = children(self)
-            out = ""
-            body = False
-            for c in _flatten_anon(nodes):
-                kw = _keyword_of(c)
-                if kw is None:
-                    piece = _render(c)
-                    if not piece:
-                        continue
-                    if body:
-                        out += piece + "\n"
-                    else:
-                        out += (" " if out and not out.endswith(" ") else "") + piece
-                elif kw in ("then", "do"):
-                    out = out.rstrip(" ") + "; " + kw + "\n"
-                    body = True
-                elif kw == "else":
-                    out = out if out.endswith("\n") else out + "\n"
-                    out += "else\n"
-                    body = True
-                elif kw == "elif":
-                    out = out if out.endswith("\n") else out + "\n"
-                    out += "elif "
-                    body = False
-                elif kw in ("fi", "done"):
-                    out = out if out.endswith("\n") else out + "\n"
-                    out += kw
-                    body = False
-                else:
-                    out += (" " if out and not out.endswith(" ") else "") + kw + " "
-            return out.rstrip()
-
-    class if_stmt:
-        """if_stmt: rendered from its keywords and bodies."""
-        def to_source(self):
-            nodes = children(self)
-            out = ""
-            body = False
-            for c in _flatten_anon(nodes):
-                kw = _keyword_of(c)
-                if kw is None:
-                    piece = _render(c)
-                    if not piece:
-                        continue
-                    if body:
-                        out += piece + "\n"
-                    else:
-                        out += (" " if out and not out.endswith(" ") else "") + piece
-                elif kw in ("then", "do"):
-                    out = out.rstrip(" ") + "; " + kw + "\n"
-                    body = True
-                elif kw == "else":
-                    out = out if out.endswith("\n") else out + "\n"
-                    out += "else\n"
-                    body = True
-                elif kw == "elif":
-                    out = out if out.endswith("\n") else out + "\n"
-                    out += "elif "
-                    body = False
-                elif kw in ("fi", "done"):
-                    out = out if out.endswith("\n") else out + "\n"
-                    out += kw
-                    body = False
-                else:
-                    out += (" " if out and not out.endswith(" ") else "") + kw + " "
-            return out.rstrip()
-
-    class while_stmt:
-        """while_stmt: rendered from its keywords and bodies."""
-        def to_source(self):
-            nodes = children(self)
-            out = ""
-            body = False
-            for c in _flatten_anon(nodes):
-                kw = _keyword_of(c)
-                if kw is None:
-                    piece = _render(c)
-                    if not piece:
-                        continue
-                    if body:
-                        out += piece + "\n"
-                    else:
-                        out += (" " if out and not out.endswith(" ") else "") + piece
-                elif kw in ("then", "do"):
-                    out = out.rstrip(" ") + "; " + kw + "\n"
-                    body = True
-                elif kw == "else":
-                    out = out if out.endswith("\n") else out + "\n"
-                    out += "else\n"
-                    body = True
-                elif kw == "elif":
-                    out = out if out.endswith("\n") else out + "\n"
-                    out += "elif "
-                    body = False
-                elif kw in ("fi", "done"):
-                    out = out if out.endswith("\n") else out + "\n"
-                    out += kw
-                    body = False
-                else:
-                    out += (" " if out and not out.endswith(" ") else "") + kw + " "
-            return out.rstrip()
-
-    class until_stmt:
-        """until_stmt: rendered from its keywords and bodies."""
-        def to_source(self):
-            nodes = children(self)
-            out = ""
-            body = False
-            for c in _flatten_anon(nodes):
-                kw = _keyword_of(c)
-                if kw is None:
-                    piece = _render(c)
-                    if not piece:
-                        continue
-                    if body:
-                        out += piece + "\n"
-                    else:
-                        out += (" " if out and not out.endswith(" ") else "") + piece
-                elif kw in ("then", "do"):
-                    out = out.rstrip(" ") + "; " + kw + "\n"
-                    body = True
-                elif kw == "else":
-                    out = out if out.endswith("\n") else out + "\n"
-                    out += "else\n"
-                    body = True
-                elif kw == "elif":
-                    out = out if out.endswith("\n") else out + "\n"
-                    out += "elif "
-                    body = False
-                elif kw in ("fi", "done"):
-                    out = out if out.endswith("\n") else out + "\n"
-                    out += kw
-                    body = False
-                else:
-                    out += (" " if out and not out.endswith(" ") else "") + kw + " "
-            return out.rstrip()
-
-    class for_stmt:
-        """for_stmt: rendered from its keywords and bodies."""
-        def to_source(self):
-            nodes = children(self)
-            out = ""
-            body = False
-            for c in _flatten_anon(nodes):
-                kw = _keyword_of(c)
-                if kw is None:
-                    piece = _render(c)
-                    if not piece:
-                        continue
-                    if body:
-                        out += piece + "\n"
-                    else:
-                        out += (" " if out and not out.endswith(" ") else "") + piece
-                elif kw in ("then", "do"):
-                    out = out.rstrip(" ") + "; " + kw + "\n"
-                    body = True
-                elif kw == "else":
-                    out = out if out.endswith("\n") else out + "\n"
-                    out += "else\n"
-                    body = True
-                elif kw == "elif":
-                    out = out if out.endswith("\n") else out + "\n"
-                    out += "elif "
-                    body = False
-                elif kw in ("fi", "done"):
-                    out = out if out.endswith("\n") else out + "\n"
-                    out += kw
-                    body = False
-                else:
-                    out += (" " if out and not out.endswith(" ") else "") + kw + " "
-            return out.rstrip()
 
     class script:
         """script ::= statement*"""
@@ -1342,7 +931,7 @@ class ZshStyleGrammar(Grammar):
             return issues
 
         def to_source(self):
-            return "\n".join(p for p in (_render(c) for c in _flatten_anon(children(self))) if p) + "\n"
+            return _lines(self.parts("statement"))
 
 
 # ============================================================
