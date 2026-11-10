@@ -252,6 +252,10 @@ def _render(node):
         # A comment runs to the end of its line, so it must end the line.
         if getattr(node, "type", None) == TOKEN_TYPES["COMMENT"]:
             return node.string + "\n"
+        # A heredoc token carries the newline that ends its terminator line; the
+        # statement joiner supplies that newline, so it is dropped here.
+        if getattr(node, "type", None) == TOKEN_TYPES["HEREDOC"]:
+            return node.string.rstrip("\n")
         return node.string
     fn = getattr(node, "to_source", None)
     return fn() if fn else _join_source(children(node))
@@ -946,13 +950,19 @@ class ZshStyleGrammar(Grammar):
         def to_source(self):
             parts = []
             term = ";;"
+            seen_term = False
+            trailer = ""
             for c in _flatten_anon(children(self)):
                 piece = _render(c).strip()
                 if piece in (";;", ";&", ";|"):
                     term = piece
+                    seen_term = True
+                elif piece and seen_term:
+                    # A comment after the terminator stays on the terminator's line.
+                    trailer = piece
                 elif piece:
                     parts.append(piece)
-            return "\n".join(parts) + "\n" + term
+            return "\n".join(parts) + "\n" + term + (" " + trailer if trailer else "")
 
     class case_final:
         """case_final: last arm, which may have no terminator."""
