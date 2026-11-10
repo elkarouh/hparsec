@@ -310,7 +310,8 @@ class ZshStyleGrammar(Grammar):
     pipeline_item = command | ((grouping | subshell | while_stmt | until_stmt | for_stmt | if_stmt | case_stmt) + redir[:])
     
     # Operators may be followed by a line break: `a |\n  b` and `a &&\n  b`.
-    pipeline = as_node(pipeline_item) + ((PIPE | PIPE_AMP) + NEWLINE[:] + as_node(pipeline_item))[:]
+    # `time` is a reserved word that may prefix a pipeline: `time ./job.ksh args`.
+    pipeline = literal("time")[0:1] + as_node(pipeline_item) + ((PIPE | PIPE_AMP) + NEWLINE[:] + as_node(pipeline_item))[:]
     
     # `! cmd` — command negation prefix
     # `! x=$(cmd) || ...` negates an assignment as well as a command.
@@ -720,6 +721,7 @@ def _run_self_tests():
             ("comment between if condition and then", "if a\n# c\nthen\n  :\nfi\n"),
             ("comment after then", "if a; then # x\n  :\nfi\n"),
             ("= inside assignment value", "PP=dumpfile=${DMP_FILE}\n"),
+            ("time prefixes a pipeline", "time ./job.ksh args | tee\n"),
             ("assignment value then argument", "x=a b\n"),
             ("for-alt", "for f (*.txt) do\n  echo $f\ndone\n"),
             ("select", "select opt in a b c; do\n  echo $opt\ndone\n"),
