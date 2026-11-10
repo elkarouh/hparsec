@@ -3,7 +3,7 @@ export PYTHONPATH := $(CURDIR)/src$(if $(PYTHONPATH),:$(PYTHONPATH))
 
 ZSH := tools/zsh_linter
 
-.PHONY: test selftest examples zsh corpus verbose bench profile install
+.PHONY: test selftest examples zsh corpus verbose bench profile install install-pip
 
 test: selftest examples zsh corpus
 
@@ -17,6 +17,13 @@ install:
 	printf '%s\n' '#!/bin/sh' 'PYTHONPATH="$(CURDIR)/src:$(CURDIR)/tools/zsh_linter$${PYTHONPATH:+:$$PYTHONPATH}" exec python3 -m zsh_linter "$$@"' > $(INSTALL_DIR)/zsh-lint
 	chmod +x $(INSTALL_DIR)/zsh-lint
 	@echo "installed $(INSTALL_DIR)/zsh-lint"
+
+# Install hparsec and zsh_linter as Python packages with an installer of your choice,
+# e.g. make install-pip PIP=pip_install. The installer must accept pip's arguments.
+PIP ?= python3 -m pip
+
+install-pip:
+	$(PIP) install -e . -e ./tools/zsh_linter
 
 # Built-in self-tests of the library modules
 selftest:
