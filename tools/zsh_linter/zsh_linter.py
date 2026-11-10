@@ -113,7 +113,10 @@ class ZshTerminals(Terminals):
     assign_eq_empty = expect_type_node(TOKEN_TYPES["ASSIGN_EMPTY"])
     # `FS=: read` — a bare `:` is a valid assignment value.
     assign_value_colon = filt(lambda tok: tok.string == ":", expect_type_node(TOKEN_TYPES["OP"]))
-    assign_word = (assign_name + assign_eq + (_basic_arg | assign_value_colon)) | (assign_name + assign_eq_empty)
+    # A value may itself contain `=`: `PP=dumpfile=${DMP}` is one word with the value
+    # `dumpfile=${DMP}`. Only `=` continues the value, so the next argument is not taken.
+    assign_value = (_basic_arg | assign_value_colon) + (assign_eq + _basic_arg)[0:]
+    assign_word = (assign_name + assign_eq + assign_value) | (assign_name + assign_eq_empty)
 
 # HELPERS
 def _expansion_issues(node, backticks_only=False):
@@ -247,7 +250,7 @@ class ZshStyleGrammar(Grammar):
     # Assignment values and array elements are not word-split by zsh, so they are
     # parsed as plain expansions (not `argument` nodes) and are not linted.
     array_literal = LPAREN + (ZshTerminals._basic_arg | NEWLINE)[:] + RPAREN
-    assign_rhs = array_literal | ZshTerminals._basic_arg | ZshTerminals.assign_value_colon
+    assign_rhs = array_literal | ZshTerminals.assign_value
 
     assign_target = assign_name | number   # `0=${...}` and other numeric names
 
@@ -716,6 +719,8 @@ def _run_self_tests():
             ("redirect between arguments", "cmd 2>&1 arg\n"),
             ("comment between if condition and then", "if a\n# c\nthen\n  :\nfi\n"),
             ("comment after then", "if a; then # x\n  :\nfi\n"),
+            ("= inside assignment value", "PP=dumpfile=${DMP_FILE}\n"),
+            ("assignment value then argument", "x=a b\n"),
             ("for-alt", "for f (*.txt) do\n  echo $f\ndone\n"),
             ("select", "select opt in a b c; do\n  echo $opt\ndone\n"),
             ("heredoc", "cat <<EOF\nhello\nEOF\n"),
