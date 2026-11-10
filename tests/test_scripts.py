@@ -11,13 +11,14 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 SRC = ROOT / "src"
+ADY = ROOT / "ady_helpers"
 ZSH = ROOT / "tools" / "zsh_linter"
 
 
 def _run(*args):
     env = dict(os.environ)
     env["PYTHONPATH"] = os.pathsep.join(
-        p for p in (str(SRC), env.get("PYTHONPATH", "")) if p
+        p for p in (str(SRC), str(ADY), env.get("PYTHONPATH", "")) if p
     )
     return subprocess.run(
         [sys.executable, "-B", *map(str, args)],
@@ -37,7 +38,7 @@ class ScriptTests(unittest.TestCase):
         self.check(SRC / "hparsec.py", expect="All tests passed.")
 
     def test_ady_tokenizer_selftest(self):
-        self.check(SRC / "ady_tokenizer.py", expect="OK")
+        self.check(ADY / "ady_tokenizer.py", expect="OK")
 
     def test_expression_parser(self):
         self.check(ROOT / "examples" / "expression_parser.py")

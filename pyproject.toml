@@ -12,4 +12,4 @@ dependencies = []
 
 [tool.setuptools]
 package-dir = {"" = "src"}
-py-modules = ["hparsec", "ady_tokenizer", "hek_helpers"]
+py-modules = ["hparsec"]

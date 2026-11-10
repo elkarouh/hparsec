@@ -1,5 +1,5 @@
 PYTHON ?= python3
-export PYTHONPATH := $(CURDIR)/src$(if $(PYTHONPATH),:$(PYTHONPATH))
+export PYTHONPATH := $(CURDIR)/src:$(CURDIR)/ady_helpers$(if $(PYTHONPATH),:$(PYTHONPATH))
 
 ZSH := tools/zsh_linter
 
@@ -14,7 +14,7 @@ INSTALL_DIR ?= $(HOME)/.local/bin
 
 install:
 	mkdir -p $(INSTALL_DIR)
-	printf '%s\n' '#!/bin/sh' 'PYTHONPATH="$(CURDIR)/src:$(CURDIR)/tools/zsh_linter$${PYTHONPATH:+:$$PYTHONPATH}" exec python3 -m zsh_linter "$$@"' > $(INSTALL_DIR)/zsh-lint
+	printf '%s\n' '#!/bin/sh' 'PYTHONPATH="$(CURDIR)/src:$(CURDIR)/ady_helpers:$(CURDIR)/tools/zsh_linter$${PYTHONPATH:+:$$PYTHONPATH}" exec python3 -m zsh_linter "$$@"' > $(INSTALL_DIR)/zsh-lint
 	chmod +x $(INSTALL_DIR)/zsh-lint
 	@echo "installed $(INSTALL_DIR)/zsh-lint"
 
@@ -28,7 +28,7 @@ install-pip:
 # Built-in self-tests of the library modules
 selftest:
 	$(PYTHON) -B src/hparsec.py
-	$(PYTHON) -B src/ady_tokenizer.py
+	$(PYTHON) -B ady_helpers/ady_tokenizer.py
 
 # Example grammars (each asserts its own results)
 examples:

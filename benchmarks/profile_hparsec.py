@@ -4,8 +4,8 @@
 Usage:
     python benchmarks/profile_hparsec.py --terms 3000
 
-By default the library is loaded from the repository's src/ directory; pass
---source-dir to point at another copy of hparsec.py and ady_tokenizer.py.
+By default the library is loaded from the repository's src/ directory (with ady_helpers/ on the path); pass
+--source-dir to point at another copy of hparsec.py.
 Tokenization is deliberately excluded from the cProfile measurements.
 """
 from __future__ import annotations
@@ -33,6 +33,7 @@ def main() -> None:
         ap.error("--terms must be at least 1")
 
     sys.path.insert(0, str(Path(args.source_dir).resolve()))
+    sys.path.insert(1, str(Path(__file__).resolve().parent.parent / "ady_helpers"))
     from hparsec import Input, NUMBER, PLUS, ParserState, fw
 
     # expr ::= expr '+' NUMBER | NUMBER
