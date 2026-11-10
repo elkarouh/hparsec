@@ -295,7 +295,8 @@ class ZshStyleGrammar(Grammar):
     assignment = (
         assign_target + subscript[0:1]
         + (((assign_eq | PLUSEQUAL | MINEQUAL) + assign_rhs)
-           | (assign_eq_empty + (~argument))  # `IFS= read` is a prefix assignment, not this
+           # `IFS= read` is a prefix assignment, not this. `A= B=` is two empty assignments.
+           | (assign_eq_empty + (~argument | assign_word))
            | PLUSEQUAL | MINEQUAL)
         + assign_word[:]
     )
@@ -384,7 +385,10 @@ class ZshStyleGrammar(Grammar):
         # after them: `{ a; } | tee`. Listing them here first would stop the choice early.
         | declaration | declaration2
     )    
-    and_or = as_node(and_or_item) + ((AND_AND | OR_OR) + (NEWLINE | comment)[:] + as_node(and_or_item))[:]
+    # zsh accepts `&&` at the end of a line before a closing or branch keyword: `echo x &&` NEWLINE `fi` or `else`.
+    and_or_closer = filt(lambda tok: tok.string in ("fi", "done", "esac", "else", "elif"), shift)
+    and_or = as_node(and_or_item) + ((AND_AND | OR_OR) + (NEWLINE | comment)[:]
+                                     + (as_node(and_or_item) | ~(~and_or_closer)))[:]
 
     # All four control-flow conditions now accept and_or chains:
     #   if [[ -f x ]] && (( i++ )); then ... fi
