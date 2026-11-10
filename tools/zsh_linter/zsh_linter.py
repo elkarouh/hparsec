@@ -138,7 +138,7 @@ class ZshTerminals(Terminals):
     # A value may also be followed by glued word parts: `x=${a}${b}.txt`. Only tokens
     # touching the previous one continue the value, so `x=a b` still ends at `a`.
     glued_part = filt(lambda tok: tok.glued and (tok.type != TOKEN_TYPES["OP"]
-                                                 or tok.string in (".", "$", "^", "+", "-", "!", ",", "%", "*", "?", "/", "@", "~", ":", "[", "]", "{", "}"))
+                                                 or tok.string in (".", "$", "^", "+", "-", "!", ",", "%", "*", "?", "/", "@", "~", ":", "[", "]", "{", "}", "=", "=="))
                       and tok.type not in (TOKEN_TYPES["NEWLINE"], TOKEN_TYPES["COMMENT"]), shift)
     assign_value = (_basic_arg | assign_value_colon) + ((assign_eq + _basic_arg) | glued_part)[0:]
     assign_word = (assign_name + subscript[0:1] + assign_eq + assign_value) | (assign_name + assign_eq + assign_value) | (assign_name + assign_eq_empty)
