@@ -94,7 +94,10 @@ class ZshTerminals(Terminals):
 
     # A bare `=` followed by a space is ASSIGN_EMPTY; as an argument it is just a word
     # (`test $x = 0`).
-    _basic_arg = (backtick | cmd_subst | arith_exp | var_exp | heredoc | string
+    # A brace group in argument position is a brace-expansion word: `{01..$N}`, `{a,b}`.
+    # Ignored in the AST, so its contents are not linted as expansions.
+    brace_word = ignore(LBRACE + ((~RBRACE) + shift)[:] + RBRACE)
+    _basic_arg = (backtick | cmd_subst | arith_exp | var_exp | heredoc | string | brace_word
                   | number | glob_qual | subscript | argument_identifier | expect_type_node(TOKEN_TYPES["ASSIGN_EMPTY"])
                   # Bare pattern characters are word parts in zsh: `fd -tx remove$ dir`,
                   # `grep -v ^N_`, `grep .+%U.+`. Ignored so they are not mistaken for expansions.
@@ -360,15 +363,17 @@ class ZshStyleGrammar(Grammar):
     )
 
     # FIX 4: Support multiple loop variables: `for a b in ...` and `for a b; do ...`
-    # Changed `identifier` to `identifier[1:]` (one or more identifiers).
-    for_alt = (literal("for") + identifier[1:] + LPAREN + argument[:] + RPAREN + STATEMENT_SEP[:]
+    # Loop variables are plain names, so reserved words are allowed: `for repeat in ...`.
+    # The first name may be any word; later names must not be the keywords `in` or `do`.
+    loop_names = assign_name + filt(lambda tok: tok.string not in ("in", "do"), assign_name)[:]
+    for_alt = (literal("for") + loop_names + LPAREN + argument[:] + RPAREN + STATEMENT_SEP[:]
                + literal("do") + STATEMENT_SEP[:] + inner_statement[:]
                + STATEMENT_SEP[:] + literal("done"))
-    for_stmt = (literal("for") + identifier[1:] + literal("in") + argument[:] + STATEMENT_SEP[:]
+    for_stmt = (literal("for") + loop_names + literal("in") + argument[:] + STATEMENT_SEP[:]
                 + literal("do") + STATEMENT_SEP[:] + inner_statement[:]
                 + STATEMENT_SEP[:] + literal("done"))
     # `for x y; do ...` iterates over the positional parameters (no `in` list).
-    for_positional = (literal("for") + identifier[1:] + STATEMENT_SEP[:]
+    for_positional = (literal("for") + loop_names + STATEMENT_SEP[:]
                 + literal("do") + STATEMENT_SEP[:] + inner_statement[:]
                 + STATEMENT_SEP[:] + literal("done"))
     foreach_stmt = (literal("foreach") + identifier[1:] + LPAREN + argument[:] + RPAREN + STATEMENT_SEP[:]
@@ -732,6 +737,9 @@ def _run_self_tests():
             ("heredoc with punctuation delimiter", "sqlplus -s / <<!eof\nselect 1;\n!eof\n"),
             ("plus inside a pattern argument", "grep -E -e .+%U.+ -e .+%u.+ file\n"),
             ("assignment piped", "P=$(echo a | tr a b) |tr a b\n"),
+            ("brace range word", "for r in {01..$N}; do echo $r; done\n"),
+            ("reserved word as loop variable", "for repeat in x; do echo; done\n"),
+            ("positional for loop", "for i do echo $i; done\n"),
             ("assignment value then argument", "x=a b\n"),
             ("for-alt", "for f (*.txt) do\n  echo $f\ndone\n"),
             ("select", "select opt in a b c; do\n  echo $opt\ndone\n"),
