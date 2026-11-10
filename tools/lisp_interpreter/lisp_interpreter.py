@@ -26,10 +26,13 @@ from hparsec import (
     Grammar,
     ParserState,
     Terminals,
+    TokenStream,
     as_node,
-    expect_type,
+    filt,
+    ignore,
     literal,
     parts,
+    shift,
     SymbolTable,
 )
 
@@ -38,44 +41,7 @@ class LispError(Exception):
     """An error in the Lisp program: a syntax error, or a run-time error."""
 
 
-TOKEN_SPEC = [
-    ("LPAREN", r"\("),
-    ("RPAREN", r"\)"),
-    ("ATOM", r"[^\s()';]+"),
-    ("COMMENT", r";[^\n]*"),
-    ("SKIP", r"\s+"),
-]
-TOKEN_RE = re.compile("|".join(f"(?P<{name}>{pattern})" for name, pattern in TOKEN_SPEC))
 NUMBER_RE = re.compile(r"[-+]?\d+(?:\.\d+)?")
-
-TOKEN_TYPES = {"NUMBER": 1, "SYMBOL": 2, "LPAREN": 3, "RPAREN": 4}
-
-
-class Token:
-    def __init__(self, type, string):
-        self.type = type
-        self.string = string
-
-    def __repr__(self):
-        return f"Token({self.type!r}, {self.string!r})"
-
-
-def tokenize(source):
-    """Split source into tokens. Numbers are recognized here, symbols are everything else."""
-    tokens = []
-    pos = 0
-    while pos < len(source):
-        match = TOKEN_RE.match(source, pos)
-        if match is None:
-            raise LispError(f"unexpected character {source[pos]!r}")
-        pos = match.end()
-        kind, text = match.lastgroup, match.group()
-        if kind in ("SKIP", "COMMENT"):
-            continue
-        if kind == "ATOM":
-            kind = "NUMBER" if NUMBER_RE.fullmatch(text) else "SYMBOL"
-        tokens.append(Token(TOKEN_TYPES[kind], text))
-    return tokens
 
 
 def _number(text):
@@ -208,16 +174,19 @@ def standard_procedures(env):
 
 
 # ============================================================
-# Terminals
+# Terminals: the source is read one character at a time
 # ============================================================
 
 class LispTerminals(Terminals):
-    number = expect_type(TOKEN_TYPES["NUMBER"])
-    symbol = expect_type(TOKEN_TYPES["SYMBOL"])
-
     # Uppercase terminals are ignored in the tree
-    LPAREN = literal("(")
-    RPAREN = literal(")")
+    WS = filt(str.isspace, shift)
+    COMMENT = literal(";") + filt(lambda c: c != "\n", shift)[:]
+    SKIP = (WS | COMMENT)[:]
+    LPAREN = SKIP + literal("(")
+    RPAREN = SKIP + literal(")")
+
+    # Lowercase terminals are kept in the tree
+    sym_char = filt(lambda c: not c.isspace() and c not in "()';", shift)
 
 
 # ============================================================
@@ -231,19 +200,19 @@ class LispGrammar(Grammar):
             """The node's parts in source order (see hparsec.parts)."""
             return list(parts(self))
 
-    program = expression[:]
-    expression = as_node(atom | list_form)
-    atom = as_node(number | symbol)
+    program = expression[:] + SKIP
+    expression = as_node(symbol | list_form)
+    symbol = SKIP + sym_char[1:]
     list_form = LPAREN + expression[:] + RPAREN
 
     class program:
-        """program ::= expression*"""
+        """program ::= expression* SKIP"""
         def run(self, env):
             results = [item.evaluate(env) for item in self.expression_list]
             return results[-1] if results else None
 
     class expression:
-        """expression ::= atom | list_form"""
+        """expression ::= symbol | list_form"""
         def evaluate(self, env):
             return self.parts()[0].evaluate(env)
 
@@ -253,20 +222,24 @@ class LispGrammar(Grammar):
         def symbol_name(self):
             return self.parts()[0].symbol_name()
 
-    class atom:
-        """atom ::= number | symbol"""
+    class symbol:
+        """symbol ::= SKIP sym_char+; the characters are a number when they form one, else a name"""
+        def text(self):
+            return "".join(part.node for part in self.parts())
+
         def evaluate(self, env):
-            if self.number is not None:
-                return _number(self.number.node)
-            return env.lookup(self.symbol.node)
+            text = self.text()
+            if NUMBER_RE.fullmatch(text):
+                return _number(text)
+            return env.lookup(text)
 
         def datum(self):
-            if self.number is not None:
-                return _number(self.number.node)
-            return self.symbol.node
+            text = self.text()
+            return _number(text) if NUMBER_RE.fullmatch(text) else text
 
         def symbol_name(self):
-            return self.symbol.node if self.symbol is not None else None
+            text = self.text()
+            return None if NUMBER_RE.fullmatch(text) else text
 
     class list_form:
         """list_form ::= LPAREN expression* RPAREN"""
@@ -350,12 +323,13 @@ class LispGrammar(Grammar):
 def parse(source):
     """Parse source into a program node. Raises LispError on a syntax error."""
     ParserState.reset()
-    result = program.parse(tokenize(source))
+    result = program.parse(TokenStream(source))
     if not result:
         raise LispError("syntax error")
     ast, stream = result
     if stream.pos != len(stream.tokens):
-        raise LispError("syntax error: unbalanced parentheses or an unexpected ')'")
+        near = source[stream.pos:stream.pos + 12]
+        raise LispError(f"syntax error at character {stream.pos}, near {near!r} (unbalanced parentheses or an unexpected ')')")
     return ast
 
 
