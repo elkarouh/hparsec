@@ -41,7 +41,7 @@ TOKEN_TYPES = {
 _OP_TOKENS = (
     "<<<", "<<-", "<<", ">>", ">&", "<&", ">|", "&>>", "&>",
     "&|", "&!",
-    "&&", "||", "|&", "==", "!=", ";;", ";|", ";&",
+    "&&", "||", "|&", "==", "!=", "=~", ";;", ";|", ";&",
     "++", "--", "+=", "-=",
     "[[", "]]",
     "=", ";", "(", ")", "{", "}", "|", "[", "]", "<", ">", "!", "&", "$",
@@ -477,10 +477,17 @@ def tokenize_zsh(source):
         matched = False
         for op in _OP_TOKENS:
             if source.startswith(op, i):
+                # `=~` is the regex match operator only after whitespace: `[[ $x =~ re ]]`.
+                # In `PATH=~/bin` it is an assignment followed by a tilde.
+                if op == "=~" and not (i > 0 and source[i - 1] in " \t"):
+                    continue
                 # A bare `=` followed by whitespace or a separator is an empty
                 # assignment (`IFS= read`); `x=y` has no space and stays OP.
                 if op == "=" and (i + 1 >= len(source) or source[i + 1] in " \t\r\n;&|)"):
                     push("ASSIGN_EMPTY", op, start)
+                elif op == "]]" and i > 0 and source[i - 1] == ":":
+                    # The ]] of a [:class:] bracket inside [[ ]]: `[[ $x =~ [[:alpha:]] ]]`.
+                    push("IDENT", op, start)
                 else:
                     push("OP", op, start)
                 i += len(op)

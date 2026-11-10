@@ -54,7 +54,8 @@ class ZshTerminals(Terminals):
     lbracket = filt(lambda tok: tok.string == "[", shift, name="[")
     rbracket = filt(lambda tok: tok.string == "]", shift, name="]")
     dlbracket = filt(lambda tok: tok.string == "[[", shift, name="[[")
-    drbracket = filt(lambda tok: tok.string == "]]", shift, name="]]")
+    # Only the operator closes [[ ]]; the ]] of a [[:alpha:]] class is an IDENT token.
+    drbracket = filt(lambda tok: tok.string == "]]" and tok.type == TOKEN_TYPES["OP"], shift, name="]]")
     lparen_vis = filt(lambda tok: tok.string == "(", shift, name="(")
     rparen_vis = filt(lambda tok: tok.string == ")", shift, name=")")
     colon = filt(lambda tok: tok.string == ":", shift, name=":")
@@ -108,8 +109,8 @@ class ZshTerminals(Terminals):
     _basic_arg = (backtick | cmd_subst | arith_exp | var_exp | heredoc | string | brace_word | dbl_bracket_word | colon_word
                   | number | glob_qual | subscript | argument_identifier | expect_type_node(TOKEN_TYPES["ASSIGN_EMPTY"])
                   # Bare pattern characters are word parts in zsh: `fd -tx remove$ dir`,
-                  # `grep -v ^N_`, `grep .+%U.+`. Ignored so they are not mistaken for expansions.
-                  | ignore(filt(lambda tok: tok.string in ("$", "^", "+", "!", "."), expect_type_node(TOKEN_TYPES["OP"])))
+                  # `grep -v ^N_`, `grep .+%U.+`, `cmd 08:00:00`. Ignored so they are not mistaken for expansions.
+                  | ignore(filt(lambda tok: tok.string in ("$", "^", "+", "!", ".", ":"), expect_type_node(TOKEN_TYPES["OP"])))
                   # `test "x$a" != x`: comparison operators are plain words to test(1).
                   | ignore(filt(lambda tok: tok.string in ("!=", "=="), expect_type_node(TOKEN_TYPES["OP"]))))
     # assign_word matches `name=value` as a single argument (needed for
@@ -425,10 +426,14 @@ class ZshStyleGrammar(Grammar):
         | (literal("repeat") + argument + command)
     )
 
-    # Case pattern: consume tokens until we hit a `)` that is NOT followed by
-    # a glob modifier (`*`, `?`, `[`). That distinguishes the pattern-closing
-    # `)` in `(darwin|freebsd)*)` from the `)` inside the glob group.
-    case_pattern = ((~((rparen_vis + (~glob_suffix)))) + shift)[:] + rparen_vis
+    # Case pattern: a `( ... )` group inside the pattern is one unit, so `-?(no_)tacot`
+    # and `(darwin|freebsd)*` keep their groups. Only a `)` outside every group ends it.
+    # A group that is the whole arm head, `("0 0 fg=red")` followed by a line break or `;&`,
+    # is the opening parenthesis of the pattern instead, so the arm closer is still found.
+    _pattern_end = filt(lambda tok: tok.type in (TOKEN_TYPES["NEWLINE"], TOKEN_TYPES["COMMENT"])
+                        or tok.string in (";", ";;", ";&", ";|"), shift)
+    _pattern_group = LPAREN + ((~RPAREN) + shift)[:] + RPAREN + (~_pattern_end)
+    case_pattern = (_pattern_group | ((~rparen_vis) + shift))[:] + rparen_vis
     case_body = case_pattern + STATEMENT_SEP[:] + inner_statement[:] + STATEMENT_SEP[:]
     # Arms that end with a terminator, then an optional final arm without one
     # (`*) cmd` directly before `esac`). The optional arm must not start at
