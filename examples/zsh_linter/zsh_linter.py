@@ -96,7 +96,8 @@ class ZshTerminals(Terminals):
     # Assignment names are plain identifiers; reserved words such as `end` are only
     # keywords in command position, so `end=$second` is a valid assignment.
     assign_name = filt(lambda tok: tok.string.isidentifier(), expect_type_node(TOKEN_TYPES["IDENT"]))
-    assign_word = assign_name + ASSIGN + _basic_arg
+    # The value may be empty: `RPROMPT=` is a valid assignment.
+    assign_word = assign_name + ASSIGN + (_basic_arg | nothing)
 
 # HELPERS
 def _expansion_issues(node):
@@ -224,7 +225,7 @@ class ZshStyleGrammar(Grammar):
                     | literal("export") | literal("readonly")) + flag[:] + ((assign_name | var_exp | string) + (ASSIGN_OP + (assign_rhs | nothing))[0:1])[1:]
     
     # One or more `name=value` pairs on a line: `start=$a end=$b`.
-    assignment = assign_target + subscript[0:1] + ASSIGN_OP + assign_rhs + assign_word[:]
+    assignment = assign_target + subscript[0:1] + ASSIGN_OP + (assign_rhs | nothing) + assign_word[:]
 
     # [ ] and [[ ]] content is opaque so test operators remain uninterpreted.
     # The legacy [ ] lint method separately checks raw expansion tokens; [[ ]]
