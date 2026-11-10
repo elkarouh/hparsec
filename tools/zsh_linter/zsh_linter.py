@@ -92,8 +92,10 @@ class ZshTerminals(Terminals):
     # and the parser correctly stops at the second `)` which acts as the arm closer.
     glob_suffix = filt(lambda tok: tok.string in ("*", "?", "[", ")"), shift)
 
+    # A bare `=` followed by a space is ASSIGN_EMPTY; as an argument it is just a word
+    # (`test $x = 0`).
     _basic_arg = (backtick | cmd_subst | arith_exp | var_exp | heredoc | string
-                  | number | glob_qual | subscript | argument_identifier)
+                  | number | glob_qual | subscript | argument_identifier | expect_type_node(TOKEN_TYPES["ASSIGN_EMPTY"]))
     # assign_word matches `name=value` as a single argument (needed for
     # `alias ls='...'`, `export FOO=bar` inline, etc.)
     # Assignment names are plain identifiers; reserved words such as `end` are only
@@ -104,7 +106,9 @@ class ZshTerminals(Terminals):
     # is an empty assignment (ASSIGN_EMPTY), so `IFS= read` never takes `read` as a value.
     assign_eq = filt(lambda tok: tok.string == "=", expect_type_node(TOKEN_TYPES["OP"]))
     assign_eq_empty = expect_type_node(TOKEN_TYPES["ASSIGN_EMPTY"])
-    assign_word = (assign_name + assign_eq + _basic_arg) | (assign_name + assign_eq_empty)
+    # `FS=: read` — a bare `:` is a valid assignment value.
+    assign_value_colon = filt(lambda tok: tok.string == ":", expect_type_node(TOKEN_TYPES["OP"]))
+    assign_word = (assign_name + assign_eq + (_basic_arg | assign_value_colon)) | (assign_name + assign_eq_empty)
 
 # HELPERS
 def _expansion_issues(node, backticks_only=False):
@@ -180,7 +184,8 @@ def _expansion_issues(node, backticks_only=False):
 
 class ZshStyleGrammar(Grammar):
 
-    script = statement[:]
+    # Leading blank lines are allowed; each statement consumes its own trailing separators.
+    script = STATEMENT_SEP[:] + statement[:]
 
     # and_or comes BEFORE if_stmt/assignment: `x=1 || cmd` and `cond; then`
     # both need and_or to be tried before the assignment fallback.
@@ -200,7 +205,13 @@ class ZshStyleGrammar(Grammar):
     # An argument is a grammar-level AST construct, not a lexical terminal.
     # Its explicit node boundary gives it one consistent linting entry point
     # wherever the grammar accepts an argument.
-    argument = as_node(assign_word | ZshTerminals._basic_arg)
+    # A word such as `alias rg.="..."` or `foo-x=1`: the name is not a plain identifier,
+    # so it can only be an argument, never an assignment.
+    loose_word = (
+        filt(lambda tok: not tok.string.isidentifier(), expect_type_node(TOKEN_TYPES["IDENT"]))
+        + ZshTerminals.assign_eq + ZshTerminals._basic_arg
+    )
+    argument = as_node(assign_word | loose_word | ZshTerminals._basic_arg)
 
     prefix_assignment = as_node(assign_word)
 
@@ -230,7 +241,7 @@ class ZshStyleGrammar(Grammar):
     # Assignment values and array elements are not word-split by zsh, so they are
     # parsed as plain expansions (not `argument` nodes) and are not linted.
     array_literal = LPAREN + (ZshTerminals._basic_arg | NEWLINE)[:] + RPAREN
-    assign_rhs = array_literal | ZshTerminals._basic_arg
+    assign_rhs = array_literal | ZshTerminals._basic_arg | ZshTerminals.assign_value_colon
 
     assign_target = assign_name | number   # `0=${...}` and other numeric names
 
@@ -284,7 +295,8 @@ class ZshStyleGrammar(Grammar):
     
     # as_node(command) keeps each command a distinct node inside pipelines,
     # so command.lint fires per stage instead of only on bare commands.
-    pipeline_item = command | grouping | subshell
+    # Compound commands can sit on either side of a pipe: `echo x | while read a; do ...; done`.
+    pipeline_item = command | grouping | subshell | while_stmt | until_stmt | for_stmt | if_stmt | case_stmt
     
     # Operators may be followed by a line break: `a |\n  b` and `a &&\n  b`.
     pipeline = as_node(pipeline_item) + ((PIPE | PIPE_AMP) + NEWLINE[:] + as_node(pipeline_item))[:]
@@ -677,6 +689,12 @@ def _run_self_tests():
             ("empty assign before space", "RPROMPT= \n"),
             ("empty local", "local a=\n"),
             ("function named =", "= () {\n  bc -l <<< \"$*\"\n}\n"),
+            ("leading blank line then comment", "\n# header\necho a\n"),
+            ("alias with dotted name", "alias fd.='fd -H -d1'\n"),
+            ("test with bare equals", "test $x = 0 && echo y\n"),
+            ("assign colon value", "FS=: read -ra s\n"),
+            ("colon as argument", "sd : '\\n'\n"),
+            ("pipe into while", "echo x | while read p; do echo $p; done\n"),
             ("for-alt", "for f (*.txt) do\n  echo $f\ndone\n"),
             ("select", "select opt in a b c; do\n  echo $opt\ndone\n"),
             ("heredoc", "cat <<EOF\nhello\nEOF\n"),
