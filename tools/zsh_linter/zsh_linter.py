@@ -25,6 +25,7 @@ from hparsec import (
 )
 from zsh_tokenizer import tokenize_zsh, TOKEN_TYPES, _RESERVED
 from style_rules import style_issues
+from flow_rules import flow_issues
 
 # Auto-fixes applied by `--fix` before formatting, in this order. Each entry is
 # (rule code, fix function name). A fix must not change what the script does, and
@@ -1520,7 +1521,7 @@ def lint_zsh_code(source):
         tok = stream.tokens[index]
         raise SyntaxError(f"Unexpected token {tok.string!r} at position {tok.start}")
 
-    return ast.lint() + _bare_variable_issues(tokens) + style_issues(source)
+    return ast.lint() + _bare_variable_issues(tokens) + style_issues(source) + flow_issues(source)
 
 
 # ============================================================
@@ -1753,6 +1754,20 @@ def _run_self_tests():
             assert any(i["rule"] == _code for i in _style(_bad)), f"{_code} not reported"
             assert not any(i["rule"] == _code for i in _style(_good)), f"{_code} reported on the fix"
         assert not any(i["rule"] == "ZSH009" for i in lint_zsh_code("echo $OPC_USER\n")), "OPC_USER still braced"
+        # Variable and return-code checks (flow_rules.py).
+        from flow_rules import flow_issues as _flow
+        _flow_cases = [
+            ("ZSH052", "echo $NOT_SET_ANYWHERE_X\n", "NOT_SET_ANYWHERE_X=1\necho $NOT_SET_ANYWHERE_X\n"),
+            ("ZSH053", "unused_var_q=1\n", "unused_var_q=1\necho $unused_var_q\n"),
+            ("ZSH054", "UID=5\n", "myuid=5\n"),
+            ("ZSH055", "cmd | tee f\necho $?\n", "cmd | tee f\necho done\n"),
+            ("ZSH056", "typeset -i N=$(cmd)\necho $?\n", "N=$(cmd)\necho $?\n"),
+            ("ZSH057", "f() {\n  exit 1\n}\nf\necho $?\n", "f() {\n  return 1\n}\nf\necho $?\n"),
+        ]
+        for _code, _bad, _good in _flow_cases:
+            assert any(i["rule"] == _code for i in _flow(_bad)), f"{_code} not reported"
+            assert not any(i["rule"] == _code for i in _flow(_good)), f"{_code} reported on the fix"
+        print("Flow rules OK")
         print("Style rules OK")
 
         print("\n--- Path X tests ---")
