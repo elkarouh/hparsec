@@ -37,14 +37,14 @@ The order above groups the rules by theme, so it is not the order of the checks 
 
 ## Where each rule lives in zsh-lint
 
-The rules are implemented in `tools/zsh_linter` as ZSH codes. The mapping is below. Rules 18, 19, 21 and 22 describe how the checker works, so they have no code. Rule 26 is not a check in the script, so it has no code. Rules 36 and 46 are marked "under test, not approved" in the scripts and are not implemented.
+The rules are implemented in `tools/zsh_linter` as ZSH codes. The mapping is below. Rules 18, 19, 21 and 22 describe how the checker works, so they have no code. Rule 26 is not a check in the script, so it has no code. Rules 36 and 46 are marked "under test, not approved" in the scripts and are not implemented. Rules 13 and 30 have no code: the zsh grammar does not parse `>>&1` or `${VAR}=value`, so zsh-lint reports a parse error for them.
 
 | Rule | zsh-lint | Rule | zsh-lint |
 |---|---|---|---|
 | 1 | ZSH004 | 27 | ZSH022 |
 | 2 | ZSH010 | 28 | ZSH023 |
 | 3 | ZSH011 | 29 | ZSH029 |
-| 4 | ZSH012 | 30 | ZSH031 |
+| 4 | ZSH012 | 30 | (parse error) |
 | 5 | ZSH013 | 31 | ZSH014 |
 | 6 | ZSH015 | 32 | ZSH032 |
 | 7 | ZSH050 | 33 | ZSH033 |
@@ -53,7 +53,7 @@ The rules are implemented in `tools/zsh_linter` as ZSH codes. The mapping is bel
 | 10 | ZSH017 | 37 | ZSH030 |
 | 11 | ZSH018 | 38 | ZSH035 |
 | 12 | ZSH008 | 39 | ZSH036 |
-| 13 | ZSH019 | 40 | ZSH037 |
+| 13 | (parse error) | 40 | ZSH037 |
 | 14 | ZSH020 | 41 | ZSH038 |
 | 15 | ZSH021 | 42 | ZSH042 |
 | 16 | ZSH052 | 43 | ZSH043 |
