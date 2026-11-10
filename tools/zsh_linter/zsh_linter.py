@@ -174,7 +174,7 @@ def _expansion_issues(node, backticks_only=False):
 
             if value.startswith("`") and value.endswith("`"):
                 rule = "ZSH003"
-                message = "Prefer modern '$(...)' over legacy backticks."
+                message = "Use $( ) instead of backticks; backticks are hard to read and cannot be nested."
 
             elif (
                 value.startswith("$(")
@@ -802,8 +802,8 @@ class ZshStyleGrammar(Grammar):
             issues = [{
                 "rule": "ZSH004",
                 "message": (
-                    "Prefer enhanced '[[ ... ]]' over legacy POSIX "
-                    "'[ ... ]' test construct in zsh."
+                    "Use [[ ... ]] instead of [ ... ] in a test; "
+                    "[[ ]] is the enhanced test construct."
                 ),
                 "token": token_of(self.nodes[0]),
             }]
@@ -820,7 +820,7 @@ class ZshStyleGrammar(Grammar):
                 if getattr(tok, "string", None) == "<<<":
                     issues.append({
                         "rule": "ZSH008",
-                        "message": "Here-string '<<<' used; consider a pipe or a file.",
+                        "message": "Do not use the here-string '<<<'; use a pipe or a here-document.",
                         "token": tok,
                     })
                 elif hasattr(c, "lint"):

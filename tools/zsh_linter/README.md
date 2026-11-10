@@ -15,6 +15,8 @@ clean, 1 when there are findings, and 2 on a parse error.
 
 ## Style rules
 
+ZSH003, ZSH004 and ZSH008 cover ksh rules 49 (backticks), 1 (`[ ]` instead of `[[ ]]`) and 12 (`<<<`). Their messages now use the ksh wording.
+
 `style_rules.py` adds line-level style rules ported from the ksh checker scripts. They run on the
 script with comments blanked out, and report with the same `file:line:col: RULE message` format:
 
