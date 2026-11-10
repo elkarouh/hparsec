@@ -24,6 +24,13 @@ from hparsec import (
 )
 from zsh_tokenizer import tokenize_zsh, TOKEN_TYPES, _RESERVED
 
+# Auto-fixes applied by `--fix` before formatting, in this order. Each entry is
+# (rule code, fix function name). A fix must not change what the script does, and
+# lint findings that have no entry here are only reported.
+AUTO_FIXES = (
+    ("ZSH002", "quote_assignment_expansion"),
+)
+
 # ============================================================
 # Terminals
 # ============================================================
@@ -1377,6 +1384,39 @@ def _unclosed_construct(tokens):
     return None
 
 
+def _offset_of(source, pos):
+    """Character offset of a (line, column) token position."""
+    line, col = pos
+    lines = source.splitlines(keepends=True)
+    return sum(len(l) for l in lines[:line - 1]) + col
+
+
+def quote_assignment_expansion(source):
+    """Quote an unquoted expansion used as an assignment value: x=$a becomes x="$a".
+
+    Zsh does not word-split assignment values, so the quotes only change the style.
+    """
+    tokens = tokenize_zsh(source)
+    spans = []
+    for prev, tok in zip(tokens, tokens[1:]):
+        # Same tokens that ZSH002 reports: $name and $(cmd), not ${...} or $((...)).
+        flagged = (tok.string.startswith("$") and len(tok.string) > 1
+                   and not tok.string.startswith(("${", "$((")))
+        if (flagged and prev.type == TOKEN_TYPES["OP"] and prev.string == "="
+                and prev.end == tok.start):
+            spans.append((_offset_of(source, tok.start), _offset_of(source, tok.end)))
+    for start, end in reversed(spans):
+        source = source[:start] + '"' + source[start:end] + '"' + source[end:]
+    return source
+
+
+def apply_auto_fixes(source):
+    """Apply the AUTO_FIXES entries in order and return the fixed source."""
+    for _rule, fix_name in AUTO_FIXES:
+        source = globals()[fix_name](source)
+    return source
+
+
 def format_zsh_code(source):
     """Return the script rendered from its parse tree (see each rule's to_source)."""
     ParserState.reset()
@@ -1643,6 +1683,8 @@ def main(argv=None):
                     help="only report parse errors; lint findings are not printed")
     ap.add_argument("--format", action="store_true",
                     help="print each script reformatted to stdout instead of linting it")
+    ap.add_argument("--fix", action="store_true",
+                    help="apply the AUTO_FIXES before formatting (use with --format)")
     args = ap.parse_args(argv)
 
     if args.self_test or not args.paths:
@@ -1661,6 +1703,8 @@ def main(argv=None):
                 with open(path, encoding="utf-8", errors="replace") as fh:
                     source = fh.read()
             if args.format:
+                if args.fix:
+                    source = apply_auto_fixes(source)
                 sys.stdout.write(format_zsh_code(source))
                 continue
             issues = lint_zsh_code(source)
