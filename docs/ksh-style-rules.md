@@ -35,6 +35,37 @@ ZSH009 ("write `${name}` instead of `$name`") conflicts with rule 9 for the two 
 
 The order above groups the rules by theme, so it is not the order of the checks in the script.
 
+## Where each rule lives in zsh-lint
+
+The rules are implemented in `tools/zsh_linter` as ZSH codes. The mapping is below. Rules 18, 19, 21 and 22 describe how the checker works, so they have no code. Rule 26 is not a check in the script, so it has no code. Rules 36 and 46 are marked "under test, not approved" in the scripts and are not implemented.
+
+| Rule | zsh-lint | Rule | zsh-lint |
+|---|---|---|---|
+| 1 | ZSH004 | 27 | ZSH022 |
+| 2 | ZSH010 | 28 | ZSH023 |
+| 3 | ZSH011 | 29 | ZSH029 |
+| 4 | ZSH012 | 30 | ZSH031 |
+| 5 | ZSH013 | 31 | ZSH014 |
+| 6 | ZSH015 | 32 | ZSH032 |
+| 7 | ZSH050 | 33 | ZSH033 |
+| 8 | ZSH016 | 34 | ZSH051 |
+| 9 | ZSH049 (and ZSH009 exempts the names) | 35 | ZSH034 |
+| 10 | ZSH017 | 37 | ZSH030 |
+| 11 | ZSH018 | 38 | ZSH035 |
+| 12 | ZSH008 | 39 | ZSH036 |
+| 13 | ZSH019 | 40 | ZSH037 |
+| 14 | ZSH020 | 41 | ZSH038 |
+| 15 | ZSH021 | 42 | ZSH042 |
+| 16 | ZSH052 | 43 | ZSH043 |
+| 17 | ZSH053 | 44 | ZSH045 |
+| 20 | ZSH054 | 45 | ZSH046 |
+| 23 | ZSH055 | 47 | ZSH040 |
+| 24 | ZSH056 | 48 | ZSH041 |
+| 25 | ZSH057 | 49 | ZSH003 |
+| | | 50 | ZSH047 |
+| | | 51 | ZSH044 |
+| | | 52 | ZSH048 |
+
 ## Before the checks: comment stripping
 
 The script first removes comments, so that a variable named in a comment is not reported, and keeps the empty lines so
