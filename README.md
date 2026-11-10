@@ -19,10 +19,13 @@ hparsec/
 │   └── hek_helpers.py        # helpers shared by translator backends
 ├── examples/
 │   ├── expression_parser.py      # expression grammar written with repetition
-│   ├── expression_parser_lr.py   # same grammar written with left recursion
-│   └── zsh_linter/               # a larger application: a zsh linter
+│   └── expression_parser_lr.py   # same grammar written with left recursion
+├── tools/
+│   └── zsh_linter/               # zsh-lint: a zsh linter built on hparsec
+│       ├── pyproject.toml        # installs the zsh-lint command
 │       ├── zsh_tokenizer.py      # hand-written zsh scanner
 │       ├── zsh_linter.py         # grammar + lint rules, with inline test cases
+│       ├── count_rule.py         # counts one rule's findings across a codebase
 │       ├── corpus_test.py        # runs the linter over a corpus of real scripts
 │       └── corpus/               # oh-my-zsh and zsh-syntax-highlighting samples
 ├── benchmarks/
@@ -303,19 +306,21 @@ These are reversed by the backend's output methods on the relevant AST nodes.
   uses repetition (`A + (op + A)[:]`), the second direct left recursion
   (`A = (A + op + B) | B`). Running either prints its parse and evaluation
   tests.
-- `examples/zsh_linter/` is a full zsh grammar with lint rules attached to
-  AST nodes. `zsh_linter.py` runs its inline cases; `corpus_test.py` lints
-  every script in `corpus/` and reports any parse failure with context.
-  To lint your own scripts, pass them on the command line (`-` reads standard
-  input). Findings print as `file:line:col: RULE message`; the exit status is 0
-  when clean, 1 when there are findings and 2 on a parse error:
+- `tools/zsh_linter/` is `zsh-lint`, a full zsh grammar with lint rules
+  attached to AST nodes. Install it with `pip install . ./tools/zsh_linter`
+  from the repository root, then lint scripts directly:
 
   ```sh
-  PYTHONPATH=src python examples/zsh_linter/zsh_linter.py ~/.zshrc deploy.zsh
+  zsh-lint ~/.zshrc deploy.zsh
+  cat script.zsh | zsh-lint -
   ```
-  `count_rule.py` counts how often one rule fires across a codebase, for
-  example `PYTHONPATH=src python examples/zsh_linter/count_rule.py ZSH008 ~/dotfiles`
-  to count here-strings.
+
+  Findings print as `file:line:col: RULE message`. The exit status is 0 when
+  clean, 1 when there are findings, and 2 on a parse error. Without arguments
+  it runs the inline self-tests. `corpus_test.py` lints every script in
+  `corpus/`. `count_rule.py` counts how often one rule fires across a codebase,
+  for example to count here-strings: `zsh-lint` has `ZSH008` for them, so
+  `python tools/zsh_linter/count_rule.py ZSH008 ~/dotfiles` gives the total.
 
 ## Benchmarks
 

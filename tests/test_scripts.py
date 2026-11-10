@@ -11,7 +11,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 SRC = ROOT / "src"
-ZSH = ROOT / "examples" / "zsh_linter"
+ZSH = ROOT / "tools" / "zsh_linter"
 
 
 def _run(*args):

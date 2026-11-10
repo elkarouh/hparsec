@@ -1,7 +1,7 @@
 PYTHON ?= python3
 export PYTHONPATH := $(CURDIR)/src$(if $(PYTHONPATH),:$(PYTHONPATH))
 
-ZSH := examples/zsh_linter
+ZSH := tools/zsh_linter
 
 .PHONY: test selftest examples zsh corpus verbose bench profile
 
