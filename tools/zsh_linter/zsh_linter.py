@@ -285,45 +285,6 @@ def _join_source(nodes):
     return out
 
 
-def _statements_source(nodes):
-    """Render a list of statements, one per line."""
-    return "\n".join(p for p in (_render(c) for c in _flatten_anon(nodes)) if p)
-
-
-def _compound_source(nodes):
-    """Render a control-flow statement from its keyword and body pieces."""
-    out = ""
-    body = False
-    for c in _flatten_anon(nodes):
-        kw = _keyword_of(c)
-        if kw is None:
-            piece = _render(c)
-            if not piece:
-                continue
-            if body:
-                out += piece + "\n"
-            else:
-                out += (" " if out and not out.endswith(" ") else "") + piece
-        elif kw in ("then", "do"):
-            out = out.rstrip(" ") + "; " + kw + "\n"
-            body = True
-        elif kw == "else":
-            out = out if out.endswith("\n") else out + "\n"
-            out += "else\n"
-            body = True
-        elif kw == "elif":
-            out = out if out.endswith("\n") else out + "\n"
-            out += "elif "
-            body = False
-        elif kw in ("fi", "done"):
-            out = out if out.endswith("\n") else out + "\n"
-            out += kw
-            body = False
-        else:
-            out += (" " if out and not out.endswith(" ") else "") + kw + " "
-    return out.rstrip()
-
-
 # ============================================================
 # Grammar
 # ============================================================
@@ -749,17 +710,17 @@ class ZshStyleGrammar(Grammar):
                     name = _render(c)
                     continue
                 body.append(c)
-            return prefix + name + " () {\n" + _statements_source(body) + "\n}"
+            return prefix + name + " () {\n" + "\n".join(p for p in (_render(c) for c in _flatten_anon(body)) if p) + "\n}"
 
     class grouping:
         """grouping: { statements; }"""
         def to_source(self):
-            return "{\n" + _statements_source(children(self)) + "\n}"
+            return "{\n" + "\n".join(p for p in (_render(c) for c in _flatten_anon(children(self))) if p) + "\n}"
 
     class subshell:
         """subshell: ( statements )"""
         def to_source(self):
-            return "(\n" + _statements_source(children(self)) + "\n)"
+            return "(\n" + "\n".join(p for p in (_render(c) for c in _flatten_anon(children(self))) if p) + "\n)"
 
     class case_stmt:
         """case_stmt: header, one arm per line, then esac."""
@@ -788,7 +749,7 @@ class ZshStyleGrammar(Grammar):
             stmts = items[n:]
             if not pattern.endswith(")"):
                 pattern += ")"
-            return pattern + "\n" + _statements_source(stmts)
+            return pattern + "\n" + "\n".join(p for p in (_render(c) for c in _flatten_anon(stmts)) if p)
 
     class case_arm:
         """case_arm: body and its terminator (;;, ;&, ;|)."""
@@ -842,9 +803,39 @@ class ZshStyleGrammar(Grammar):
                     break
             rest = items[body_start:]
             if any(_keyword_of(c) == "do" for c in rest):
-                return head + _compound_source(rest)
+                nodes = rest
+                out = ""
+                body = False
+                for c in _flatten_anon(nodes):
+                    kw = _keyword_of(c)
+                    if kw is None:
+                        piece = _render(c)
+                        if not piece:
+                            continue
+                        if body:
+                            out += piece + "\n"
+                        else:
+                            out += (" " if out and not out.endswith(" ") else "") + piece
+                    elif kw in ("then", "do"):
+                        out = out.rstrip(" ") + "; " + kw + "\n"
+                        body = True
+                    elif kw == "else":
+                        out = out if out.endswith("\n") else out + "\n"
+                        out += "else\n"
+                        body = True
+                    elif kw == "elif":
+                        out = out if out.endswith("\n") else out + "\n"
+                        out += "elif "
+                        body = False
+                    elif kw in ("fi", "done"):
+                        out = out if out.endswith("\n") else out + "\n"
+                        out += kw
+                        body = False
+                    else:
+                        out += (" " if out and not out.endswith(" ") else "") + kw + " "
+                return head + out.rstrip()
             # zsh brace body: normalise to do/done
-            return head + "; do\n" + _statements_source(rest) + "\ndone"
+            return head + "; do\n" + "\n".join(p for p in (_render(c) for c in _flatten_anon(rest)) if p) + "\ndone"
 
     class for_alt:
         """for name (list); do ... done (zsh form)"""
@@ -854,42 +845,282 @@ class ZshStyleGrammar(Grammar):
             head = [c for c in items[:k] if _keyword_of(c) is None]
             name = _render(head[0]) if head else ""
             words = _join_source(head[1:])
-            return "for " + name + " (" + words + ")" + _compound_source(items[k:])
+            nodes = items[k:]
+            out = ""
+            body = False
+            for c in _flatten_anon(nodes):
+                kw = _keyword_of(c)
+                if kw is None:
+                    piece = _render(c)
+                    if not piece:
+                        continue
+                    if body:
+                        out += piece + "\n"
+                    else:
+                        out += (" " if out and not out.endswith(" ") else "") + piece
+                elif kw in ("then", "do"):
+                    out = out.rstrip(" ") + "; " + kw + "\n"
+                    body = True
+                elif kw == "else":
+                    out = out if out.endswith("\n") else out + "\n"
+                    out += "else\n"
+                    body = True
+                elif kw == "elif":
+                    out = out if out.endswith("\n") else out + "\n"
+                    out += "elif "
+                    body = False
+                elif kw in ("fi", "done"):
+                    out = out if out.endswith("\n") else out + "\n"
+                    out += kw
+                    body = False
+                else:
+                    out += (" " if out and not out.endswith(" ") else "") + kw + " "
+            return "for " + name + " (" + words + ")" + out.rstrip()
 
     class for_positional:
         """for name; do ... done (positional form)"""
         def to_source(self):
-            return _compound_source(children(self))
+            nodes = children(self)
+            out = ""
+            body = False
+            for c in _flatten_anon(nodes):
+                kw = _keyword_of(c)
+                if kw is None:
+                    piece = _render(c)
+                    if not piece:
+                        continue
+                    if body:
+                        out += piece + "\n"
+                    else:
+                        out += (" " if out and not out.endswith(" ") else "") + piece
+                elif kw in ("then", "do"):
+                    out = out.rstrip(" ") + "; " + kw + "\n"
+                    body = True
+                elif kw == "else":
+                    out = out if out.endswith("\n") else out + "\n"
+                    out += "else\n"
+                    body = True
+                elif kw == "elif":
+                    out = out if out.endswith("\n") else out + "\n"
+                    out += "elif "
+                    body = False
+                elif kw in ("fi", "done"):
+                    out = out if out.endswith("\n") else out + "\n"
+                    out += kw
+                    body = False
+                else:
+                    out += (" " if out and not out.endswith(" ") else "") + kw + " "
+            return out.rstrip()
 
     class elif_branch:
         """elif_branch: elif condition; then body"""
         def to_source(self):
-            return _compound_source(children(self))
+            nodes = children(self)
+            out = ""
+            body = False
+            for c in _flatten_anon(nodes):
+                kw = _keyword_of(c)
+                if kw is None:
+                    piece = _render(c)
+                    if not piece:
+                        continue
+                    if body:
+                        out += piece + "\n"
+                    else:
+                        out += (" " if out and not out.endswith(" ") else "") + piece
+                elif kw in ("then", "do"):
+                    out = out.rstrip(" ") + "; " + kw + "\n"
+                    body = True
+                elif kw == "else":
+                    out = out if out.endswith("\n") else out + "\n"
+                    out += "else\n"
+                    body = True
+                elif kw == "elif":
+                    out = out if out.endswith("\n") else out + "\n"
+                    out += "elif "
+                    body = False
+                elif kw in ("fi", "done"):
+                    out = out if out.endswith("\n") else out + "\n"
+                    out += kw
+                    body = False
+                else:
+                    out += (" " if out and not out.endswith(" ") else "") + kw + " "
+            return out.rstrip()
 
     class else_branch:
         """else_branch: else body"""
         def to_source(self):
-            return _compound_source(children(self))
+            nodes = children(self)
+            out = ""
+            body = False
+            for c in _flatten_anon(nodes):
+                kw = _keyword_of(c)
+                if kw is None:
+                    piece = _render(c)
+                    if not piece:
+                        continue
+                    if body:
+                        out += piece + "\n"
+                    else:
+                        out += (" " if out and not out.endswith(" ") else "") + piece
+                elif kw in ("then", "do"):
+                    out = out.rstrip(" ") + "; " + kw + "\n"
+                    body = True
+                elif kw == "else":
+                    out = out if out.endswith("\n") else out + "\n"
+                    out += "else\n"
+                    body = True
+                elif kw == "elif":
+                    out = out if out.endswith("\n") else out + "\n"
+                    out += "elif "
+                    body = False
+                elif kw in ("fi", "done"):
+                    out = out if out.endswith("\n") else out + "\n"
+                    out += kw
+                    body = False
+                else:
+                    out += (" " if out and not out.endswith(" ") else "") + kw + " "
+            return out.rstrip()
 
     class if_stmt:
         """if_stmt: rendered from its keywords and bodies."""
         def to_source(self):
-            return _compound_source(children(self))
+            nodes = children(self)
+            out = ""
+            body = False
+            for c in _flatten_anon(nodes):
+                kw = _keyword_of(c)
+                if kw is None:
+                    piece = _render(c)
+                    if not piece:
+                        continue
+                    if body:
+                        out += piece + "\n"
+                    else:
+                        out += (" " if out and not out.endswith(" ") else "") + piece
+                elif kw in ("then", "do"):
+                    out = out.rstrip(" ") + "; " + kw + "\n"
+                    body = True
+                elif kw == "else":
+                    out = out if out.endswith("\n") else out + "\n"
+                    out += "else\n"
+                    body = True
+                elif kw == "elif":
+                    out = out if out.endswith("\n") else out + "\n"
+                    out += "elif "
+                    body = False
+                elif kw in ("fi", "done"):
+                    out = out if out.endswith("\n") else out + "\n"
+                    out += kw
+                    body = False
+                else:
+                    out += (" " if out and not out.endswith(" ") else "") + kw + " "
+            return out.rstrip()
 
     class while_stmt:
         """while_stmt: rendered from its keywords and bodies."""
         def to_source(self):
-            return _compound_source(children(self))
+            nodes = children(self)
+            out = ""
+            body = False
+            for c in _flatten_anon(nodes):
+                kw = _keyword_of(c)
+                if kw is None:
+                    piece = _render(c)
+                    if not piece:
+                        continue
+                    if body:
+                        out += piece + "\n"
+                    else:
+                        out += (" " if out and not out.endswith(" ") else "") + piece
+                elif kw in ("then", "do"):
+                    out = out.rstrip(" ") + "; " + kw + "\n"
+                    body = True
+                elif kw == "else":
+                    out = out if out.endswith("\n") else out + "\n"
+                    out += "else\n"
+                    body = True
+                elif kw == "elif":
+                    out = out if out.endswith("\n") else out + "\n"
+                    out += "elif "
+                    body = False
+                elif kw in ("fi", "done"):
+                    out = out if out.endswith("\n") else out + "\n"
+                    out += kw
+                    body = False
+                else:
+                    out += (" " if out and not out.endswith(" ") else "") + kw + " "
+            return out.rstrip()
 
     class until_stmt:
         """until_stmt: rendered from its keywords and bodies."""
         def to_source(self):
-            return _compound_source(children(self))
+            nodes = children(self)
+            out = ""
+            body = False
+            for c in _flatten_anon(nodes):
+                kw = _keyword_of(c)
+                if kw is None:
+                    piece = _render(c)
+                    if not piece:
+                        continue
+                    if body:
+                        out += piece + "\n"
+                    else:
+                        out += (" " if out and not out.endswith(" ") else "") + piece
+                elif kw in ("then", "do"):
+                    out = out.rstrip(" ") + "; " + kw + "\n"
+                    body = True
+                elif kw == "else":
+                    out = out if out.endswith("\n") else out + "\n"
+                    out += "else\n"
+                    body = True
+                elif kw == "elif":
+                    out = out if out.endswith("\n") else out + "\n"
+                    out += "elif "
+                    body = False
+                elif kw in ("fi", "done"):
+                    out = out if out.endswith("\n") else out + "\n"
+                    out += kw
+                    body = False
+                else:
+                    out += (" " if out and not out.endswith(" ") else "") + kw + " "
+            return out.rstrip()
 
     class for_stmt:
         """for_stmt: rendered from its keywords and bodies."""
         def to_source(self):
-            return _compound_source(children(self))
+            nodes = children(self)
+            out = ""
+            body = False
+            for c in _flatten_anon(nodes):
+                kw = _keyword_of(c)
+                if kw is None:
+                    piece = _render(c)
+                    if not piece:
+                        continue
+                    if body:
+                        out += piece + "\n"
+                    else:
+                        out += (" " if out and not out.endswith(" ") else "") + piece
+                elif kw in ("then", "do"):
+                    out = out.rstrip(" ") + "; " + kw + "\n"
+                    body = True
+                elif kw == "else":
+                    out = out if out.endswith("\n") else out + "\n"
+                    out += "else\n"
+                    body = True
+                elif kw == "elif":
+                    out = out if out.endswith("\n") else out + "\n"
+                    out += "elif "
+                    body = False
+                elif kw in ("fi", "done"):
+                    out = out if out.endswith("\n") else out + "\n"
+                    out += kw
+                    body = False
+                else:
+                    out += (" " if out and not out.endswith(" ") else "") + kw + " "
+            return out.rstrip()
 
     class script:
         """script ::= statement*"""
