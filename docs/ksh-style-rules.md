@@ -500,3 +500,380 @@ blocks (ksh, define_configuration, SUDO), so only the first block is kept sorted
   The script will not run the same way under `mawk` or BSD awk.
 - **Awk's `match` does not reset `a`.** `a` is reused across calls. This is harmless here because each use reads only `a[0]`
   right after the call, but it would break if the code ever read a capture group.
+
+---
+
+# Third checker: return codes
+
+This checker reads one ksh file, tracks curly-brace depth to find function bodies, and warns when a return code is
+tested in a way that hides the real result. Its header says the checks are "not as robust as the other ones", so the
+results need checking by hand.
+
+## Return code checks
+
+### 23. Do not test `$?` right after a `tee`
+
+Test the return code of the command on the left of `|`, not of `tee`.
+
+```awk
+if (previous_line ~ "[|][[:space:]]*tee[[:space:]]") ...
+```
+
+**Rationale.** The return code after `cmd | tee file` is `tee`'s, which is almost always 0. The script's message says it is
+"unlikely that it is what we want".
+
+**Pattern issues.** Only the immediately previous non-blank line is checked. `cmd | tee f`, then `echo done`, then `$?`
+is not reported.
+
+### 24. Do not test `$?` after `typeset VAR=$(...)`
+
+Assign first, then declare the type:
+
+```ksh
+my_number=$(returns_a_number)
+typeset -i my_number
+echo $?          # now the return code of returns_a_number
+```
+
+**Rationale.** `typeset -i my_number=$(returns_a_number)` returns the status of `typeset`, which is 0 even when the command
+fails. The script shows a session where `returns_a_number` is not found (127) but the `typeset` form gives 0.
+
+**Pattern issues.** The check uses the same one-line lookback as rule 23, so an intervening blank line or comment is
+fine but any other line is not. The pattern `typeset.*=[$][(]` also matches `typeset -i X=$(...)` inside a
+`[[ ]]` or after `;`, and does not match the backtick form `` typeset X=`cmd` ``.
+
+### 25. Do not test `$?` after calling a function that uses `exit`
+
+Use `return` in functions. When a function uses `exit`, the whole script exits, and the `$?` check never runs.
+
+```awk
+$0 ~ /exit / && func_name != "" { exit_in_function_line[func_name]=NR ":" $0; }
+```
+
+The script tracks the current function from a `function NAME` line and the curly-brace depth. When a `$?` line follows a
+call to such a function, it reports both the `exit` line and the call.
+
+**Pattern issues.**
+- **Typo in the brace-depth check.** `func_nested_level` is set when a function starts, but the end test uses
+  `function_nested_level`, which is never set, so it is 0. A function is only closed when the depth returns to 0. In a
+  function that starts inside a block, the name is never cleared, so later `exit` lines in the main script are recorded
+  as function exits. This is a real bug, and I did not run it.
+- **Only `function NAME` is recognised.** `NAME()` and `NAME ()` definitions are not tracked, so an `exit` inside them is
+  not reported. (Rule 33 reports the `NAME ()` form.)
+- **`exit` must be followed by a space.** The pattern `/exit /` misses `exit` at the end of the line and `exit;`.
+- **Braces in strings and awk code are counted.** A `{` inside `"..."` or an awk program changes the depth.
+- **Only the last `exit` line for each function is stored.**
+- **Name matching is by word boundary in the regex.** It is checked against the previous line only, so calls in
+  `if NAME; then` on the line before `$?` are matched but calls two lines earlier are not.
+
+# Extra style checks
+
+The fourth checker's own header calls these checks "not as robust as the other ones".
+
+## Variables and special parameters
+
+### 26. Do not put braces around `$OPC_SERVICE_NAME`, `$OPC_USER`, `$MGMTSV`, `$OPC_NODES`, `$OPC_MSG_NODES`, `$OPC_MSG` or `$OPC_ALWAYS`
+
+**Rationale.** The comment says these names are used "by the OML/OBM software as literals", so they must be declared as
+`$OPC_XXX` and not as `${OPC_XXX}`, or that software will not pick them up. The warning text says this is about the two
+names OPC_SERVICE_NAME and OPC_USER, but the code also protects the five others.
+
+**How the check works.** It replaces each protected `$NAME` with `DOLLAR_NAME` before searching for `$[[:alpha:]]`, so
+protected uses are not reported. It then restores only `OPC_SERVICE_NAME` and `OPC_USER`. The restore step runs the
+other five substitutions again, which does nothing because the names were already replaced.
+
+**Pattern issues.** The five extra names are hidden from the braces check in both directions, so `${MGMTSV}` is never
+reported. Either the other names should be restored in the second `sed`, or their substitutions should be removed.
+
+### 27. Do not use `${0}`, `${1}`, ..., `${?}`, `${@}`, `${*}`, `${#}`, `${$}`, `${!}` with braces unless the braces are needed
+
+Write `$1`, not `${1}`. The braces are allowed only when a word is built from the parameter, e.g. `${1}_foo`.
+
+```sh
+grep -n -H -e "[$]{[0-9?@#*-$!]}[^[:alnum:]_]" -e "[$]{[0-9?@#*-$!]}$"
+```
+
+**Rationale.** The comment says "no curly bracket for $0 $1 .. $9, $? $@ $* except maybe when it is used to generate a
+word".
+
+**Pattern issues.** The character class `[0-9?@#*-$!]` contains `*-$`, a range from `*` to `$`. `$` (0x24) comes before
+`*` (0x2A), so GNU grep stops with `Invalid range end` (exit 2). I ran the pattern on sample lines and grep failed
+without matching anything. Because the result is captured with `$(...)`, the check is silently skipped, and the rule
+never reports. The fix is to put `-` first or last in the class, e.g. `[0-9?@#*$!-]`.
+
+### 28. Do not use `$*`; use `$@`
+
+**Rationale.** "You should be using `\$@` instead of `\$*`", with a link to the Austin Group bug on the difference.
+Unquoted `$*` and `$@` split differently, and a quoted `"$*"` joins the arguments into one word.
+
+**False positives.** The rule says it can be broken "if you know why and document it".
+
+### 29. Do not use `${NF}` as a shell variable, and do not use `$NF` in a script that has no awk
+
+**Rationale.** `$NF` is an awk field, not a shell variable. The script writes it as `DOLLAR_NF` for the other checks.
+
+**Pattern issues.** `${NF}` is matched in single quotes, so it works. `$NF>` is matched only when the file has no
+`awk` word, so a `$NF` in a script that calls `awk` is never reported. That is the intent, but a script that names awk
+only in a comment is also exempt.
+
+### 30. Do not write `${VAR}=A` as an assignment
+
+**Rationale.** `${VAR}=A` is not a valid shell line. The pattern excludes lines with `&&`, `||` or `]]`.
+
+## Tests and conditionals
+
+### 31. Do not test a non-empty or empty string without a `$` on the variable
+
+```sh
+grep -n -H "[[][[:space:]].*-[nz][[:space:]][[:space:]]*[[:alpha:]].*[]]"
+```
+
+**Rationale.** "Missing `$` in the variable name in test of empty or not empty strings". `[[ -n foo ]]` is almost always a
+mistake for `[[ -n $foo ]]`.
+
+**False positives.** A deliberate literal test, such as `[[ -z abc ]]`, is reported.
+
+### 32. Use one `[[ ]]` with `&&` or `||` inside, not two tests joined by `&&` or `||`
+
+Write `[[ -n $a && -n $b ]]` instead of `[[ -n $a ]] && [[ -n $b ]]`.
+
+```sh
+grep -n -H "[]][]][[:blank:]][[:blank:]]*&&[[:blank:]][[:blank:]]*[[][["
+```
+
+**Rationale.** "Usage of `[[ ]] && [[ ]]` is not needed, use `[[ && ]]` and if grouping is needed then use the `()`."
+
+**Pattern issues.** Only exactly-adjacent `]] && [[` and `]] || [[` are found. `]] && ! [[` and `]]  &&  (` pass.
+
+### 33. Declare a function with the `function` keyword
+
+Write `function my_function`, not `my_function ()`.
+
+```sh
+grep -n -H "^[[:space:]]*[[:alpha:]][[:alnum:]_]*[[:space:]]*[(][)]"
+```
+
+**Rationale.** Readability. The message gives the two forms side by side.
+
+**Pattern issues.** The name must start with a letter and contain only letters, digits and `_`. A name with `-` or `.`
+(ksh allows `my-func ()`) is not found. A call such as `echo ()` on its own line is reported too, which is rare but wrong.
+
+### 34. Do not test a variable that may be unset with `[[ ]]` without `$` after `&&` or `||`
+
+```sh
+grep -n -H "[[][[][^]]*&&[[:blank:]][[:blank:]]*[^$][[:alpha:]].*[]][]]"  | grep -v "&& [[:blank:]]*-" | grep -e if -e while
+```
+
+**Rationale.** In `if [[ $a ]] && [[ b ]]`, the second `b` should probably be a variable. The check skips the `&&`
+followed by an option (`&& -n`, which is an operator on a file test) and needs `if` or `while` on the line.
+
+**Pattern issues.**
+- `[^$][[:alpha:]]` needs two characters, so a one-letter name (`&& x`) is not found.
+- `grep -e if -e while` is a substring match, so any line that contains "if" anywhere is kept, e.g. `modifier`.
+- A `-n` or `-z` test after `&&` is checked by a separate pattern, which has the same `if`/`while` restriction.
+
+### 35. Use `!` instead of `.` in a path to separate subsystem and version
+
+```sh
+grep -n -H "/.*[.][$][(]cm_where"
+```
+
+**Rationale.** PATHs with a dot do not work on OPT/OPS, so `$(cm_where ...)` should use `!` even in non-OPS scripts, so
+copy-paste does not produce a wrong path.
+
+### 36. Do not write `if ${VAR};` without quotes (under test)
+
+```sh
+grep -n -H -e "[^[:alnum:]_]\(elif\|if\|while\)[[:space:]][[:space:]]*[$][[:alnum:]_{]" \
+           -e "^\(elif\|if\|while\)[[:space:]][[:space:]]*[$][[:alnum:]_{]"
+```
+
+Write `if "${VAR}"; then`, or `if command "${VAR}"; then`. The script's comment says this pattern is "UNDER TESTING,
+NOT APPROVED YET". The reason is `I2_093351`: an uninitialised `VAR` used as a command makes the test true.
+
+**Pattern issues.** The `${CMD}` exception is hard-coded. `if $cmd arg; then` is also reported.
+
+## Commands and redirections
+
+### 37. Do not use `tee` followed by `2>&1`
+
+Redirect stderr before `tee`, so the file holds it.
+
+```sh
+grep -n -H "tee.*2>&1"
+```
+
+**Rationale.** "Usually one wants to do it afterwards, so the file contains stderr." Reference: `SC_067980`.
+
+**Pattern issues.** Any `2>&1` after a `tee` on the same line is flagged, including `tee` inside a string or a `2>&1` that
+is part of another command.
+
+### 38. Do not write `2>&1 >file` (stderr to stdout before stdout to file)
+
+Write `>file 2>&1`.
+
+```sh
+grep -n -H "2[[:space:]]*>[[:space:]]*&1 [[:space:]]*1*>"
+```
+
+**Pattern issues.** The pattern needs exactly one space after `&1`. `2>&1>file` passes.
+
+### 39. Do not redirect stderr of `Log` to stdout (`Log ... >&2`)
+
+`Log` already writes to stderr.
+
+```sh
+grep -n -H "Log\>[^|]*>[[:space:]]*&2"
+```
+
+**Pattern issues.** `[^|]*` stops at a `|`, so `Log x | tee f >&2` passes. The `\>` requires the word `Log` to end.
+
+### 40. Use `Log -i`, `-w`, `-s` or `-f` (not `-t` alone) on a message with a level
+
+```sh
+grep -n -H "Log .*\(INFO\|WARNING\|SEVERE\|ERROR\|FATAL\)" | grep -v "Log [[:space:]]*-[iwsf]" | grep -v "Log [[:space:]]*-t [[:space:]]*[[:digit:]]*[[:space:]]*-[iwsf]"
+```
+
+**Rationale.** The level is passed with a flag. The script's comment says "test of not using -i,-w,-s,-f options of Log".
+
+**Pattern issues.** A level word anywhere on the line, including in a string, is reported. `Log -i` in a `case` or a
+message such as `Log "ERROR count"` is treated the same.
+
+### 41. Do not ask a yes/no question with `y/n`; use the `confirm` script
+
+```sh
+grep -n -H -i y/n
+```
+
+**Rationale.** "Test of not using script named `confirm` to ask question answered by y/n."
+
+**Pattern issues.** `y/n` matches any text with those characters, such as a path `/usr/y/n` or `yes/no`-free strings
+like `copy y/n`. `-i` also matches `Y/N`.
+
+### 42. Use `cd "${OLDPWD}"` (not `cd -`)
+
+**Rationale.** Since RHEL7 `cd -` prints the directory it goes to, which breaks scripts that use its output.
+
+```sh
+grep -n -H -e "\Wcd[[:space:]][[:space:]]*-"
+```
+
+**Pattern issues.** `cd -P -`, or `cd -` at the start of a line, is missed.
+
+### 43. Quote the first argument of `tr`
+
+Write `tr "a-z" "A-Z"`, not `tr a-z A-Z`.
+
+```sh
+grep -n -H -e "\Wtr[[:space:]][[:space:]]*\(-d[[:space:]]\|-s[[:space:]]\)*[[:space:]]*[^-\"'[:space:]]" | grep -v -e "-tr"
+```
+
+**Rationale.** The arguments can be expanded by the shell first. The script says `tr` can have one or two arguments, so
+the check looks only at the first one, and skips `-d` and `-s`, which take one argument.
+
+**Pattern issues.**
+- `tr -c "..." ...` is not checked, because the `-` at the start of the argument is excluded.
+- `tr -d x` with an unquoted set is reported, but `tr -cd x` is not, because `-c` is skipped.
+- A quote preceded by a backslash is passed although the shell does expand it, as the script comment says.
+- The `\W` before `tr` needs a non-word character, so `tr` at the very start of a line is not found.
+
+### 44. Quote the `cfmu_ftps_list` mask and the `cfmu_ftps_get` mask
+
+```sh
+grep -n -H -e "cfmu_ftps_list[[:space:]][[:space:]]*[^[:space:]][^[:space:]]*[[:space:]][[:space:]]*[^\"']"
+grep -n -H -e "cfmu_ftps_get ... [^\"']"
+```
+
+**Rationale.** A mask that is not quoted is resolved locally by the shell. Write `cfmu_ftps_list SERVICE "MASK"` or
+`cfmu_ftps_get LOCAL_DIR SERVICE DECOMPRESS "MASK"`. The lines with `-sequence`, `-period`, `-free_text` or
+`-source_key` are allowed to omit the mask.
+
+**Pattern issues.** The check assumes the arguments are exactly as shown, so a call with an option before the service
+name, or with a variable as the service, is matched wrongly. The script comment says it may be a false positive for
+another argument order.
+
+### 45. Do not use `bmw VAR | awk '{print $2}'`; use `bmw -V VAR`
+
+```sh
+grep -n -H -e "bmw[[:space:]].*[|][[:space:]]*awk[[:space:]].*print \$[2N]"
+```
+
+**Rationale.** `bmw -V` returns the value without parsing. The awk form depends on the output layout.
+
+### 46. Do not use `cat file | grep|awk|sed|cut|sort`; pass the file to the command (under test)
+
+```sh
+grep -n -H -E '\<cat\>[^\|]*\|[^\|]*\<(grep|awk|sed|cut|sort)\>'
+```
+
+**Rationale.** The script comment says "Do not cat a file into a function that can open a file directly". The rule is
+"UNDER TESTING, NOT APPROVED YET".
+
+**Pattern issues.** `[^\|]*` is a bracket with `\` and `|`, so any `|` is excluded. `cat` in a string followed by a
+pipe is reported.
+
+### 47. Do not use `Log` with a trailing blank or quote
+
+```sh
+grep -n -H "Log[[:space:]].*[[:space:]][\"']$"
+```
+
+**Rationale.** "Test of having trailing blank(s) in the message output by Log." The trailing blank is inside the quotes,
+so it is printed.
+
+## Constructs and literals
+
+### 48. Use `alias_get -q`, not `alias_get ... Value`
+
+```sh
+grep -n -H -e "alias_get.*Value"
+```
+
+**Rationale.** The comment says "use -q option of alias_get". The check only flags the word `Value` after `alias_get`
+on the same line.
+
+### 49. Do not use backticks
+
+Use `$( )`. Backticks are hard to read and cannot be nested.
+
+```sh
+grep -n -H "\`"
+```
+
+### 50. Do not use the `.LATEST` alias; use `.LATEST_GOOD`
+
+```sh
+grep -n -H "[.]LATEST[^_]"
+```
+
+**Pattern issues.** `.LATEST` at the end of a line is not found, because `[^_]` needs a character.
+
+### 51. Do not use tab characters
+
+**Rationale.** A tab cannot be told from spaces in most editors. Exceptions are a subsequent program that needs a tab,
+or input that contains one.
+
+```sh
+grep -n -H -e "$(echo ' ' | tr ' ' '\t')"
+```
+
+The pattern is built at run time. I checked that the expansion is a single tab, so the grep works.
+
+### 52. Do not use `CFMU_OS`
+
+**Rationale.** It "is likely to be obsolete" since the HP-UX to Linux migration.
+
+### 53. Do not use `${VAR}` without the `$` in a test: see rule 34
+
+No separate pattern. Rule 34 covers the same case after `&&` or `||`.
+
+# Known problems in the third and fourth checkers
+
+- **Brace-depth typo** in the function-exit check (rule 25). `func_nested_level` and `function_nested_level` are different names.
+- **Invalid grep range** in the special-parameter check (rule 27). `[0-9?@#*-$!]` fails with `Invalid range end`, and the failure
+  is hidden by `$(...)`, so the check does nothing.
+- **Redundant substitutions** in the OPC check (rule 26). The second `sed` re-applies five substitutions that do nothing.
+- **Other variable names are not restored.** Rule 26 hides five names from the braces check without reporting them.
+- **Unclosed `if` before the `tee` check.** The awk check (rule 23) uses only the previous line.
+- **Two-line `if`** in the `[[ ]] && [[ ]]` check (rule 32). The pattern uses `grep -e` on the same line only.
+- **Comment-stripping** works as in the first checker: a `#` after a space starts a comment, even in a quoted string.
