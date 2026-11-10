@@ -24,6 +24,7 @@ hparsec/
 │   └── expression_parser_lr.py   # same grammar written with left recursion
 ├── tools/
 │   ├── basic_interpreter/        # a small BASIC interpreter built on hparsec (proof of concept)
+│   ├── lisp_interpreter/         # a Lisp interpreter built on hparsec, equivalent to lispy.py
 │   └── zsh_linter/               # zsh-lint: a zsh linter built on hparsec
 │       ├── pyproject.toml        # installs the zsh-lint command
 │       ├── zsh_tokenizer.py      # hand-written zsh scanner
@@ -333,6 +334,8 @@ These are reversed by the backend's output methods on the relevant AST nodes.
   uses repetition (`A + (op + A)[:]`), the second direct left recursion
   (`A = (A + op + B) | B`). Running either prints its parse and evaluation
   tests.
+- `tools/lisp_interpreter/` is a Lisp interpreter equivalent to Peter Norvig's `lispy.py`,
+  built on hparsec. Run `make lisp` for its self-tests and example.
 - `tools/basic_interpreter/` is a small BASIC interpreter, a proof of concept with
   variables, `PRINT`, and single-line functions (`DEF FN`). Run it on a program with
   `python3 tools/basic_interpreter/basic_interpreter.py tools/basic_interpreter/examples/functions.bas`.
