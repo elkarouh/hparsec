@@ -68,8 +68,10 @@ literals. ZSH049 reports their braced form instead.
 
 ## Fixes
 
-`zsh-lint --format --fix script.zsh` prints the script rendered from its tree, with the findings of the rules
-in `AUTO_FIXES` fixed. The node that reports a finding also renders the fix in its `to_source`, so what is
+`zsh-lint --format script.zsh` prints the script rendered from its tree: one statement per line, block bodies
+indented by four spaces, and comments where they were written. Here-documents and multi-line strings are
+written as they are. `zsh-lint --format --fix script.zsh` also fixes the findings of the rules
+in `AUTO_FIXES`. The node that reports a finding also renders the fix in its `to_source`, so what is
 reported is what is fixed:
 
 | Rule | Fix |
