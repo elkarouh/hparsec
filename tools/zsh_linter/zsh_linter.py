@@ -1377,6 +1377,21 @@ def _unclosed_construct(tokens):
     return None
 
 
+def format_zsh_code(source):
+    """Return the script rendered from its parse tree (see each rule's to_source)."""
+    ParserState.reset()
+    tokens = tokenize_zsh(source)
+    result = script.parse(tokens)
+    if not result:
+        raise SyntaxError("Invalid zsh script")
+    ast, stream = result
+    while stream.pos < len(stream.tokens) and stream.tokens[stream.pos].type == TOKEN_TYPES["NEWLINE"]:
+        stream.pos += 1
+    if stream.pos < len(stream.tokens):
+        raise SyntaxError(f"could not parse the script from token {stream.pos}")
+    return ast.to_source()
+
+
 def lint_zsh_code(source):
     ParserState.reset()
     tokens = tokenize_zsh(source)
@@ -1615,6 +1630,7 @@ def main(argv=None):
     Usage:
         python zsh_linter.py script.zsh [more.zsh ...]   lint files
         python zsh_linter.py -                           lint standard input
+        python zsh_linter.py --format script.zsh         print the reformatted script
         python zsh_linter.py                             run the self-tests
     Exits 0 when clean, 1 when findings were reported, 2 on a parse error.
     """
@@ -1625,6 +1641,8 @@ def main(argv=None):
     ap.add_argument("--self-test", action="store_true", help="run the built-in self-tests")
     ap.add_argument("--check-syntax", action="store_true",
                     help="only report parse errors; lint findings are not printed")
+    ap.add_argument("--format", action="store_true",
+                    help="print each script reformatted to stdout instead of linting it")
     args = ap.parse_args(argv)
 
     if args.self_test or not args.paths:
@@ -1642,6 +1660,9 @@ def main(argv=None):
             else:
                 with open(path, encoding="utf-8", errors="replace") as fh:
                     source = fh.read()
+            if args.format:
+                sys.stdout.write(format_zsh_code(source))
+                continue
             issues = lint_zsh_code(source)
         except Exception as exc:
             print(f"{name}: parse error: {type(exc).__name__}: {exc}", file=sys.stderr)
