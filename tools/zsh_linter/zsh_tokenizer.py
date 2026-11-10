@@ -74,6 +74,11 @@ def _skip_paren_group(source, j):
         if c == "\\":
             j += 2
             continue
+        if c == "#" and (j == 0 or source[j - 1] in " \t\r\n;|&("):
+            # A comment inside the group runs to the end of the line: it may hold a ")".
+            nl = source.find("\n", j)
+            j = n if nl == -1 else nl
+            continue
         if c in ("'", '"'):
             j += 1
             while j < n and source[j] != c:
@@ -202,6 +207,11 @@ def tokenize_zsh(source):
                 while j < n and depth > 0:
                     if source[j] == "\\" and j + 1 < n:
                         j += 2
+                        continue
+                    if source[j] == "#" and source[j - 1] in " \t\r\n;|&(":
+                        # A comment inside $( ) runs to the end of the line.
+                        nl = source.find("\n", j)
+                        j = n if nl == -1 else nl
                         continue
                     if source[j] in ("'", '"'):
                         q = source[j]
