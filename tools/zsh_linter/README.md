@@ -63,3 +63,21 @@ These rules are line-based, so they can report a pattern inside a string or a mu
 also reports `==` and `!=` against a number, which is a string test in zsh. `OPC_USER` and `OPC_SERVICE_NAME` are exempt from ZSH009 and its `--fix`, because OML/OBM reads them
 as literals. ZSH049 reports their braced form instead. The variable-flow and return-code checks are
 not implemented.
+
+## Variable and return-code checks
+
+`flow_rules.py` adds the checks that follow names and return codes across lines, ported from the ksh checkers:
+
+| Rule | Checks |
+|---|---|
+| ZSH052 | a name is used but never assigned in the file (may be set by a caller or a config file) |
+| ZSH053 | a name is assigned but never used, unless it is exported |
+| ZSH054 | a read-only or define_configuration name is assigned |
+| ZSH055 | `$?` is tested right after a pipe into `tee` |
+| ZSH056 | `$?` is tested right after `typeset VAR=$(...)` |
+| ZSH057 | `$?` is tested after a call to a function that calls `exit` |
+
+These are heuristics. Assignments and uses are matched by regular expressions, not by a parse, and a name counts as
+assigned anywhere in the file, whatever the order. ZSH052 reports names that come from the environment or a
+config file, such as prompt variables, so expect it on any real configuration. A few names a login shell or a
+terminal normally sets are exempt; that list is a zsh addition, not from the ksh checker.
