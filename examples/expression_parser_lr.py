@@ -149,11 +149,13 @@ class ExpressionGrammar(Grammar):
     # --------------------------------------------------------
 
     class number:
+        """number ::= NUMBER"""
         def evaluate(self):
             val = float(self.node)
             return int(val) if val.is_integer() else val
 
     class additive:
+        """additive ::= additive add_op multiplicative | multiplicative"""
         def evaluate(self):
             lhs = self.nodes[0].evaluate()
             opr = self.nodes[1].node   # '+' or '-'
@@ -165,6 +167,7 @@ class ExpressionGrammar(Grammar):
             raise ValueError(f"Unknown additive op: {opr!r}")
 
     class multiplicative:
+        """multiplicative ::= multiplicative mul_op unary | unary"""
         def evaluate(self):
             lhs = self.nodes[0].evaluate()
             opr = self.nodes[1].node   # '*', '/', or 'mod'
@@ -178,6 +181,7 @@ class ExpressionGrammar(Grammar):
             raise ValueError(f"Unknown multiplicative op: {opr!r}")
 
     class unary:
+        """unary ::= unary_op primary | primary"""
         def evaluate(self):
             opr     = self.nodes[0].node   # '+' or '-'
             operand = self.nodes[1].evaluate()
@@ -188,14 +192,17 @@ class ExpressionGrammar(Grammar):
             raise ValueError(f"Cannot evaluate 'not' in arithmetic context")
 
     class group:
+        """group ::= LPAREN expression RPAREN"""
         def evaluate(self):
             return self.node.evaluate()
 
     class identifier:
+        """identifier ::= IDENT, excluding reserved words"""
         def evaluate(self):
             raise ValueError(f"Cannot evaluate non-arithmetic identifier: {self.node}")
 
     class function_call:
+        """function_call ::= identifier LPAREN (argument_list | nothing) RPAREN"""
         def evaluate(self):
             raise ValueError(f"Cannot evaluate non-arithmetic function call: {self.nodes[0].node}")
 
