@@ -786,7 +786,7 @@ class ZshStyleGrammar(Grammar):
     class arith_body:
         """arith_body ::= (arith_nested | token)*"""
         def to_source(self, indent=""):
-            return _join_source(self.parts(), indent)
+            return _join_source(self.nodes, indent)
 
         def variables(self):
             # Arithmetic reads and assigns names without a $.
@@ -799,7 +799,7 @@ class ZshStyleGrammar(Grammar):
     class arith_nested:
         """arith_nested ::= '(' token* ')'"""
         def to_source(self, indent=""):
-            return "(" + _join_source(self.parts(), indent) + ")"
+            return "(" + _join_source(self.nodes[0].nodes if self.nodes else [], indent) + ")"
 
     class for_arith:
         """for_arith ::= 'for' '((' arith_body '))' header_end
