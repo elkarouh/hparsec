@@ -1420,47 +1420,52 @@ def apply_auto_fixes(source):
 
 
 _PLAIN_NAME = re.compile(r"^\$[A-Za-z_][A-Za-z0-9_]*$")
+# A bare name inside a double-quoted string: not escaped, not followed by a name
+# character or a subscript.
+_STRING_NAME = re.compile(r"(?<!\\)\$([A-Za-z_][A-Za-z0-9_]*)(?![A-Za-z0-9_\[])")
 
 
-def _bare_variable_tokens(tokens):
-    """Indexes of $name tokens that should be written ${name}.
+def _bare_spans(tokens):
+    """(token, start, end, name) for each bare name that should be written ${name}.
 
-    $1, $#, $? and the like are not names, so they are not included. A name followed
-    by a subscript ($a[2]) is not included either, because ${a}[2] means something else.
+    start and end are offsets inside token.string. A bare $name token is the whole
+    token; inside a double-quoted string each match is found with a regex. $1-style
+    positionals, special parameters and a name followed by a subscript are skipped.
     """
-    found = []
+    spans = []
     for i, tok in enumerate(tokens):
-        if tok.type != TOKEN_TYPES["VAR_EXP"] or not _PLAIN_NAME.match(tok.string):
-            continue
-        nxt = tokens[i + 1] if i + 1 < len(tokens) else None
-        if nxt is not None and nxt.glued and nxt.string.startswith("["):
-            continue
-        found.append(i)
-    return found
+        if tok.type == TOKEN_TYPES["VAR_EXP"] and _PLAIN_NAME.match(tok.string):
+            nxt = tokens[i + 1] if i + 1 < len(tokens) else None
+            if nxt is not None and nxt.glued and nxt.string.startswith("["):
+                continue
+            spans.append((tok, 0, len(tok.string), tok.string[1:]))
+        elif tok.type == TOKEN_TYPES["STRING"] and tok.string.startswith('"'):
+            for m in _STRING_NAME.finditer(tok.string):
+                spans.append((tok, m.start(), m.end(), m.group(1)))
+    return spans
 
 
 def _bare_variable_issues(tokens):
-    """ZSH009 findings for each bare $name token."""
+    """ZSH009 findings for each bare name, inside a token or a double-quoted string."""
     return [
         {
             "rule": "ZSH009",
-            "message": f"Write '${{{tokens[i].string[1:]}}}' instead of '{tokens[i].string}'.",
-            "token": tokens[i],
+            "message": f"Write '${{{name}}}' instead of '${name}'.",
+            "token": tok,
         }
-        for i in _bare_variable_tokens(tokens)
+        for tok, _start, _end, name in _bare_spans(tokens)
     ]
 
 
 def braces_for_variables(source):
-    """Rewrite $name as ${name} for each bare variable token that ZSH009 reports."""
+    """Rewrite $name as ${name} for each bare name that ZSH009 reports."""
     tokens = tokenize_zsh(source)
-    spans = [
-        (_offset_of(source, tokens[i].start), _offset_of(source, tokens[i].end),
-         "${" + tokens[i].string[1:] + "}")
-        for i in _bare_variable_tokens(tokens)
-    ]
-    for start, end, text in reversed(spans):
-        source = source[:start] + text + source[end:]
+    edits = []
+    for tok, rel_start, rel_end, name in _bare_spans(tokens):
+        base = _offset_of(source, tok.start)
+        edits.append((base + rel_start, base + rel_end, "${" + name + "}"))
+    for a, b, text in sorted(edits, reverse=True):
+        source = source[:a] + text + source[b:]
     return source
 
 
