@@ -61,6 +61,25 @@ _RESERVED = {
 _IDENT_CHARS = "_-./*?~,%@"   # note: comma, percent, at-sign for paths/emails/format strings
 
 
+def _case_keyword(source, j):
+    """Return +1 if `case` starts a command at source[j], -1 for `esac`, else 0.
+
+    Only a keyword in command position counts, so `echo case` or `x=esac` do not
+    change the nesting of case statements inside a command substitution.
+    """
+    word = source[j:j + 4]
+    if word not in ("case", "esac"):
+        return 0
+    if j + 4 < len(source) and source[j + 4] not in " \t\r\n;|&()":
+        return 0
+    k = j - 1
+    while k >= 0 and source[k] in " \t":
+        k -= 1
+    if k >= 0 and source[k] not in "(;|&\n":
+        return 0
+    return 1 if word == "case" else -1
+
+
 def _skip_paren_group(source, j):
     """Return the index just past the parenthesized group that starts at source[j] == '('.
 
@@ -203,6 +222,7 @@ def tokenize_zsh(source):
             # --- $( ... ) command substitution ---
             if source[i:i + 2] == "$(":
                 depth = 1
+                case_depth = 0
                 j = i + 2
                 while j < n and depth > 0:
                     if source[j] == "\\" and j + 1 < n:
@@ -212,6 +232,11 @@ def tokenize_zsh(source):
                         # A comment inside $( ) runs to the end of the line.
                         nl = source.find("\n", j)
                         j = n if nl == -1 else nl
+                        continue
+                    kw = _case_keyword(source, j)
+                    if kw and (kw > 0 or case_depth > 0):
+                        case_depth = max(0, case_depth + kw)
+                        j += 4
                         continue
                     if source[j] in ("'", '"'):
                         q = source[j]
@@ -225,7 +250,9 @@ def tokenize_zsh(source):
                                 break
                             j += 1
                         continue
-                    if source[j] == "(":
+                    if case_depth:
+                        pass  # the ")" of a case pattern does not close the substitution
+                    elif source[j] == "(":
                         depth += 1
                     elif source[j] == ")":
                         depth -= 1
