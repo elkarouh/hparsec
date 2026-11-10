@@ -461,7 +461,7 @@ class ZshStyleGrammar(Grammar):
     case_arm = STATEMENT_SEP[:] + (~literal("esac")) + case_body + (DSEMI | SEMI_AMP | SEMI_BAR) + comment[0:1]
     case_final = STATEMENT_SEP[:] + (~literal("esac")) + case_body
     case_stmt = (
-        literal("case") + argument + literal("in") + STATEMENT_SEP[:]
+        literal("case") + argument + STATEMENT_SEP[:] + literal("in") + STATEMENT_SEP[:]
         + case_arm[:] + case_final[0:1]
         + STATEMENT_SEP[:] + literal("esac")
     )
