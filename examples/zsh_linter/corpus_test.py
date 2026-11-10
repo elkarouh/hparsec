@@ -1,70 +1,56 @@
-"""Run the zsh linter over a corpus, printing context on failure."""
-import glob, os, re, sys, traceback
+"""Lint every script in a corpus directory and report how many parse.
+
+Usage:
+    python corpus_test.py [DIR] [-v]
+
+-v lists each finding. The exit status is 1 if any script fails to parse.
+"""
+import argparse
+import glob
+import os
+import sys
+
 from zsh_linter import lint_zsh_code
 
 DEFAULT_CORPUS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "corpus")
 
 
-def run_corpus(directory=DEFAULT_CORPUS, verbose=False):
-    paths = sorted(
-        glob.glob(os.path.join(directory, "*.zsh"))
-        + glob.glob(os.path.join(directory, "*.sh"))
-        + glob.glob(os.path.join(directory, ".zsh*"))
-    )
+def corpus_files(directory):
+    patterns = ("*.zsh", "*.sh", ".zsh*")
+    return sorted(p for pat in patterns for p in glob.glob(os.path.join(directory, pat)))
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("directory", nargs="?", default=DEFAULT_CORPUS)
+    ap.add_argument("-v", "--verbose", action="store_true")
+    args = ap.parse_args(argv)
+
+    paths = corpus_files(args.directory)
     if not paths:
-        print(f"No files in {directory}/")
-        return
+        print(f"No files in {args.directory}/")
+        return 1
 
-    ok = 0
-    fail_paths = []
+    parsed = 0
     for path in paths:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            source = fh.read()
         try:
-            src = open(path, encoding="utf-8", errors="replace").read()
-        except Exception as e:
-            print(f"READ FAIL {path}: {e}")
+            issues = lint_zsh_code(source)
+        except Exception as exc:
+            print(f"FAIL {path}: {type(exc).__name__}: {exc}")
             continue
-        lines = src.splitlines()
-        try:
-            issues = lint_zsh_code(src)
-            ok += 1
-            print(f"OK   {path}  ({len(issues)} warnings)")
-            if verbose:
-                for v in issues:
-                    pos = getattr(v["token"], "start", "?")
-                    print(f"       [{v['rule']}] {pos}: {v['message'][:70]}")
-        except SyntaxError as e:
-            fail_paths.append((path, str(e)))
-            print(f"\nFAIL {path}")
-            print(f"     {e}")
-            m = re.search(r"position \((\d+), (\d+)\)", str(e))
-            if m:
-                ln, col = int(m.group(1)), int(m.group(2))
-                start = max(0, ln - 5)
-                end = min(len(lines), ln + 3)
-                print(f"     --- lines {start+1}-{end} (>> marks failure) ---")
-                for i in range(start, end):
-                    marker = ">>" if i == ln - 1 else "  "
-                    print(f"     {marker} {i+1:5d} | {lines[i]}")
-            print()
-        except Exception as e:
-            fail_paths.append((path, f"{type(e).__name__}: {e}"))
-            print(f"\nFAIL {path}: {type(e).__name__}: {e}")
-            if verbose:
-                traceback.print_exc()
+        parsed += 1
+        print(f"OK   {path}  ({len(issues)} warnings)")
+        if args.verbose:
+            for issue in issues:
+                start = getattr(issue["token"], "start", None)
+                print(f"       {issue['rule']} {start}: {issue['message'][:70]}")
 
-    print(f"\n=== {ok}/{len(paths)} parsed ({100*ok//len(paths) if paths else 0}%) ===")
-    if fail_paths:
-        print("\nFirst-token summary:")
-        buckets = {}
-        for path, msg in fail_paths:
-            mm = re.search(r"Unexpected token '([^']*)'", msg)
-            tok = mm.group(1) if mm else "?"
-            buckets.setdefault(tok, []).append(os.path.basename(path))
-        for tok, files in sorted(buckets.items(), key=lambda kv: -len(kv[1])):
-            print(f"  {len(files):3d}  {tok!r:15}  e.g. {files[0]}")
+    print(f"\n=== {parsed}/{len(paths)} parsed ({100 * parsed // len(paths)}%) ===")
+    return 0 if parsed == len(paths) else 1
 
 
 if __name__ == "__main__":
-    directory = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_CORPUS
-    verbose = "-v" in sys.argv
-    run_corpus(directory, verbose=verbose)
+    sys.exit(main())
