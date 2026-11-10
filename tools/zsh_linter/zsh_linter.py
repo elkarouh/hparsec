@@ -329,7 +329,9 @@ class ZshStyleGrammar(Grammar):
     # in addition to not_command (`!`), assignment (`x=1 || cmd`), and the previous items.
     and_or_item = (
         test_construct | dbl_test_construct | arith_stmt
-        | not_command | assignment | pipeline
+        # `x=$(cmd) | tr a b`: an assignment may be the left side of a pipe, tried first.
+        | not_command | (assignment + ((PIPE | PIPE_AMP) + NEWLINE[:] + as_node(pipeline_item))[1:])
+        | assignment | pipeline
         # grouping and subshell come through pipeline_item, which also accepts a pipe
         # after them: `{ a; } | tee`. Listing them here first would stop the choice early.
         | declaration | declaration2
@@ -729,6 +731,7 @@ def _run_self_tests():
             ("comment on function header line", "function f # $1 user\n{\n  echo\n}\n"),
             ("heredoc with punctuation delimiter", "sqlplus -s / <<!eof\nselect 1;\n!eof\n"),
             ("plus inside a pattern argument", "grep -E -e .+%U.+ -e .+%u.+ file\n"),
+            ("assignment piped", "P=$(echo a | tr a b) |tr a b\n"),
             ("assignment value then argument", "x=a b\n"),
             ("for-alt", "for f (*.txt) do\n  echo $f\ndone\n"),
             ("select", "select opt in a b c; do\n  echo $opt\ndone\n"),
