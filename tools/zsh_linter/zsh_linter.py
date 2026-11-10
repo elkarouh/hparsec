@@ -300,9 +300,10 @@ class ZshStyleGrammar(Grammar):
         # Try logical chains before their individual operands. Otherwise a
         # declaration such as `local x=1` succeeds as a prefix and leaves &&/||
         # behind for the top-level statement parser.
-        and_or | redir_command
+        function_def | anon_function
+        | and_or | redir_command
         | comment | declaration | declaration2
-        | function_def | anon_function | case_stmt
+        | case_stmt
         | if_stmt
         | for_arith | for_alt | for_stmt | for_positional | foreach_stmt | select_stmt
         | while_stmt | until_stmt | repeat_stmt
@@ -436,9 +437,10 @@ class ZshStyleGrammar(Grammar):
     not_command = ignore(literal("!")) + (pipeline | assignment | dbl_test_construct | test_construct)
 
     inner_statement = (
-        and_or | redir_command
+        function_def | anon_function
+        | and_or | redir_command
         | comment | declaration | declaration2
-        | function_def | anon_function | case_stmt
+        | case_stmt
         | if_stmt
         | for_arith | for_alt | for_stmt | for_positional | foreach_stmt | select_stmt
         | while_stmt | until_stmt | repeat_stmt
@@ -536,7 +538,7 @@ class ZshStyleGrammar(Grammar):
     # A case pattern sits on one line: it never takes a newline or a comment, so an
     # arm that starts at a comment cannot scan on through `esac` to a later `)`.
     _pattern_tok = filt(lambda tok: tok.type not in (TOKEN_TYPES["NEWLINE"], TOKEN_TYPES["COMMENT"]), shift)
-    _pattern_group = LPAREN + ((~RPAREN) + _pattern_tok)[:] + RPAREN + (~_pattern_break)
+    _pattern_group = lparen_vis + ((~rparen_vis) + _pattern_tok)[:] + rparen_vis + (~_pattern_break)
     case_pattern = (_pattern_group | ((~rparen_vis) + _pattern_tok))[:] + rparen_vis
     case_body = case_pattern + STATEMENT_SEP[:] + inner_statement[:] + STATEMENT_SEP[:]
     # Arms that end with a terminator, then an optional final arm without one
@@ -558,8 +560,8 @@ class ZshStyleGrammar(Grammar):
     # `= () { ... }` defines a function named "=": the bare `=` is an ASSIGN_EMPTY token.
     func_name = (identifier | var_exp | ZshTerminals.assign_eq_empty)[1:]
     function_def = (
-        (func_name + LPAREN + RPAREN)
-        | (literal("function") + func_name + (LPAREN + RPAREN)[0:1])
+        (func_name + lparen_vis + rparen_vis)
+        | (literal("function") + func_name + (lparen_vis + rparen_vis)[0:1])
     # A comment may sit on the header line: `function f # $1 user`.
     ) + (STATEMENT_SEP | comment)[:] + LBRACE + STATEMENT_SEP[:] + inner_statement[:] + STATEMENT_SEP[:] + RBRACE
 
@@ -567,14 +569,165 @@ class ZshStyleGrammar(Grammar):
     # immediately. Must appear BEFORE subshell in the choice lists because
     # `()` alone is also a valid (empty) subshell.
     anon_function = (
-        LPAREN + RPAREN
+        lparen_vis + rparen_vis
         + LBRACE + STATEMENT_SEP[:] + inner_statement[:] + STATEMENT_SEP[:] + RBRACE
     )
 
-    subshell = LPAREN + STATEMENT_SEP[:] + inner_statement[:] + STATEMENT_SEP[:] + RPAREN
+    subshell = lparen_vis + STATEMENT_SEP[:] + inner_statement[:] + STATEMENT_SEP[:] + rparen_vis
     grouping = LBRACE + STATEMENT_SEP[:] + inner_statement[:] + STATEMENT_SEP[:] + RBRACE
 
     # ---------- Lint methods ----------
+    class statement:
+        """statement: rendered from its children in order."""
+        def to_source(self):
+            return _join_source(children(self))
+
+    class loose_word:
+        """loose_word: rendered from its children in order."""
+        def to_source(self):
+            return _join_source(children(self))
+
+    class command:
+        """command: rendered from its children in order."""
+        def to_source(self):
+            return _join_source(children(self))
+
+    class array_literal:
+        """array_literal: rendered from its children in order."""
+        def to_source(self):
+            return _join_source(children(self))
+
+    class assign_rhs:
+        """assign_rhs: rendered from its children in order."""
+        def to_source(self):
+            return _join_source(children(self))
+
+    class assign_target:
+        """assign_target: rendered from its children in order."""
+        def to_source(self):
+            return _join_source(children(self))
+
+    class test_rbracket:
+        """test_rbracket: rendered from its children in order."""
+        def to_source(self):
+            return _join_source(children(self))
+
+    class redir_op:
+        """redir_op: rendered from its children in order."""
+        def to_source(self):
+            return _join_source(children(self))
+
+    class here_string_op:
+        """here_string_op: rendered from its children in order."""
+        def to_source(self):
+            return _join_source(children(self))
+
+    class redir_command:
+        """redir_command: rendered from its children in order."""
+        def to_source(self):
+            return _join_source(children(self))
+
+    class _two_rparen:
+        """_two_rparen: rendered from its children in order."""
+        def to_source(self):
+            return _join_source(children(self))
+
+    class arith_nested:
+        """arith_nested: rendered from its children in order."""
+        def to_source(self):
+            return _join_source(children(self))
+
+    class pipeline_item:
+        """pipeline_item: rendered from its children in order."""
+        def to_source(self):
+            return _join_source(children(self))
+
+    class pipeline:
+        """pipeline: rendered from its children in order."""
+        def to_source(self):
+            return _join_source(children(self))
+
+    class not_command:
+        """not_command: rendered from its children in order."""
+        def to_source(self):
+            return _join_source(children(self))
+
+    class inner_statement:
+        """inner_statement: rendered from its children in order."""
+        def to_source(self):
+            return _join_source(children(self))
+
+    class and_or_item:
+        """and_or_item: rendered from its children in order."""
+        def to_source(self):
+            return _join_source(children(self))
+
+    class and_or_closer:
+        """and_or_closer: rendered from its children in order."""
+        def to_source(self):
+            return _join_source(children(self))
+
+    class and_or:
+        """and_or: rendered from its children in order."""
+        def to_source(self):
+            return _join_source(children(self))
+
+    class if_condition:
+        """if_condition: rendered from its children in order."""
+        def to_source(self):
+            return _join_source(children(self))
+
+    class loop_names:
+        """loop_names: rendered from its children in order."""
+        def to_source(self):
+            return _join_source(children(self))
+
+    class foreach_stmt:
+        """foreach_stmt: rendered from its children in order."""
+        def to_source(self):
+            return _join_source(children(self))
+
+    class select_stmt:
+        """select_stmt: rendered from its children in order."""
+        def to_source(self):
+            return _join_source(children(self))
+
+    class repeat_stmt:
+        """repeat_stmt: rendered from its children in order."""
+        def to_source(self):
+            return _join_source(children(self))
+
+    class _pattern_break:
+        """_pattern_break: rendered from its children in order."""
+        def to_source(self):
+            return _join_source(children(self))
+
+    class _pattern_tok:
+        """_pattern_tok: rendered from its children in order."""
+        def to_source(self):
+            return _join_source(children(self))
+
+    class _pattern_group:
+        """_pattern_group: rendered from its children in order."""
+        def to_source(self):
+            return _join_source(children(self))
+
+    class case_pattern:
+        """case_pattern: rendered from its children in order."""
+        def to_source(self):
+            return _join_source(children(self))
+
+    class func_name:
+        """func_name: rendered from its children in order."""
+        def to_source(self):
+            return _join_source(children(self))
+
+    class anon_function:
+        """anon_function: () { statements }"""
+        def to_source(self):
+            body = [c for c in _flatten_anon(children(self)) if _render(c).strip() not in ("(", ")")]
+            return "() {\n" + "\n".join(p for p in (_render(c) for c in body) if p) + "\n}"
+
     class __default__:
         """Fallback for any rule without its own lint: lints the children."""
         def to_source(self):
@@ -701,6 +854,8 @@ class ZshStyleGrammar(Grammar):
             prefix = ""
             name = None
             body = []
+            # `function f {` has no parentheses; write them only when the source had them.
+            has_parens = any(_render(c).strip() == "(" for c in nodes)
             for c in nodes:
                 kw = _keyword_of(c)
                 if kw == "function" and name is None and not prefix:
@@ -709,8 +864,10 @@ class ZshStyleGrammar(Grammar):
                 if name is None and (isinstance(c, str) or _is_leaf(c) or type(c).__name__ == "func_name"):
                     name = _render(c)
                     continue
+                if _render(c).strip() in ("(", ")"):
+                    continue
                 body.append(c)
-            return prefix + name + " () {\n" + "\n".join(p for p in (_render(c) for c in _flatten_anon(body)) if p) + "\n}"
+            return prefix + name + (" ()" if has_parens else "") + " {\n" + "\n".join(p for p in (_render(c) for c in _flatten_anon(body)) if p) + "\n}"
 
     class grouping:
         """grouping: { statements; }"""
@@ -720,7 +877,8 @@ class ZshStyleGrammar(Grammar):
     class subshell:
         """subshell: ( statements )"""
         def to_source(self):
-            return "(\n" + "\n".join(p for p in (_render(c) for c in _flatten_anon(children(self))) if p) + "\n)"
+            # The kept ( and ) are children, so they are rendered in place.
+            return "\n".join(p for p in (_render(c) for c in _flatten_anon(children(self))) if p)
 
     class case_stmt:
         """case_stmt: header, one arm per line, then esac."""
@@ -743,10 +901,12 @@ class ZshStyleGrammar(Grammar):
         def to_source(self):
             # The pattern is the leading words (tokens or a case_pattern node);
             # everything after it is the arm's statements.
-            items = list(_flatten_anon(children(self)))
-            n = next((i + 1 for i, c in enumerate(items) if type(c).__name__ == "rparen_vis"), 0)
-            pattern = _join_source(items[:n]).rstrip()
-            stmts = items[n:]
+            # Only a direct rparen_vis child closes the pattern. A ) inside a
+            # (a|b) group sits deeper, so the group stays whole.
+            direct = children(self)
+            n = next((i + 1 for i, c in enumerate(direct) if type(c).__name__ == "rparen_vis"), 0)
+            pattern = _join_source(list(_flatten_anon(direct[:n]))).rstrip()
+            stmts = direct[n:]
             if not pattern.endswith(")"):
                 pattern += ")"
             return pattern + "\n" + "\n".join(p for p in (_render(c) for c in _flatten_anon(stmts)) if p)
