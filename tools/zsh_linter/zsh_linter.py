@@ -55,7 +55,7 @@ class ZshTerminals(Terminals):
     rbracket = filt(lambda tok: tok.string == "]", shift, name="]")
     dlbracket = filt(lambda tok: tok.string == "[[", shift, name="[[")
     # Only the operator closes [[ ]]; the ]] of a [[:alpha:]] class is an IDENT token.
-    drbracket = filt(lambda tok: tok.string == "]]" and tok.type == TOKEN_TYPES["OP"], shift, name="]]")
+    drbracket = filt(lambda tok: tok.string == "]]" and tok.type == TOKEN_TYPES["OP"] and not tok.glued, shift, name="]]")
     lparen_vis = filt(lambda tok: tok.string == "(", shift, name="(")
     rparen_vis = filt(lambda tok: tok.string == ")", shift, name=")")
     colon = filt(lambda tok: tok.string == ":", shift, name=":")
@@ -66,7 +66,8 @@ class ZshTerminals(Terminals):
                     and tok.string.startswith("-") and not tok.string.startswith("--"),
         expect_type_node(TOKEN_TYPES["IDENT"]),
         name="-flag",
-    ) + ignore(expect_type_node(TOKEN_TYPES["ARITH_EXP"]))[0:1]
+    # A numeric argument may follow a flag: `typeset -F 2 SECONDS`, `typeset -i 3 X`.
+    ) + ignore(expect_type_node(TOKEN_TYPES["ARITH_EXP"]) | expect_type_node(TOKEN_TYPES["NUMBER"]))[0:1]
 
     number = expect_type_node(TOKEN_TYPES["NUMBER"])
     string = expect_type_node(TOKEN_TYPES["STRING"])
@@ -108,6 +109,8 @@ class ZshTerminals(Terminals):
     colon_word = ignore(filt(lambda tok: tok.string == ":", expect_type_node(TOKEN_TYPES["OP"]))) + argument_identifier[1:]
     _basic_arg = (backtick | cmd_subst | arith_exp | var_exp | heredoc | string | brace_word | dbl_bracket_word | colon_word
                   | number | glob_qual | subscript | argument_identifier | expect_type_node(TOKEN_TYPES["ASSIGN_EMPTY"])
+                  # A "}" glued to a word is a literal: `echo x}.log`. A separate "}" still closes a group.
+                  | ignore(filt(lambda tok: tok.glued and tok.string == "}", expect_type_node(TOKEN_TYPES["OP"])))
                   # Bare pattern characters are word parts in zsh: `fd -tx remove$ dir`,
                   # `grep -v ^N_`, `grep .+%U.+`, `cmd 08:00:00`. Ignored so they are not mistaken for expansions.
                   | ignore(filt(lambda tok: tok.string in ("$", "^", "+", "!", ".", ":"), expect_type_node(TOKEN_TYPES["OP"])))
@@ -281,7 +284,7 @@ class ZshStyleGrammar(Grammar):
     # Added `string` to allow quoted variable expansions as declaration targets.
     declaration = literal("local") + flag[:] + (((assign_name + subscript[0:1]) | var_exp | string) + (ASSIGN_OP + (assign_rhs | nothing))[0:1])[1:]
     declaration2 = (literal("typeset") | literal("declare")
-                    | literal("export") | literal("readonly")) + flag[:] + (((assign_name + subscript[0:1]) | var_exp | string) + (ASSIGN_OP + (assign_rhs | nothing))[0:1])[1:]
+                    | literal("export") | literal("readonly")) + flag[:] + (((assign_name + subscript[0:1]) | var_exp | string) + (ASSIGN_OP + (assign_rhs | nothing))[0:1])[0:]
     
     # One or more `name=value` pairs on a line: `start=$a end=$b`.
     assignment = (
@@ -295,7 +298,10 @@ class ZshStyleGrammar(Grammar):
     # [ ] and [[ ]] content is opaque so test operators remain uninterpreted.
     # The legacy [ ] lint method separately checks raw expansion tokens; [[ ]]
     # intentionally suppresses ZSH002 because it does not perform word splitting.
-    test_construct = lbracket + ((~rbracket) + shift)[:] + rbracket
+    # The closing ] of [ ] is a separate word: a glued one is part of a glob class such as
+    # `[0-9]*` in the test and does not end it.
+    test_rbracket = filt(lambda tok: tok.string == "]" and not tok.glued, shift, name="]")
+    test_construct = lbracket + ((~test_rbracket) + shift)[:] + test_rbracket
     dbl_test_construct = dlbracket + ((~drbracket) + shift)[:] + drbracket
 
     redir_op = filt(
@@ -323,15 +329,19 @@ class ZshStyleGrammar(Grammar):
     arith_stmt = LPAREN + LPAREN + arith_body + RPAREN + RPAREN
 
     # C-style loop: `for ((i=0; i<3; i++)); do ... done`
+    # zsh also takes a brace body: `for ((i=0; i<n; i++)) { ... }`.
     for_arith = (literal("for") + LPAREN + LPAREN + arith_body + RPAREN + RPAREN + (STATEMENT_SEP | comment)[:]
-                 + literal("do") + (STATEMENT_SEP | comment)[:] + inner_statement[:]
-                 + STATEMENT_SEP[:] + literal("done"))
+                 + ((literal("do") + (STATEMENT_SEP | comment)[:] + inner_statement[:]
+                     + STATEMENT_SEP[:] + literal("done"))
+                    | (LBRACE + (STATEMENT_SEP | comment)[:] + inner_statement[:]
+                       + STATEMENT_SEP[:] + RBRACE)))
     
     # as_node(command) keeps each command a distinct node inside pipelines,
     # so command.lint fires per stage instead of only on bare commands.
     # Compound commands can sit on either side of a pipe: `echo x | while read a; do ...; done`.
     # A compound command may carry redirections: `while ...; done < f | sort`.
-    pipeline_item = command | ((grouping | subshell | while_stmt | until_stmt | for_stmt | if_stmt | case_stmt) + redir[:])
+    # A bare `export` or `typeset` with no names can start a pipeline: `export | grep ^CC_`.
+    pipeline_item = command | declaration2 | ((grouping | subshell | while_stmt | until_stmt | for_stmt | if_stmt | case_stmt) + redir[:])
     
     # Operators may be followed by a line break: `a |\n  b` and `a &&\n  b`.
     # `time` is a reserved word that may prefix a pipeline: `time ./job.ksh args`.
@@ -428,11 +438,13 @@ class ZshStyleGrammar(Grammar):
 
     # Case pattern: a `( ... )` group inside the pattern is one unit, so `-?(no_)tacot`
     # and `(darwin|freebsd)*` keep their groups. Only a `)` outside every group ends it.
-    # A group that is the whole arm head, `("0 0 fg=red")` followed by a line break or `;&`,
-    # is the opening parenthesis of the pattern instead, so the arm closer is still found.
-    _pattern_end = filt(lambda tok: tok.type in (TOKEN_TYPES["NEWLINE"], TOKEN_TYPES["COMMENT"])
-                        or tok.string in (";", ";;", ";&", ";|"), shift)
-    _pattern_group = LPAREN + ((~RPAREN) + shift)[:] + RPAREN + (~_pattern_end)
+    # A group continues the pattern only when the next word is glued to it (`-?(no_)tacot`).
+    # `(GZIP)  echo ...`, `("0 0 fg=red")` followed by a line break or `;&`, and any group
+    # followed by a space are the whole arm head, so the group's `)` is the arm closer.
+    _pattern_break = filt(lambda tok: (not tok.glued)
+                          or tok.type in (TOKEN_TYPES["NEWLINE"], TOKEN_TYPES["COMMENT"])
+                          or tok.string in (";", ";;", ";&", ";|"), shift)
+    _pattern_group = LPAREN + ((~RPAREN) + shift)[:] + RPAREN + (~_pattern_break)
     case_pattern = (_pattern_group | ((~rparen_vis) + shift))[:] + rparen_vis
     case_body = case_pattern + STATEMENT_SEP[:] + inner_statement[:] + STATEMENT_SEP[:]
     # Arms that end with a terminator, then an optional final arm without one
