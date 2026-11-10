@@ -31,6 +31,7 @@ class ZshTerminals(Terminals):
     ASSIGN = "="
     SEMICOL = ";"
     PIPE = "|"
+    PIPE_AMP = "|&"
     LPAREN = "("
     RPAREN = ")"
     LBRACE = "{"
@@ -187,7 +188,7 @@ class ZshStyleGrammar(Grammar):
         | comment | declaration | declaration2
         | function_def | anon_function | case_stmt
         | if_stmt
-        | for_alt | for_stmt | for_positional | foreach_stmt | select_stmt
+        | for_arith | for_alt | for_stmt | for_positional | foreach_stmt | select_stmt
         | while_stmt | until_stmt | repeat_stmt
         | subshell | grouping
     ) + STATEMENT_SEP[:]
@@ -265,13 +266,18 @@ class ZshStyleGrammar(Grammar):
     _two_rparen = RPAREN + RPAREN
     arith_body = ((~_two_rparen) + shift)[:]
     arith_stmt = LPAREN + LPAREN + arith_body + RPAREN + RPAREN
+
+    # C-style loop: `for ((i=0; i<3; i++)); do ... done`
+    for_arith = (literal("for") + LPAREN + LPAREN + arith_body + RPAREN + RPAREN + STATEMENT_SEP[:]
+                 + literal("do") + STATEMENT_SEP[:] + inner_statement[:]
+                 + STATEMENT_SEP[:] + literal("done"))
     
     # as_node(command) keeps each command a distinct node inside pipelines,
     # so command.lint fires per stage instead of only on bare commands.
     pipeline_item = command | grouping | subshell
     
     # Operators may be followed by a line break: `a |\n  b` and `a &&\n  b`.
-    pipeline = as_node(pipeline_item) + (PIPE + NEWLINE[:] + as_node(pipeline_item))[:]
+    pipeline = as_node(pipeline_item) + ((PIPE | PIPE_AMP) + NEWLINE[:] + as_node(pipeline_item))[:]
     
     # `! cmd` — command negation prefix
     # `! x=$(cmd) || ...` negates an assignment as well as a command.
@@ -282,7 +288,7 @@ class ZshStyleGrammar(Grammar):
         | comment | declaration | declaration2
         | function_def | anon_function | case_stmt
         | if_stmt
-        | for_alt | for_stmt | for_positional | foreach_stmt | select_stmt
+        | for_arith | for_alt | for_stmt | for_positional | foreach_stmt | select_stmt
         | while_stmt | until_stmt | repeat_stmt
         | subshell | grouping
     ) + STATEMENT_SEP[:]
@@ -341,9 +347,13 @@ class ZshStyleGrammar(Grammar):
     until_stmt = (literal("until") + and_or + STATEMENT_SEP[:]
                   + literal("do") + STATEMENT_SEP[:] + inner_statement[:]
                   + STATEMENT_SEP[:] + literal("done"))
-    repeat_stmt = (literal("repeat") + argument + STATEMENT_SEP[:]
-                   + literal("do") + STATEMENT_SEP[:] + inner_statement[:]
-                   + STATEMENT_SEP[:] + literal("done"))
+    repeat_stmt = (
+        (literal("repeat") + argument + STATEMENT_SEP[:]
+         + literal("do") + STATEMENT_SEP[:] + inner_statement[:]
+         + STATEMENT_SEP[:] + literal("done"))
+        # one-line form: `repeat 3 echo hi`
+        | (literal("repeat") + argument + command)
+    )
 
     # Case pattern: consume tokens until we hit a `)` that is NOT followed by
     # a glob modifier (`*`, `?`, `[`). That distinguishes the pattern-closing
@@ -603,6 +613,15 @@ def _run_self_tests():
             issue["rule"] == "ZSH002"
             for issue in _herestring_quoted
         ), "quoted here-string word wrongly linted"
+
+        # Constructs that must parse (a failure raises SyntaxError).
+        for _src in (
+            "for ((i=0; i<3; i++)); do echo $i; done\n",
+            "cmd1 |& cmd2 | cmd3\n",
+            "repeat 3 echo hi\n",
+            "cat <<-EOF\n\thi\n\tEOF\n",
+        ):
+            lint_zsh_code(_src)
 
         test_scripts = [
             ("While loop", "while [ $count -lt 5 ]; do\n  echo $count\n  count=$((count + 1))\ndone\n"),

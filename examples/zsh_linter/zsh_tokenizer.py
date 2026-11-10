@@ -38,7 +38,7 @@ TOKEN_TYPES = {
 _OP_TOKENS = (
     "<<<", "<<-", "<<", ">>", ">&", "<&", ">|", "&>>", "&>",
     "&|", "&!",
-    "&&", "||", "==", "!=", ";;", ";|", ";&",
+    "&&", "||", "|&", "==", "!=", ";;", ";|", ";&",
     "++", "--", "+=", "-=",
     "[[", "]]",
     "=", ";", "(", ")", "{", "}", "|", "[", "]", "<", ">", "!", "&", "$",
@@ -305,7 +305,9 @@ def tokenize_zsh(source):
                 continue
             if q:
                 k += 1
-            close_re = re.compile(rf"^{re.escape(delim)}\s*$", re.MULTILINE)
+            # `<<-` lets the closing delimiter be indented with tabs.
+            lead = r"\t*" if op_len == 3 else ""
+            close_re = re.compile(rf"^{lead}{re.escape(delim)}\s*$", re.MULTILINE)
             m = close_re.search(source, k)
             if not m:
                 raise SyntaxError(f"Unterminated here-doc {delim!r} at line {line}")
