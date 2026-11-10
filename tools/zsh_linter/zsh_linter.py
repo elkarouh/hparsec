@@ -338,7 +338,8 @@ class ZshStyleGrammar(Grammar):
     
     # `! cmd` — command negation prefix
     # `! x=$(cmd) || ...` negates an assignment as well as a command.
-    not_command = ignore(literal("!")) + (pipeline | assignment)
+    # `if ! [[ ... ]]` negates a test construct as well.
+    not_command = ignore(literal("!")) + (pipeline | assignment | dbl_test_construct | test_construct)
 
     inner_statement = (
         and_or | redir_command

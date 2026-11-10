@@ -142,6 +142,12 @@ def tokenize_zsh(source):
             col += 1
             continue
 
+        if ch == "#" and tokens and tokens[-1].end == start:
+            # A # inside a word is literal in zsh: `${NAME#*.}` after an unquoted part.
+            push("IDENT", "#", start)
+            i += 1
+            continue
+
         if ch == "#":
             j = source.find("\n", i)
             if j == -1:
