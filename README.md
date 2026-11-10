@@ -212,6 +212,12 @@ class if_stmt:
         return output + "fi"
 ```
 
+`parts(node)` is the function behind that access. It yields the node's children in source
+order, looking through the anonymous combinator nodes, so `parts(node)` gives the same
+objects as `node.<rule>` and `node.<rule>_list` do. A node built by `as_node()` marks a
+boundary: the node it wraps is one part, even when that node is an anonymous sequence.
+`children(node)` is the same list without the looking-through.
+
 ### `filt(predicate, parser)`
 Wraps a parser so it only succeeds when the matched value satisfies a
 predicate (the predicate receives the matched node's value, e.g. the token
