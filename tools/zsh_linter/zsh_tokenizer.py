@@ -468,9 +468,18 @@ def tokenize_zsh(source):
                     j += 1
             # An escaped dollar before a brace is literal text too: `\${name}` is one word.
             if source[i + 1] == "$" and j < n and source[j] == "{":
-                close = source.find("}", j)
-                if close != -1 and "\n" not in source[j:close]:
-                    j = close + 1
+                # Match nested braces: `\${X_${I}_R}` is one word.
+                depth = 0
+                k = j
+                while k < n and source[k] != "\n":
+                    if source[k] == "{":
+                        depth += 1
+                    elif source[k] == "}":
+                        depth -= 1
+                        if depth == 0:
+                            j = k + 1
+                            break
+                    k += 1
             while j < n and (source[j].isalnum() or source[j] in _IDENT_CHARS):
                 j += 1
             push("IDENT", source[i:j], start)
