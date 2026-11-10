@@ -155,8 +155,6 @@ def to_py(self):
 
 The self-tests at the end of `src/hparsec.py` show each case, and
 `tools/basic_interpreter` and `tools/lisp_interpreter` are written this way.
-`as_node()`, `parts()` and `node.<rule>` (below) are optional helpers for large
-grammars. A grammar does not need them.
 
 ### `method(parser_class)`
 Decorator that attaches an output method to a parser class after the grammar
@@ -224,30 +222,9 @@ class ExpressionGrammar(Grammar):
 ast, stream = expression.parse(tokenize("1 + (2 - 3)"))
 ```
 
-A node reaches its parts by rule name: `self.if_condition` is its part of rule
-`if_condition`, or `None` when the rule matched nothing, and `self.elif_branch_list`
-is every such part in source order. Anonymous combinator nodes are looked through,
-and a named rule always stays its own node, even on the left of `+`, so a handler
-sees the parts its rule names, as an EBNF reading would:
-
-```python
-class if_stmt:
-    def to_source(self):
-        output = "if " + self.if_condition.to_source() + "; then\n"
-        for statement in self.inner_statement_list:
-            output += statement.to_source() + "\n"
-        for branch in self.elif_branch_list:
-            output += branch.to_source()
-        if self.else_branch:
-            output += self.else_branch.to_source()
-        return output + "fi"
-```
-
-`parts(node)` is the function behind that access. It yields the node's children in source
-order, looking through the anonymous combinator nodes, so `parts(node)` gives the same
-objects as `node.<rule>` and `node.<rule>_list` do. A node built by `as_node()` marks a
-boundary: the node it wraps is one part, even when that node is an anonymous sequence.
-`children(node)` is the same list without the looking-through.
+A named rule always stays its own node, even on the left of `+`, so a handler reads
+its children from `self.nodes` in the order the rule lists them. `children(node)` is
+the same list without the `None` entries.
 
 ### `filt(predicate, parser)`
 Wraps a parser so it only succeeds when the matched value satisfies a

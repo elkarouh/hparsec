@@ -638,22 +638,7 @@ if __name__ == "__main__":
     assert m[0].to_py() == "(1 + (2 * 3))"
     print("  Grammar class (zero forward declarations, inner-class AST methods): ok")
 
-    # 4. A rule name gives a node's part of that rule; the name with _list gives all of them.
-    ParserState.reset()
-
-    class NamedGrammar(Grammar):
-        named_sum = named_num + (PLUS + named_num)[:] + named_times[0:1]
-        named_num = NUMBER
-        named_times = MUL + NUMBER
-
-    m = named_sum.parse(Input("1 + 2 + 3"))
-    assert m, "named parts parse failed"
-    assert [n.to_py() for n in m[0].named_num_list] == ["1", "2", "3"]
-    assert m[0].named_num.to_py() == "1"
-    assert m[0].named_times is None and m[0].named_times_list == []
-    print("  named parts (node.rule, node.rule_list): ok")
-
-    # 5. A named sequence on the left of + stays its own node.
+    # 4. A named sequence on the left of + stays its own node.
     ParserState.reset()
 
     class HeadGrammar(Grammar):
@@ -661,7 +646,7 @@ if __name__ == "__main__":
         head_line = head_sum + MUL + NUMBER
 
     m = head_line.parse(Input("1 + 2 * 3"))
-    assert m and m[0].head_sum is not None, "a named sequence was merged into the next one"
+    assert m and type(m[0].nodes[0]).__name__ == "head_sum", "a named sequence was merged into the next one"
     print("  named sequence on the left of +: ok")
 
     print("\nAll tests passed.")
