@@ -200,15 +200,18 @@ class LispGrammar(Grammar):
             """The node's parts in source order (see hparsec.parts)."""
             return list(parts(self))
 
-    program = expression[:] + SKIP
-    expression = as_node(symbol | list_form)
+        def expressions(self):
+            """The expression children, in source order: symbol and list_form nodes."""
+            return [part for part in self.parts() if type(part).__name__ in ("symbol", "list_form")]
+
+    program = (symbol | list_form)[:] + SKIP
     symbol = SKIP + sym_char[1:]
-    list_form = LPAREN + expression[:] + RPAREN
+    list_form = LPAREN + (symbol | list_form)[:] + RPAREN
 
     class program:
         """program ::= expression* SKIP"""
         def run(self, env):
-            results = [item.nodes[0].evaluate(env) for item in self.expression_list]
+            results = [item.evaluate(env) for item in self.expressions()]
             return results[-1] if results else None
 
     class symbol:
@@ -233,7 +236,7 @@ class LispGrammar(Grammar):
     class list_form:
         """list_form ::= LPAREN expression* RPAREN"""
         def evaluate(self, env):
-            items = [item.nodes[0] for item in self.expression_list]
+            items = self.expressions()
             if not items:
                 raise LispError("the empty combination () cannot be evaluated")
             head = items[0].symbol_name()
@@ -254,7 +257,7 @@ class LispGrammar(Grammar):
             return env.apply(procedure, args)
 
         def datum(self):
-            return [item.nodes[0].datum() for item in self.expression_list]
+            return [item.datum() for item in self.expressions()]
 
         def symbol_name(self):
             return None
