@@ -96,11 +96,9 @@ class ZshTerminals(Terminals):
     # (`test $x = 0`).
     _basic_arg = (backtick | cmd_subst | arith_exp | var_exp | heredoc | string
                   | number | glob_qual | subscript | argument_identifier | expect_type_node(TOKEN_TYPES["ASSIGN_EMPTY"])
-                  # a bare `$` ends a word literally: `fd -tx remove$ dir`. Ignored so it is
-                  # not mistaken for an expansion.
-                  | ignore(filt(lambda tok: tok.string == "$", expect_type_node(TOKEN_TYPES["OP"])))
-                  # `^` is a word character in zsh (`grep -v ^N_`), so it is an argument too.
-                  | ignore(filt(lambda tok: tok.string == "^", expect_type_node(TOKEN_TYPES["OP"]))))
+                  # Bare pattern characters are word parts in zsh: `fd -tx remove$ dir`,
+                  # `grep -v ^N_`, `grep .+%U.+`. Ignored so they are not mistaken for expansions.
+                  | ignore(filt(lambda tok: tok.string in ("$", "^", "+"), expect_type_node(TOKEN_TYPES["OP"]))))
     # assign_word matches `name=value` as a single argument (needed for
     # `alias ls='...'`, `export FOO=bar` inline, etc.)
     # Assignment names are plain identifiers; reserved words such as `end` are only
@@ -730,6 +728,7 @@ def _run_self_tests():
             ("time prefixes a pipeline", "time ./job.ksh args | tee\n"),
             ("comment on function header line", "function f # $1 user\n{\n  echo\n}\n"),
             ("heredoc with punctuation delimiter", "sqlplus -s / <<!eof\nselect 1;\n!eof\n"),
+            ("plus inside a pattern argument", "grep -E -e .+%U.+ -e .+%u.+ file\n"),
             ("assignment value then argument", "x=a b\n"),
             ("for-alt", "for f (*.txt) do\n  echo $f\ndone\n"),
             ("select", "select opt in a b c; do\n  echo $opt\ndone\n"),
