@@ -8,7 +8,6 @@ commands, assignments, declarations, and case subjects share one rule path.
 import sys
 
 from hparsec import (
-    Kept,
     Grammar,
     ParserState,
     Terminals,
@@ -32,23 +31,23 @@ from zsh_tokenizer import tokenize_zsh, TOKEN_TYPES, _RESERVED
 class ZshTerminals(Terminals):
     ASSIGN = "="
     SEMICOL = ";"
-    PIPE = Kept("|")
-    PIPE_AMP = Kept("|&")
+    pipe = "|"
+    pipe_amp = "|&"
     LPAREN = "("
     RPAREN = ")"
     LBRACE = "{"
     RBRACE = "}"
-    AND_AND = Kept("&&")
-    OR_OR = Kept("||")
-    DSEMI = Kept(";;")
-    SEMI_AMP = Kept(";&")
-    SEMI_BAR = Kept(";|")
-    PLUSEQUAL = Kept("+=")
-    MINEQUAL = Kept("-=")
-    AMP = Kept("&")
-    AMP_PIPE = Kept("&|")
-    AMP_BANG = Kept("&!")
-    ASSIGN_OP = ASSIGN | PLUSEQUAL | MINEQUAL
+    and_and = "&&"
+    or_or = "||"
+    dsemi = ";;"
+    semi_amp = ";&"
+    semi_bar = ";|"
+    plusequal = "+="
+    minequal = "-="
+    amp = "&"
+    amp_pipe = "&|"
+    amp_bang = "&!"
+    ASSIGN_OP = ASSIGN | plusequal | minequal
     
     # Visible punctuation (appear in the AST)
     lbrace_vis = filt(lambda tok: tok.string == "{", shift, name="{")
@@ -85,7 +84,7 @@ class ZshTerminals(Terminals):
     identifier = filt(lambda tok: tok.string not in reserved, expect_type_node(TOKEN_TYPES["IDENT"]))
     argument_identifier = expect_type_node(TOKEN_TYPES["IDENT"])
 
-    STATEMENT_SEP = NEWLINE | SEMICOL | AMP | AMP_PIPE | AMP_BANG
+    STATEMENT_SEP = NEWLINE | SEMICOL | amp | amp_pipe | amp_bang
 
     # Enhance argument with glob qualifiers, subscripts, and inline assignments.
     # A glob qualifier has at least one token; `()` alone is not one (it is an empty
@@ -290,10 +289,10 @@ class ZshStyleGrammar(Grammar):
     # One or more `name=value` pairs on a line: `start=$a end=$b`.
     assignment = (
         assign_target + subscript[0:1]
-        + (((assign_eq | PLUSEQUAL | MINEQUAL) + assign_rhs)
+        + (((assign_eq | plusequal | minequal) + assign_rhs)
            # `IFS= read` is a prefix assignment, not this. `A= B=` is two empty assignments.
            | (assign_eq_empty + (~argument | assign_word))
-           | PLUSEQUAL | MINEQUAL)
+           | plusequal | minequal)
         + assign_word[:]
     )
 
@@ -350,7 +349,7 @@ class ZshStyleGrammar(Grammar):
     
     # Operators may be followed by a line break: `a |\n  b` and `a &&\n  b`.
     # `time` is a reserved word that may prefix a pipeline: `time ./job.ksh args`.
-    pipeline = literal("time")[0:1] + as_node(pipeline_item) + ((PIPE | PIPE_AMP) + (NEWLINE | comment)[:] + as_node(pipeline_item))[:]
+    pipeline = literal("time")[0:1] + as_node(pipeline_item) + ((pipe | pipe_amp) + (NEWLINE | comment)[:] + as_node(pipeline_item))[:]
     
     # `! cmd` — command negation prefix
     # `! x=$(cmd) || ...` negates an assignment as well as a command.
@@ -372,7 +371,7 @@ class ZshStyleGrammar(Grammar):
     and_or_item = (
         test_construct | dbl_test_construct | arith_stmt
         # `x=$(cmd) | tr a b`: an assignment may be the left side of a pipe, tried first.
-        | not_command | (assignment + ((PIPE | PIPE_AMP) + (NEWLINE | comment)[:] + as_node(pipeline_item))[1:])
+        | not_command | (assignment + ((pipe | pipe_amp) + (NEWLINE | comment)[:] + as_node(pipeline_item))[1:])
         # An assignment that a command follows is a prefix assignment of that command:
         # `IFS=\, read -r x`. The lookahead lets the pipeline take it; a plain assignment
         # is tried first so `x+=(...)` is not cut short.
@@ -383,7 +382,7 @@ class ZshStyleGrammar(Grammar):
     )    
     # zsh accepts `&&` at the end of a line before a closing or branch keyword: `echo x &&` NEWLINE `fi` or `else`.
     and_or_closer = filt(lambda tok: tok.string in ("fi", "done", "esac", "else", "elif"), shift)
-    and_or = as_node(and_or_item) + ((AND_AND | OR_OR) + (NEWLINE | comment)[:]
+    and_or = as_node(and_or_item) + ((and_and | or_or) + (NEWLINE | comment)[:]
                                      + (as_node(and_or_item) | ~(~and_or_closer)))[:]
 
     # All four control-flow conditions now accept and_or chains:
@@ -468,7 +467,7 @@ class ZshStyleGrammar(Grammar):
     # NOTE: The guard (~literal("esac")) must be on BOTH case_arm and case_final
     # to prevent case_arm from greedily consuming `esac` and subsequent code.
     # A comment may follow the terminator: `;; # Invalid option`.
-    case_arm = (STATEMENT_SEP | comment)[:] + (~literal("esac")) + case_body + (DSEMI | SEMI_AMP | SEMI_BAR) + comment[0:1]
+    case_arm = (STATEMENT_SEP | comment)[:] + (~literal("esac")) + case_body + (dsemi | semi_amp | semi_bar) + comment[0:1]
     case_final = (STATEMENT_SEP | comment)[:] + (~literal("esac")) + case_body
     case_stmt = (
         literal("case") + argument + ZshTerminals.glued_part[0:] + STATEMENT_SEP[:] + literal("in") + STATEMENT_SEP[:]
