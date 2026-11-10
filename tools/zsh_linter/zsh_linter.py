@@ -810,6 +810,28 @@ class ZshStyleGrammar(Grammar):
         def to_source(self):
             return "(( " + _join_source(children(self)) + " ))"
 
+    class arith_body:
+        """arith_body: the expression inside (( )), tokens separated by spaces."""
+        def to_source(self):
+            return " ".join(p for p in (_render(c) for c in _flatten_anon(children(self))) if p)
+
+    class for_arith:
+        """for ((init; test; step)) do ... done, or the brace form."""
+        def to_source(self):
+            items = list(_flatten_anon(children(self)))
+            head = "for (("
+            body_start = len(items)
+            for i, c in enumerate(items):
+                if type(c).__name__ == "arith_body":
+                    head += _render(c) + "))"
+                    body_start = i + 1
+                    break
+            rest = items[body_start:]
+            if any(_keyword_of(c) == "do" for c in rest):
+                return head + _compound_source(rest)
+            # zsh brace body: normalise to do/done
+            return head + "; do\n" + _statements_source(rest) + "\ndone"
+
     class for_alt:
         """for name (list); do ... done (zsh form)"""
         def to_source(self):
