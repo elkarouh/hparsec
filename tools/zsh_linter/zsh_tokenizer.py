@@ -421,6 +421,11 @@ def tokenize_zsh(source):
                             j += 1
                             break
                     j += 1
+            # An escaped dollar before a brace is literal text too: `\${name}` is one word.
+            if source[i + 1] == "$" and j < n and source[j] == "{":
+                close = source.find("}", j)
+                if close != -1 and "\n" not in source[j:close]:
+                    j = close + 1
             while j < n and (source[j].isalnum() or source[j] in _IDENT_CHARS):
                 j += 1
             push("IDENT", source[i:j], start)

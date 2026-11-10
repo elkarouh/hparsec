@@ -381,8 +381,10 @@ class ZshStyleGrammar(Grammar):
     # All four control-flow conditions now accept and_or chains:
     #   if [[ -f x ]] && (( i++ )); then ... fi
     #   while cmd1 && ! cmd2; do ... done
+    # The condition may be a sequence that ends before `then`: `if diff a b; [[ $? != 0 ]]`.
+    if_condition = and_or + ((STATEMENT_SEP | comment)[1:] + ~literal("then") + and_or)[:]
     elif_branch = (
-        literal("elif") + and_or + (STATEMENT_SEP | comment)[:]
+        literal("elif") + if_condition + (STATEMENT_SEP | comment)[:]
         + literal("then") + (STATEMENT_SEP | comment)[:] + inner_statement[:]
         + STATEMENT_SEP[:]
     )
@@ -392,7 +394,7 @@ class ZshStyleGrammar(Grammar):
     )
 
     if_stmt = (
-        literal("if") + and_or + (STATEMENT_SEP | comment)[:]
+        literal("if") + if_condition + (STATEMENT_SEP | comment)[:]
         + literal("then") + (STATEMENT_SEP | comment)[:] + inner_statement[:]
         + STATEMENT_SEP[:]
         + elif_branch[:] + else_branch[0:1]
