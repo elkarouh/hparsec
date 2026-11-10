@@ -92,6 +92,7 @@ class ZshTerminals(Terminals):
     assign_op = assign | plusequal | minequal
     
     # Visible punctuation (appear in the AST)
+    lparen_vis = filt(lambda tok: tok.string == "(", shift, name="(")
     lbrace_vis = filt(lambda tok: tok.string == "{", shift, name="{")
     rbrace_vis = filt(lambda tok: tok.string == "}", shift, name="}")    
     lbracket = filt(lambda tok: tok.string == "[", shift, name="[")
@@ -425,7 +426,8 @@ class ZshStyleGrammar(Grammar):
 
     _two_rparen = RPAREN + RPAREN
     # Parentheses nest inside arithmetic: `((A = B - (C)))`. A nested group is one unit.
-    arith_nested = LPAREN + ((~RPAREN) + shift)[0:] + RPAREN
+    # The ( is kept: it tells whether the group touches the text before it.
+    arith_nested = lparen_vis + (arith_nested | (~RPAREN) + shift)[0:] + RPAREN
     arith_word = (~_two_rparen) + shift
     arith_body = (arith_nested | arith_word)[0:]
     arith_stmt = LPAREN + LPAREN + arith_body + RPAREN + RPAREN
@@ -939,10 +941,11 @@ class ZshStyleGrammar(Grammar):
             return found
 
     class arith_nested:
-        """arith_nested ::= '(' token* ')'
-        nodes: [tokens]"""
+        """arith_nested ::= '(' (arith_nested | token)* ')'
+        nodes: [open, items]"""
         def to_source(self, indent=""):
-            return "(" + _join_source(self.node.nodes, indent) + ")"
+            _open, items = self.nodes
+            return "(" + _join_source(items.nodes, indent) + ")"
 
     class for_arith:
         """for_arith ::= 'for' '((' arith_body '))' header_end (do_body | brace_body)
@@ -2224,6 +2227,9 @@ def _run_self_tests():
         # Formatting keeps what the script does: background jobs and a flag's number.
         _kept = "sleep 1 &\nwl-copy &>/dev/null &|\nfoo &!\ntypeset -F 2 SECONDS\ntypeset -L$(( N * 2 )) X\n"
         assert format_zsh_code(_kept) == _kept, format_zsh_code(_kept)
+        # Parentheses inside arithmetic keep their spacing, also when they nest.
+        _arith = "(( a + (b * c) ))\n(( x = f(y) - (c * (d + e)) ))\n"
+        assert format_zsh_code(_arith) == _arith, format_zsh_code(_arith)
         # Bodies are indented, and a comment before a keyword stays before it.
         _nested = ("if [[ -n ${HOME}/x(#qN.mh+24) ]] # stale\nthen\n    for f in a b; do\n"
                    "        echo \"${f}\"\n    done\nfi\n"
