@@ -21,8 +21,8 @@ hparsec/
 │   ├── expression_parser.py      # expression grammar written with repetition
 │   └── expression_parser_lr.py   # same grammar written with left recursion
 ├── tools/
-│   └── zsh_linter/               # a zsh linter built on hparsec
-│       ├── pyproject.toml        # installs the zsh_linter module
+│   └── zsh_linter/               # zsh-lint: a zsh linter built on hparsec
+│       ├── pyproject.toml        # installs the zsh-lint command
 │       ├── zsh_tokenizer.py      # hand-written zsh scanner
 │       ├── zsh_linter.py         # grammar + lint rules, with inline test cases
 │       ├── count_rule.py         # counts one rule's findings across a codebase
@@ -306,13 +306,13 @@ These are reversed by the backend's output methods on the relevant AST nodes.
   uses repetition (`A + (op + A)[:]`), the second direct left recursion
   (`A = (A + op + B) | B`). Running either prints its parse and evaluation
   tests.
-- `tools/zsh_linter/` is a full zsh grammar with lint rules
+- `tools/zsh_linter/` is `zsh-lint`, a full zsh grammar with lint rules
   attached to AST nodes. Install it with `pip install . ./tools/zsh_linter`
   from the repository root, then lint scripts directly:
 
   ```sh
-  python -m zsh_linter ~/.zshrc deploy.zsh
-  cat script.zsh | python -m zsh_linter -
+  zsh-lint ~/.zshrc deploy.zsh
+  cat script.zsh | zsh-lint -
   ```
 
   Findings print as `file:line:col: RULE message`. The exit status is 0 when

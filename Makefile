@@ -7,8 +7,8 @@ ZSH := tools/zsh_linter
 
 test: selftest examples zsh corpus
 
-# Editable install of hparsec and zsh_linter into a project-local venv, so it works
-# with externally managed Pythons (PEP 668). Run .venv/bin/python -m zsh_linter afterwards.
+# Editable install of hparsec and the zsh-lint command into a project-local venv, so it
+# works with externally managed Pythons (PEP 668). Run .venv/bin/zsh-lint afterwards.
 # pip needs -e before each path.
 VENV ?= .venv
 

@@ -10,5 +10,8 @@ readme = "README.md"
 requires-python = ">=3.10"
 dependencies = ["hparsec"]
 
+[project.scripts]
+zsh-lint = "zsh_linter:main"
+
 [tool.setuptools]
 py-modules = ["zsh_linter", "zsh_tokenizer"]
