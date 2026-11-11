@@ -199,13 +199,15 @@ class LispGrammar(Grammar):
     class program:
         """program ::= expression* SKIP"""
         def run(self, env):
-            results = [item.evaluate(env) for more in self.nodes for item in more.nodes]
+            expressions = self.node
+            results = [expression.evaluate(env) for expression in expressions.nodes]
             return results[-1] if results else None
 
     class symbol:
         """symbol ::= SKIP sym_char+; the characters are a number when they form one, else a name"""
         def text(self):
-            return "".join(char.node for char in self.node.nodes)
+            sym_chars = self.node
+            return "".join(char.node for char in sym_chars.nodes)
 
         def evaluate(self, env):
             text = self.text()
@@ -224,7 +226,7 @@ class LispGrammar(Grammar):
     class list_form:
         """list_form ::= LPAREN expression* RPAREN"""
         def evaluate(self, env):
-            items = [item for more in self.nodes for item in more.nodes]
+            items = self.node.nodes
             if not items:
                 raise LispError("the empty combination () cannot be evaluated")
             head = items[0].symbol_name()
@@ -245,7 +247,7 @@ class LispGrammar(Grammar):
             return env.apply(procedure, args)
 
         def datum(self):
-            return [item.datum() for more in self.nodes for item in more.nodes]
+            return [item.datum() for expression in self.nodes for item in expression.nodes]
 
         def symbol_name(self):
             return None

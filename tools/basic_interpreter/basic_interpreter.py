@@ -162,17 +162,6 @@ def _arithmetic(left, op, right):
     raise BasicError(f"unknown operator {op!r}")
 
 
-def _left_to_right(node, env):
-    """Evaluate `operand (operator operand)*`: nodes[0] is the first operand, and the
-    repetition after it, when there is one, holds the (operator, operand) pairs."""
-    value = node.node.evaluate(env)
-    for more in node.nodes[1:]:
-        for pair in more.nodes:
-            operator, operand = pair.nodes
-            value = _arithmetic(value, operator.node, operand.evaluate(env))
-    return value
-
-
 # ============================================================
 # Terminals
 # ============================================================
@@ -244,14 +233,17 @@ class BasicGrammar(Grammar):
     class print_stmt:
         """print_stmt ::= PRINT (arguments | nothing)"""
         def run(self, env):
-            values = [value for arguments in self.nodes for value in arguments.values(env)]
-            env.output.append(" ".join(_text(value) for value in values))
+            arg_list=[]
+            if self.nodes:
+                arg_list = self.nodes[0].values(env)                       
+            env.output.append(" ".join(_text(arg) for arg in arg_list))
 
     class def_stmt:
         """def_stmt ::= DEF FN identifier LPAREN (parameters | nothing) RPAREN EQ expression"""
         def run(self, env):
             name, *parameters, body = self.nodes
-            env.define(name.node, [param for part in parameters for param in part.names()], body)
+            param_list= parameters[0].names() if parameters else []
+            env.define(name.node, param_list, body)
 
     class parameters:
         """parameters ::= identifier (COMMA identifier)*"""
@@ -261,18 +253,54 @@ class BasicGrammar(Grammar):
     class arguments:
         """arguments ::= expression (COMMA expression)*"""
         def values(self, env):
-            first = self.node.evaluate(env)
-            return [first] + [item.node.evaluate(env) for more in self.nodes[1:] for item in more.nodes]
+            first_arg_node = self.nodes[0]
+            first = first_arg_node.evaluate(env)
+            if self.nodes[1:]:
+                other_args_nodes=self.nodes[1]
+                others = [item.node.evaluate(env) for item in other_args_nodes.nodes]
+                return [first] + others
+            else:
+                return [first]
 
     class expression:
         """expression ::= term (add_op term)*"""
         def evaluate(self, env):
-            return _left_to_right(self, env)
+            value = self.nodes[0].evaluate(env)
+            for more in self.nodes[1:]:
+                for pair in more.nodes:
+                    operator, operand = pair.nodes
+                    left, op, right = value, operator.node, operand.evaluate(env)
+                    try:
+                        if op == "+":
+                            value = left + right
+                        elif op == "-":
+                            value = left - right
+                        else:
+                            raise BasicError(f"unknown operator {op!r}")
+                    except TypeError:
+                        raise BasicError(f"cannot apply {op} to {left!r} and {right!r}") from None
+            return value
 
     class term:
         """term ::= factor (mul_op factor)*"""
         def evaluate(self, env):
-            return _left_to_right(self, env)
+            value = self.nodes[0].evaluate(env)
+            for more in self.nodes[1:]:
+                for pair in more.nodes:
+                    operator, operand = pair.nodes
+                    left, op, right = value, operator.node, operand.evaluate(env)
+                    try:
+                        if op == "*":
+                            value = left * right
+                        elif op == "/":
+                            value = left / right
+                        else:
+                            raise BasicError(f"unknown operator {op!r}")
+                    except ZeroDivisionError:
+                        raise BasicError("division by zero") from None
+                    except TypeError:
+                        raise BasicError(f"cannot apply {op} to {left!r} and {right!r}") from None
+            return value
 
     class negation:
         """negation ::= unary_op factor"""
@@ -299,8 +327,11 @@ class BasicGrammar(Grammar):
     class fn_call:
         """fn_call ::= FN identifier LPAREN (arguments | nothing) RPAREN"""
         def evaluate(self, env):
-            name, *arguments = self.nodes
-            return env.call(name.node, [value for part in arguments for value in part.values(env)])
+            name = self.nodes[0]
+            arg_list=[]
+            if self.nodes[1:]:
+                arg_list = self.nodes[1].values(env)
+            return env.call(name.node, arg_list)
 
 
 # ============================================================
