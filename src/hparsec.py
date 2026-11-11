@@ -1250,24 +1250,36 @@ if __name__ == "__main__":
     assert ast.to_py() == "x:789"
     ast, _ = keyvalues.parse(_tokens("x=2; y=3.4;"))
     assert ast.to_py() == "{ x:2, y:3.4 }", "A[1:]: nodes are the repeated items"
-
     # A choice has no node of its own, and an empty A[:] leaves no node.
+    ############################### LISP INTERPRETER #######################
     atom = fw("atom")
     s_expr = LP + atom[:] + RP
     atom = IDENT | NUM | s_expr
 
+    @method(IDENT)
+    def to_sexp(self):
+        return self.node
+
+    @method(NUM)
+    def to_sexp(self):
+        return self.node
+    
     @method(s_expr)
-    def to_py(self):
-        return "(" + " ".join(member.to_py() for res in self.nodes for member in res.nodes) + ")"
+    def to_sexp(self):
+        if self.nodes:
+            atoms_node= self.nodes[0]
+            return "(" + " ".join(member.to_sexp() for member in atoms_node.nodes) + ")"
+        else:
+            return "()"
 
     ast, _ = atom.parse(_tokens("x"))
     assert type(ast) is IDENT, "A | B: the node is the alternative that matched"
     ast, _ = s_expr.parse(_tokens("()"))
-    assert ast.nodes == [] and ast.to_py() == "()", "empty A[:]: no child"
+    assert ast.nodes == [] and ast.to_sexp() == "()", "empty A[:]: no child"
     ast, _ = s_expr.parse(_tokens("(a b (c 3) 7)"))
     assert len(ast.nodes) == 1 and len(ast.node.nodes) == 4, "IGNORED + A[:] + IGNORED: one child, the repetition"
-    assert ast.to_py() == "(a b (c 3) 7)"
-
+    assert ast.to_sexp() == "(a b (c 3) 7)"
+    #############################################################################
     # A separated list: the first item, then a repetition whose items each hold one more.
     names = IDENT + (SEP + IDENT)[:]
 

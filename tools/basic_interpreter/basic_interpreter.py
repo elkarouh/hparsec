@@ -248,19 +248,22 @@ class BasicGrammar(Grammar):
     class parameters:
         """parameters ::= identifier (COMMA identifier)*"""
         def names(self):
-            return [self.node.node] + [item.node.node for more in self.nodes[1:] for item in more.nodes]
+            first_param_node = self.nodes[0]  
+            other_params_list=[]
+            if self.nodes[1:]:
+                other_params_node=self.nodes[1]                  
+                other_params_list = [other_param.node.node for other_param in other_params_node.nodes]
+            return [first_param_node.node] + other_params_list
 
     class arguments:
         """arguments ::= expression (COMMA expression)*"""
         def values(self, env):
             first_arg_node = self.nodes[0]
-            first = first_arg_node.evaluate(env)
+            other_args_list = []
             if self.nodes[1:]:
-                other_args_nodes=self.nodes[1]
-                others = [item.node.evaluate(env) for item in other_args_nodes.nodes]
-                return [first] + others
-            else:
-                return [first]
+                other_args_node=self.nodes[1]
+                other_args_list = [other_arg.node.evaluate(env) for other_arg in other_args_node.nodes]
+            return [first_arg_node.evaluate(env)] + other_args_list
 
     class expression:
         """expression ::= term (add_op term)*"""
