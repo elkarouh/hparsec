@@ -210,8 +210,8 @@ class BasicGrammar(Grammar):
     let_stmt = LET + identifier + EQ + expression
     print_stmt = PRINT + (arguments | nothing)
     def_stmt = DEF + FN + identifier + LPAREN + (parameters | nothing) + RPAREN + EQ + expression
-    parameters = identifier + (COMMA + identifier)[:]
-    arguments = expression + (COMMA + expression)[:]
+    parameters = identifier % COMMA
+    arguments = expression % COMMA
     expression = term + (add_op + term)[:]
     term = factor + (mul_op + factor)[:]
     factor = negation | primary
@@ -254,15 +254,16 @@ class BasicGrammar(Grammar):
             env.define(name.node, [param for part in parameters for param in part.names()], body)
 
     class parameters:
-        """parameters ::= identifier (COMMA identifier)*"""
+        """parameters ::= identifier (COMMA identifier)*
+        nodes: the identifiers"""
         def names(self):
-            return [self.node.node] + [item.node.node for more in self.nodes[1:] for item in more.nodes]
+            return [name.node for name in self.nodes]
 
     class arguments:
-        """arguments ::= expression (COMMA expression)*"""
+        """arguments ::= expression (COMMA expression)*
+        nodes: the expressions"""
         def values(self, env):
-            first = self.node.evaluate(env)
-            return [first] + [item.node.evaluate(env) for more in self.nodes[1:] for item in more.nodes]
+            return [argument.evaluate(env) for argument in self.nodes]
 
     class expression:
         """expression ::= term (add_op term)*"""

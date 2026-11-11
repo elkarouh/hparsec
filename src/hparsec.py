@@ -37,6 +37,8 @@ An ignored token leaves no child, so `nodes` holds only what a method needs:
                        alternative that matched, so a choice needs no method
     A[1:]              nodes == [a, a, ...]
     A[:]               the same, and no node at all when nothing matched
+    A % SEP            nodes == [a, a, ...]: one or more A with SEP between
+                       them; the separators are not kept
     A + (SEP + A)[:]   nodes == [a] or [a, more]; each item of more.nodes
                        holds one A as item.node
 
@@ -534,6 +536,7 @@ class ParserMeta(type):
         A | B   -> choice(A, B)
         A[n:m]  -> several_times_parser(A, n, m)
         A * n   -> several_times_parser(A, n, n)
+        A % S   -> separated(A, S)
         ~A      -> negative_lookahead(A)
     """
 
@@ -585,6 +588,10 @@ class ParserMeta(type):
 
     def __mul__(cls, other):
         return several_times_parser(cls, other, other)
+
+    def __mod__(cls, separator):
+        separator = literal(separator) if type(separator) is str else separator
+        return separated(cls, separator)
 
     def __invert__(cls):
         return negative_lookahead(cls)
@@ -1053,6 +1060,33 @@ def several_times_parser(parser, min_times, max_times=None):
     return Several_Times
 
 
+def separated(parser, separator):
+    """One or more *parser* items with *separator* between them: `A % SEP`.
+
+    The node holds the items and nothing else, `nodes == [a, a, ...]`, whether
+    or not the separator is ignored. A separator that is not followed by an
+    item is left in the stream.
+    """
+    more = sequence(separator, parser)
+    more.parsers = [separator, parser]
+    rest = several_times_parser(more, None, None)
+    whole = sequence(parser, rest)
+    whole.parsers = [parser, rest]
+
+    class Separated_List(Parser):
+        @apply_parsing_context
+        def parse(cls, token_stream):
+            m = whole.parse(token_stream)
+            if not m:
+                return False
+            ast, token_stream = m
+            first, *others = ast.nodes
+            items = [first] + [group.nodes[-1] for others_node in others for group in others_node.nodes]
+            return cls(items), token_stream
+
+    return Separated_List
+
+
 def ignore(parser):
     """Ignore parser: matches but returns None, so it won't appear in sequence results."""
 
@@ -1205,6 +1239,7 @@ __all__ = [
     "choice",
     "sequence",
     "several_times_parser",
+    "separated",
     "ignore",
     "negative_lookahead",
     # Matching
@@ -1279,6 +1314,28 @@ if __name__ == "__main__":
     assert len(ast.nodes) == 1 and ast.to_py() == ["a"]
     ast, _ = names.parse(_tokens("a, b, c"))
     assert len(ast.nodes) == 2 and ast.to_py() == ["a", "b", "c"]
+
+    # The same list with A % SEP: every item is a child, so one loop reads them all.
+    listed = IDENT % SEP
+
+    @method(listed)
+    def to_py(self):
+        return [item.to_py() for item in self.nodes]
+
+    ast, _ = listed.parse(_tokens("a"))
+    assert ast.to_py() == ["a"]
+    ast, _ = listed.parse(_tokens("a, b, c"))
+    assert len(ast.nodes) == 3 and ast.to_py() == ["a", "b", "c"], "A % SEP: the items are the children"
+    trailing_stream = _tokens("a, b,")
+    ast, trailing_stream = listed.parse(trailing_stream)
+    assert ast.to_py() == ["a", "b"] and trailing_stream.pos == 3, "A % SEP: a trailing separator stays unread"
+    assert not listed.parse(_tokens(", a")), "A % SEP: needs a first item"
+    kept_sep = IDENT % literal(",")
+    ast, _ = kept_sep.parse(_tokens("a, b"))
+    assert len(ast.nodes) == 2, "A % SEP: a kept separator is not a child either"
+    pair = IDENT + IDENT
+    ast, _ = (pair % SEP).parse(_tokens("a b, c d"))
+    assert len(ast.nodes) == 2 and len(ast.node.nodes) == 2, "A % SEP: a sequence item stays one node"
     print("plain usage: self.nodes and self.node for sequences, choices, repetitions and lists OK")
 
     # token_of(): the first leaf, skipping an empty optional part at the front.

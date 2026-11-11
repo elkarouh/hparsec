@@ -96,6 +96,7 @@ no install is needed to run them.
 | `A[1:]` | One or more repetitions |
 | `A[n:m]` | Between n and m repetitions |
 | `A * n` | Exactly n repetitions |
+| `A % SEP` | One or more A, separated by SEP |
 
 ---
 
@@ -141,6 +142,7 @@ An ignored token leaves no child, so `nodes` holds only what a method needs:
 | `A \| B` | no node of its own: the result is the node of the alternative that matched, so a choice needs no method |
 | `A[1:]` | `nodes == [a, a, ...]` |
 | `A[:]` | the same, and no node at all when nothing matched |
+| `A % SEP` | `nodes == [a, a, ...]`: one or more `A` with `SEP` between them; the separators are not kept |
 | `A + (SEP + A)[:]` | `nodes == [a]` or `[a, more]`; each item of `more.nodes` holds one `A` as `item.node` |
 
 A method is written with `self.nodes[i]`, `self.node` and `for x in self.nodes`:
@@ -151,6 +153,18 @@ names = IDENT + (SEP + IDENT)[:]
 @method(names)
 def to_py(self):
     return [self.node.to_py()] + [item.node.to_py() for more in self.nodes[1:] for item in more.nodes]
+```
+
+The first item and the others sit at different depths there: each later item is
+inside its own `(SEP + IDENT)` group. `A % SEP` gives the same list with every item
+a direct child:
+
+```python
+names = IDENT % SEP
+
+@method(names)
+def to_py(self):
+    return [name.to_py() for name in self.nodes]
 ```
 
 The self-tests at the end of `src/hparsec.py` show each case, and
